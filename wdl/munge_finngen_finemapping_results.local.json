@@ -1,0 +1,7 @@
+{
+    "munge_finngen_finemapping_results.docker": "genetics-results-munge",
+    "munge_finngen_finemapping_results.dataset": "FinnGen_R12",
+    "munge_finngen_finemapping_results.metadata_file": "metadata/FinnGen_R12_metadata.local.tsv",
+    "munge_finngen_finemapping_results.trait_is_cell_type": false,
+    "munge_finngen_finemapping_results.output_file": "FinnGen_R12_credible_sets.tsv.gz"
+}

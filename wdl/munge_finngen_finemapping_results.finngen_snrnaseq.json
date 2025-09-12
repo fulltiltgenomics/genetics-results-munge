@@ -1,0 +1,10 @@
+{
+    "munge_finngen_finemapping_results.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20250731",
+    "munge_finngen_finemapping_results.dataset": "FinnGen_snRNAseq",
+    "munge_finngen_finemapping_results.metadata_file": "gs://finngen-commons/results_api_metadata/metadata_FinnGen_snrnaseq_202509_credible_sets.tsv",
+    "munge_finngen_finemapping_results.trait_is_cell_type": true,
+    "munge_finngen_finemapping_results.trait_mapping_file": "gs://expansion_areas/multiome/metadata/gene_model/features.gex.tsv.gz",
+    "munge_finngen_finemapping_results.require_trait_mapping": true,
+    "munge_finngen_finemapping_results.variant_annotation_file": "gs://finngen-commons/results_api_data/mapping_files/R13_annotated_variants_v0.small.gz",
+    "munge_finngen_finemapping_results.output_file": "FinnGen_snRNAseq_202509_credible_sets.tsv.gz"
+}
