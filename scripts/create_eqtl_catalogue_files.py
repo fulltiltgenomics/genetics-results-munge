@@ -104,6 +104,7 @@ def merge(
                 .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
                 .alias("se"),
                 pl.col("pip").round(4),
+                pl.lit("NA").alias("aaf"),  # not available in data
                 pl.col("cs_min_r2").round(4),
             )
             .select(
@@ -120,6 +121,7 @@ def merge(
                 pl.col("beta"),
                 pl.col("se"),
                 pl.col("pip"),
+                pl.col("aaf"),
                 pl.col("cs_id"),
                 pl.col("cs_size"),
                 pl.col("cs_min_r2"),

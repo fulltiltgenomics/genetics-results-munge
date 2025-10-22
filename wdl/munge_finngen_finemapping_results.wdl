@@ -1,18 +1,5 @@
 version 1.0
 
-# ls -1 /var/www/new/genetics-results-munge/data/*.SUSIE.snp.filter.tsv \
-# | xargs -I{} basename {} .SUSIE.snp.filter.tsv \
-# | while read line; do \
-# echo -e "GWAS\t${line}\t/var/www/new/genetics-results-munge/data/${line}.SUSIE.snp.filter.tsv\t/var/www/new/genetics-results-munge/data/${line}.SUSIE.cred.summary.tsv"
-# done > metadata_FinnGen_R13_credible_sets.local.tsv
-
-# ls -1 /mnt/disks/dist_data/rnaseq/*.SUSIE.snp.bgz \
-# | sort -V \
-# | xargs -I{} basename {} .SUSIE.snp.bgz \
-# | while read line; do
-# echo -e "eQTL\t${line}\t/mnt/disks/dist_data/rnaseq/${line}.SUSIE.snp.bgz\t/mnt/disks/dist_data/rnaseq/${line}.SUSIE.cred.bgz"
-# done > metadata_FinnGen_snRNAseq_credible_sets.tsv
-
 workflow munge_finngen_finemapping_results {
 
     input {
@@ -206,6 +193,7 @@ task join_and_merge {
                     "position": pl.Int32,
                     "allele1": pl.Utf8,
                     "allele2": pl.Utf8,
+                    "maf": pl.Float64,
                     "cs": pl.Int8,
                     "cs_specific_prob": pl.Float64,
                     "p": pl.Float64,
@@ -290,7 +278,10 @@ task join_and_merge {
                         )
                         .otherwise((-np.log10(pl.col("p")).round(4)))
                         .alias("mlog10p"),
-                        # use scientific notation strings for beta and se to avoid rounding them (se) to zero
+                        # use scientific notation strings for af, beta and se to avoid rounding them to zero
+                        pl.col("maf")
+                        .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
+                        .alias("aaf"),
                         pl.col("beta")
                         .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
                         .alias("beta"),
@@ -313,6 +304,7 @@ task join_and_merge {
                         pl.col("beta"),
                         pl.col("se"),
                         pl.col("pip"),
+                        pl.col("aaf"),
                         pl.col("cs_id"),
                         pl.col("cs_size"),
                         pl.col("cs_min_r2"),

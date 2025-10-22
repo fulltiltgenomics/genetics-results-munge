@@ -16,7 +16,7 @@ def convert_pq_to_tsv(
 
     cs_95_outfile = open(parquet_path.replace(".parquet", "_cs_95_noanno.tsv"), "wt")
     cs_95_outfile.write(
-        "dataset\tdata_type\ttrait\ttrait_original\tcell_type\tchr\tpos\tref\talt\tmlog10p\tbeta\tse\tpip\tcs_id\tcs_size\tcs_min_r2\n"
+        "dataset\tdata_type\ttrait\ttrait_original\tcell_type\tchr\tpos\tref\talt\tmlog10p\tbeta\tse\tpip\taaf\tcs_id\tcs_size\tcs_min_r2\n"
     )
     # skipping 99 % credible sets as the data doesn't seem to differentiate between 95 % and 99 % credible sets
     # cs_99_outfile = open(parquet_path.replace(".parquet", "_cs_99_noanno.tsv"), "wt")
@@ -64,6 +64,7 @@ def convert_pq_to_tsv(
                     else "NA"
                 )
                 mlog10p = "NA"
+                af = "NA"  # not available in the data currently
                 mantissa = variant.get("pValueMantissa")
                 exponent = variant.get("pValueExponent")
                 if mantissa is not None and exponent is not None:
@@ -87,6 +88,7 @@ def convert_pq_to_tsv(
                     str(beta),
                     str(se),
                     str(pip),
+                    str(af),
                     str(cs_id),
                 ]
                 if variant.get("is95CredibleSet"):
