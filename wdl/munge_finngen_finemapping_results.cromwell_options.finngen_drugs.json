@@ -1,5 +1,5 @@
 {
-    "final_workflow_outputs_dir": "gs://finngen-commons/results_api_data/credible_sets/finngen_snrnaseq/202509/",
+    "final_workflow_outputs_dir": "gs://finngen-commons/results_api_data/credible_sets/finngen_drugs/20251021/",
     "use_relative_output_paths": true,
     "write_to_cache": true,
     "read_from_cache": true,
