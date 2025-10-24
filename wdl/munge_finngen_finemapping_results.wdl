@@ -1,5 +1,7 @@
 version 1.0
 
+import "qtl_file.wdl" as qtl_file
+
 workflow munge_finngen_finemapping_results {
 
     input {
@@ -12,6 +14,7 @@ workflow munge_finngen_finemapping_results {
         File? variant_annotation_file
         String? cell_type
         String output_file
+        Boolean create_qtl_file
     }
 
     meta {
@@ -46,6 +49,9 @@ workflow munge_finngen_finemapping_results {
         output_file: {
             help: "Output filename"
         }
+        create_qtl_file: {
+            help: "Whether to create a QTL file (gene chromosome, start and end added to data, indexed by gene start)"
+        }
     }
 
     Array[Array[String]] metadata = transpose(read_tsv(metadata_file))
@@ -66,11 +72,24 @@ workflow munge_finngen_finemapping_results {
         output_file = output_file
     }
 
+    if (create_qtl_file) {
+        call qtl_file.qtl_file as qtl_file {
+            input:
+            docker = docker,
+            data_file = join_and_merge.munged_file,
+            output_file = sub(output_file, ".tsv.gz", ".qtl.tsv.gz"),
+            output_unmapped_file = sub(output_file, ".tsv.gz", ".qtl.unmapped.tsv")
+        }
+    }
+
     output {
         File munged_file = join_and_merge.munged_file
         File munged_file_tbi = join_and_merge.munged_file_tbi
         File log = join_and_merge.log
         Array[File] per_trait_munged_files = join_and_merge.per_trait_munged_files
+        File? qtl_file_out = qtl_file.qtl_file
+        File? qtl_file_out_tbi = qtl_file.qtl_file_tbi
+        File? qtl_file_unmapped_out = qtl_file.unmapped_file
     }
 }
 
