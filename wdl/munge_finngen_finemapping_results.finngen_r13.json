@@ -1,7 +1,9 @@
 {
-    "munge_finngen_finemapping_results.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20250731",
+    "munge_finngen_finemapping_results.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20251024",
     "munge_finngen_finemapping_results.dataset": "FinnGen_R13",
     "munge_finngen_finemapping_results.metadata_file": "gs://finngen-commons/results_api_metadata/metadata_FinnGen_R13_20250915_credible_sets.tsv",
     "munge_finngen_finemapping_results.trait_is_cell_type": false,
-    "munge_finngen_finemapping_results.output_file": "FinnGen_R13_credible_sets.tsv.gz"
+    "munge_finngen_finemapping_results.variant_annotation_file": "gs://finngen-commons/results_api_data/mapping_files/R13_annotated_variants_v0.small.gz",
+    "munge_finngen_finemapping_results.output_file": "FinnGen_R13_credible_sets.tsv.gz",
+    "munge_finngen_finemapping_results.create_qtl_file": false
 }

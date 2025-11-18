@@ -1,10 +1,14 @@
 {
-    "munge_finngen_finemapping_results.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20250731",
+    "munge_finngen_finemapping_results.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20251024",
     "munge_finngen_finemapping_results.dataset": "UKB_PPP",
     "munge_finngen_finemapping_results.metadata_file": "gs://finngen-commons/results_api_metadata/metadata_UKB-PPP_credible_sets.tsv",
     "munge_finngen_finemapping_results.trait_is_cell_type": false,
     "munge_finngen_finemapping_results.cell_type": "plasma",
     "munge_finngen_finemapping_results.trait_mapping_file": "gs://finngen-commons/results_api_data/mapping_files/manual_gene_mapping_20250916.tsv",
     "munge_finngen_finemapping_results.require_trait_mapping": false,
-    "munge_finngen_finemapping_results.output_file": "UKB_PPP_credible_sets.tsv.gz"
+    "munge_finngen_finemapping_results.output_file": "UKB_PPP_credible_sets.tsv.gz",
+    "munge_finngen_finemapping_results.create_qtl_file": true,
+    "munge_finngen_finemapping_results.qtl_file.gene_mapping_file": "gs://finngen-commons/results_api_data/mapping_files/gencode.v49.annotation.genes.tsv",
+    "munge_finngen_finemapping_results.qtl_file.map_from_column": "trait",
+    "munge_finngen_finemapping_results.qtl_file.map_to_column": "gene_name"
 }

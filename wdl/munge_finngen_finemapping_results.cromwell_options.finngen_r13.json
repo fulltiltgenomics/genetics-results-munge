@@ -1,5 +1,5 @@
 {
-    "final_workflow_outputs_dir": "gs://finngen-commons/results_api_data/credible_sets/finngen_core/r13_20251021/",
+    "final_workflow_outputs_dir": "gs://finngen-commons/results_api_data/credible_sets/finngen_core/r13_20251024/",
     "use_relative_output_paths": true,
     "write_to_cache": true,
     "read_from_cache": true,
