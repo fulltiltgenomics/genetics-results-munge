@@ -104,7 +104,9 @@ def merge(
                 .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
                 .alias("se"),
                 pl.col("pip").round(4),
-                pl.lit("NA").alias("aaf"),  # not available in data
+                pl.lit("NA").alias(
+                    "aaf"
+                ),  # not available in data currently but keeping here if it's added later
                 pl.col("cs_min_r2").round(4),
             )
             .select(
@@ -121,10 +123,10 @@ def merge(
                 pl.col("beta"),
                 pl.col("se"),
                 pl.col("pip"),
-                pl.col("aaf"),
                 pl.col("cs_id"),
                 pl.col("cs_size"),
                 pl.col("cs_min_r2"),
+                pl.col("aaf"),
             )
         )
 
@@ -133,7 +135,11 @@ def merge(
     if variant_annotation is not None:
         # drop existing annotation columns if any
         merged_df = merged_df.drop(
-            [col for col in merged_df.columns if col.endswith("most_severe")]
+            [
+                col
+                for col in merged_df.columns
+                if col.endswith("most_severe") or col.startswith("aaf")
+            ]
         )
         merged_df = (
             merged_df.with_columns(
@@ -203,7 +209,12 @@ if __name__ == "__main__":
         variant_annotation = (
             pl.scan_csv(variant_annotation_file, separator="\t")
             .rename({"#variant": "variant_id"})
-            .select("variant_id", "most_severe", "gene_most_severe")
+            .with_columns(
+                pl.col("AF")
+                .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
+                .alias("aaf"),
+            )
+            .select("variant_id", "aaf", "most_severe", "gene_most_severe")
             .collect()
         )
     else:

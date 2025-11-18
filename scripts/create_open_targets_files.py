@@ -16,7 +16,7 @@ def convert_pq_to_tsv(
 
     cs_95_outfile = open(parquet_path.replace(".parquet", "_cs_95_noanno.tsv"), "wt")
     cs_95_outfile.write(
-        "dataset\tdata_type\ttrait\ttrait_original\tcell_type\tchr\tpos\tref\talt\tmlog10p\tbeta\tse\tpip\taaf\tcs_id\tcs_size\tcs_min_r2\n"
+        "dataset\tdata_type\ttrait\ttrait_original\tcell_type\tchr\tpos\tref\talt\tmlog10p\tbeta\tse\tpip\tcs_id\tcs_size\tcs_min_r2\taaf\n"
     )
     # skipping 99 % credible sets as the data doesn't seem to differentiate between 95 % and 99 % credible sets
     # cs_99_outfile = open(parquet_path.replace(".parquet", "_cs_99_noanno.tsv"), "wt")
@@ -88,7 +88,6 @@ def convert_pq_to_tsv(
                     str(beta),
                     str(se),
                     str(pip),
-                    str(af),
                     str(cs_id),
                 ]
                 if variant.get("is95CredibleSet"):
@@ -99,11 +98,11 @@ def convert_pq_to_tsv(
             cs_size_99 = len(variants_99)
             for v in variants_95:
                 cs_95_outfile.write(
-                    "\t".join(v + [str(cs_size_95), str(cs_min_r2)]) + "\n"
+                    "\t".join(v + [str(cs_size_95), str(cs_min_r2), str(af)]) + "\n"
                 )
             # for v in variants_99:
             #     cs_99_outfile.write(
-            #         "\t".join(v + [str(cs_size_99), str(cs_min_r2)]) + "\n"
+            #         "\t".join(v + [str(cs_size_99), str(cs_min_r2), str(af)]) + "\n"
             #     )
     cs_95_outfile.close()
     # cs_99_outfile.close()
@@ -132,7 +131,17 @@ def convert_pq_to_tsv(
         pl.col("pip").round(4),
         pl.col("cs_min_r2").round(4),
     )
-    df = df.join(anno, on="variant_id", how="left").drop("variant_id")
+    df = (
+        df.drop(
+            [
+                col
+                for col in df.columns
+                if col.endswith("most_severe") or col.startswith("aaf")
+            ]
+        )
+        .join(anno, on="variant_id", how="left")
+        .drop("variant_id")
+    )
     df.write_csv(
         parquet_path.replace(".parquet", "_cs_95.tsv"),
         separator="\t",
@@ -152,7 +161,12 @@ if __name__ == "__main__":
     anno = (
         pl.scan_csv(variant_annotation_file, separator="\t", null_values=["NA"])
         .rename({"#variant": "variant_id"})
-        .select("variant_id", "most_severe", "gene_most_severe")
+        .with_columns(
+            pl.col("AF")
+            .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
+            .alias("aaf"),
+        )
+        .select("variant_id", "aaf", "most_severe", "gene_most_severe")
         .collect()
     )
     files = [f for f in os.listdir(data_dir) if f.endswith(".parquet")]

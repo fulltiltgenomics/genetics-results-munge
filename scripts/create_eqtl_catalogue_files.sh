@@ -22,5 +22,5 @@ time (
     <(echo -n "#") \
     <(sort -m -T . --files0-from=$data_dir/merge_these -k6,6g -k7,7g -k8,8 -k9,9 -k3,3 | uniq) \
     | bgzip -@4 > $data_dir/$output_file \
-    && tabix -@4 -s 6 -b 7 -e 7 $data_dir/$output_file
+    && tabix -f -@4 -s 6 -b 7 -e 7 $data_dir/$output_file
 )

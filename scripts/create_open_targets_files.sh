@@ -23,7 +23,7 @@ time cat \
 <(cat $data_dir/*_cs_95.tsv \
 | sort -T . -k6,6g -k7,7g -k8,8 -k9,9 | uniq) \
 | bgzip -@4 > $data_dir/$output_file \
-&& tabix -@4 -s 6 -b 7 -e 7 $data_dir/$output_file
+&& tabix -f -@4 -s 6 -b 7 -e 7 $data_dir/$output_file
 
 # create per-study files
 time python3 <<EOF

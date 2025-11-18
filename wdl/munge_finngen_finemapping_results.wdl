@@ -275,6 +275,7 @@ task join_and_merge {
                             .str.replace(r"^.*predicted\.celltype\.", "")
                             .str.replace(r"\.chr\d+$|\.chrX$", "")
                             .str.replace(r"\.mean\.inv\.SAIGE", "")
+                            .str.replace(r"\.sum\.inv", "")
                             .cast(pl.Utf8)
                         )
                         .otherwise(pl.lit(cell_type))
@@ -300,7 +301,7 @@ task join_and_merge {
                         # use scientific notation strings for af, beta and se to avoid rounding them to zero
                         pl.col("maf")
                         .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
-                        .alias("aaf"),
+                        .alias("aaf"), # the column is actually MAF from fine-mapping pipeline so we've lost allele information and need to join AAF from variant annotation file
                         pl.col("beta")
                         .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
                         .alias("beta"),
@@ -323,10 +324,10 @@ task join_and_merge {
                         pl.col("beta"),
                         pl.col("se"),
                         pl.col("pip"),
-                        pl.col("aaf"),
                         pl.col("cs_id"),
                         pl.col("cs_size"),
                         pl.col("cs_min_r2"),
+                        pl.col("aaf"),
                         *([pl.col("most_severe")] if "most_severe" in snp_df.columns else []),
                         *(
                             [pl.col("gene_most_severe")]
@@ -355,7 +356,7 @@ task join_and_merge {
             if variant_annotation is not None:
                 # drop existing annotation columns if any
                 merged_df = merged_df.drop(
-                    [col for col in merged_df.columns if col.endswith("most_severe")]
+                    [col for col in merged_df.columns if col.endswith("most_severe") or col.startswith("aaf")]
                 )
                 merged_df = (
                     merged_df.with_columns(
@@ -427,7 +428,12 @@ task join_and_merge {
             variant_annotation = (
                 pl.scan_csv(variant_annotation_file, separator="\t")
                 .rename({"#variant": "variant_id"})
-                .select("variant_id", "most_severe", "gene_most_severe")
+                .with_columns(
+                    pl.col("AF")
+                    .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
+                    .alias("aaf"),
+                )
+                .select("variant_id", "aaf", "most_severe", "gene_most_severe")
                 .collect()
             )
         else:
