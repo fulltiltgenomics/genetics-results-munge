@@ -5,9 +5,9 @@ task qtl_file {
     input {
         String docker
         File data_file
-        File gene_mapping_file
-        String map_from_column
-        String map_to_column
+        File? gene_mapping_file # optional just so wdl validation passes
+        String? map_from_column
+        String? map_to_column
         String output_file
         String output_unmapped_file
     }
@@ -154,12 +154,11 @@ task qtl_file {
             map_to_column,
         )
 
-        if len(unmapped) > 0:
-            unmapped.write_csv(
-                "~{output_unmapped_file}",
-                separator="\t",
-                null_value="NA",
-            )
+        unmapped.write_csv(
+            "~{output_unmapped_file}",
+            separator="\t",
+            null_value="NA",
+        )
         print(f"{len(set(unmapped.select('trait').to_series().to_list()))} unmapped genes")
 
         merged_df.filter(~pl.col("trait_chr").is_null()).write_csv(
