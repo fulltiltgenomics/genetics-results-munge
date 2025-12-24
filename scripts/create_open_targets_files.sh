@@ -33,3 +33,6 @@ for trait in data["trait"].unique():
     study_data = data.filter(pl.col("trait") == trait)
     study_data.write_csv(f"$data_dir/opentargets_per_study/{trait}.SUSIE.munged.tsv", separator="\t", null_value="NA")
 EOF
+
+# create study metadata file
+time python3 scripts/create_open_targets_study_file.py $data_dir/study_metadata/*.parquet $data_dir/$output_file $data_dir/study_metadata/study_metadata.json

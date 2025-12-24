@@ -69,8 +69,9 @@ Get Open Targets data files (requester pays bucket - see [Open Targets website](
 ```
 # replace [your_google_project_name] with your project name
 BILLING_PROJECT=[your_google_project_name]
-mkdir -p data
-gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/25.09/output/credible_set/*.parquet data/
+mkdir -p data/study_metadata
+gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/25.12/output/credible_set/*.parquet data/
+gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/25.12/output/study/*.parquet data/study_metadata/
 gcloud storage cp gs://finngen-public-data-r12/annotations/finnge_R12_annotated_variants_v1.gz data/
 ```
 
@@ -89,7 +90,7 @@ zcat data/finnge_R12_annotated_variants_v1.gz | cut -f1,1000,1001 | bgzip \
 > data/finnge_R12_annotated_variants_v1.small.gz
 
 scripts/create_open_targets_files.sh \
-Open_Targets_25.09 \
+Open_Targets_25.12 \
 data \
 data/finnge_R12_annotated_variants_v1.small.gz
 ```
