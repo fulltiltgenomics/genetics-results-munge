@@ -87,6 +87,8 @@ workflow munge_finngen_finemapping_results {
         File munged_file_tbi = join_and_merge.munged_file_tbi
         File log = join_and_merge.log
         Array[File] per_trait_munged_files = join_and_merge.per_trait_munged_files
+        Array[File] per_trait_stats_files = join_and_merge.per_trait_stats_files
+        File aggregate_stats_file = join_and_merge.aggregate_stats_file
         File? qtl_file_out = qtl_file.qtl_file
         File? qtl_file_out_tbi = qtl_file.qtl_file_tbi
         File? qtl_file_unmapped_out = qtl_file.unmapped_file
@@ -159,6 +161,8 @@ task join_and_merge {
         File log = "~{dataset}_join_and_merge.log"
         Array[File] per_trait_munged_files = glob("individual/*.SUSIE.munged.tsv")
         # Array[File] per_trait_munged_files = read_lines("list_of_munged_files")
+        Array[File] per_trait_stats_files = glob("individual/*.SUSIE.munged.stats.json")
+        File aggregate_stats_file = "credible_set_stats.tsv"
     }
 
     runtime {
@@ -178,6 +182,144 @@ task join_and_merge {
         # join .snp.filter.tsv and .cred.summary.tsv files
         # write selected columns to a new file per trait/study that is sorted by chr, pos, ref, alt, trait
         mkdir -p "individual"
+
+        cat <<'CREDIBLE_SET_STATS_EOF' > credible_set_stats.py
+        import json
+        import polars as pl
+        from dataclasses import dataclass, asdict
+
+        CODING_VARIANTS = {
+            "missense_variant",
+            "synonymous_variant",
+            "stop_gained",
+            "stop_lost",
+            "start_lost",
+            "frameshift_variant",
+            "inframe_insertion",
+            "inframe_deletion",
+            "splice_acceptor_variant",
+            "splice_donor_variant",
+        }
+
+        LOF_VARIANTS = {
+            "stop_gained",
+            "stop_lost",
+            "start_lost",
+            "frameshift_variant",
+            "splice_acceptor_variant",
+            "splice_donor_variant",
+        }
+
+        @dataclass
+        class CredibleSetStats:
+            trait: str
+            trait_original: str
+            dataset: str
+            data_type: str
+            n_risk_cs: int
+            n_risk_cs_with_coding: int
+            n_risk_cs_with_coding_pip_gt_0_05: int
+            n_risk_cs_with_lof: int
+            n_risk_cs_with_lof_pip_gt_0_05: int
+            n_protective_cs: int
+            n_protective_cs_with_coding: int
+            n_protective_cs_with_coding_pip_gt_0_05: int
+            n_protective_cs_with_lof: int
+            n_protective_cs_with_lof_pip_gt_0_05: int
+
+        def calculate_stats(df: pl.DataFrame) -> CredibleSetStats:
+            trait = df["trait"][0] if len(df) > 0 else ""
+            trait_original = (
+                df["trait_original"][0]
+                if len(df) > 0 and "trait_original" in df.columns
+                else trait
+            )
+            dataset = df["dataset"][0] if len(df) > 0 else ""
+            data_type = df["data_type"][0] if len(df) > 0 else ""
+
+            if len(df) == 0:
+                return CredibleSetStats(
+                    trait=trait, trait_original=trait_original, dataset=dataset, data_type=data_type,
+                    n_risk_cs=0, n_risk_cs_with_coding=0, n_risk_cs_with_coding_pip_gt_0_05=0,
+                    n_risk_cs_with_lof=0, n_risk_cs_with_lof_pip_gt_0_05=0,
+                    n_protective_cs=0, n_protective_cs_with_coding=0, n_protective_cs_with_coding_pip_gt_0_05=0,
+                    n_protective_cs_with_lof=0, n_protective_cs_with_lof_pip_gt_0_05=0,
+                )
+
+            if df["pip"].dtype == pl.Utf8:
+                df = df.with_columns(pl.col("pip").cast(pl.Float64, strict=False))
+            if df["beta"].dtype == pl.Utf8:
+                df = df.with_columns(pl.col("beta").cast(pl.Float64, strict=False))
+            if "aaf" in df.columns and df["aaf"].dtype == pl.Utf8:
+                df = df.with_columns(pl.col("aaf").cast(pl.Float64, strict=False))
+
+            lead_variants = df.sort("pip", descending=True).group_by("cs_id").first()
+
+            if "aaf" in lead_variants.columns:
+                lead_variants = lead_variants.with_columns(
+                    pl.when(pl.col("aaf").is_not_null())
+                    .then(
+                        pl.when(
+                            ((pl.col("beta") > 0) & (pl.col("aaf") < 0.5))
+                            | ((pl.col("beta") < 0) & (pl.col("aaf") > 0.5))
+                        ).then(pl.lit("risk")).otherwise(pl.lit("protective"))
+                    )
+                    .otherwise( # TODO fix data so that AF is always available - this assumes alternate allele is minor allele and is bad
+                        pl.when(pl.col("beta") > 0).then(pl.lit("risk")).otherwise(pl.lit("protective"))
+                    )
+                    .alias("direction")
+                )
+            else:
+                lead_variants = lead_variants.with_columns(
+                    pl.when(pl.col("beta") > 0).then(pl.lit("risk")).otherwise(pl.lit("protective")).alias("direction")
+                )
+
+            risk_cs_ids = set(lead_variants.filter(pl.col("direction") == "risk")["cs_id"].to_list())
+            protective_cs_ids = set(lead_variants.filter(pl.col("direction") == "protective")["cs_id"].to_list())
+
+            risk_variants = df.filter(pl.col("cs_id").is_in(risk_cs_ids))
+            protective_variants = df.filter(pl.col("cs_id").is_in(protective_cs_ids))
+
+            def count_cs_with_variants(variants_df, variant_set, pip_threshold=None):
+                if "most_severe" not in variants_df.columns:
+                    return 0
+                filtered = variants_df.filter(pl.col("most_severe").is_in(variant_set))
+                if pip_threshold is not None:
+                    filtered = filtered.filter(pl.col("pip") > pip_threshold)
+                return filtered["cs_id"].n_unique()
+
+            return CredibleSetStats(
+                trait=trait, trait_original=trait_original, dataset=dataset, data_type=data_type,
+                n_risk_cs=len(risk_cs_ids),
+                n_risk_cs_with_coding=count_cs_with_variants(risk_variants, CODING_VARIANTS),
+                n_risk_cs_with_coding_pip_gt_0_05=count_cs_with_variants(risk_variants, CODING_VARIANTS, 0.05),
+                n_risk_cs_with_lof=count_cs_with_variants(risk_variants, LOF_VARIANTS),
+                n_risk_cs_with_lof_pip_gt_0_05=count_cs_with_variants(risk_variants, LOF_VARIANTS, 0.05),
+                n_protective_cs=len(protective_cs_ids),
+                n_protective_cs_with_coding=count_cs_with_variants(protective_variants, CODING_VARIANTS),
+                n_protective_cs_with_coding_pip_gt_0_05=count_cs_with_variants(protective_variants, CODING_VARIANTS, 0.05),
+                n_protective_cs_with_lof=count_cs_with_variants(protective_variants, LOF_VARIANTS),
+                n_protective_cs_with_lof_pip_gt_0_05=count_cs_with_variants(protective_variants, LOF_VARIANTS, 0.05),
+            )
+
+        def write_stats_json(stats, output_path):
+            with open(output_path, "w") as f:
+                json.dump(asdict(stats), f, indent=2)
+
+        def stats_to_tsv_row(stats):
+            d = asdict(stats)
+            return "\t".join(str(v) for v in d.values())
+
+        def get_tsv_header():
+            return "\t".join([
+                "trait", "trait_original", "dataset", "data_type",
+                "n_risk_cs", "n_risk_cs_with_coding", "n_risk_cs_with_coding_pip_gt_0_05",
+                "n_risk_cs_with_lof", "n_risk_cs_with_lof_pip_gt_0_05",
+                "n_protective_cs", "n_protective_cs_with_coding", "n_protective_cs_with_coding_pip_gt_0_05",
+                "n_protective_cs_with_lof", "n_protective_cs_with_lof_pip_gt_0_05",
+            ])
+        CREDIBLE_SET_STATS_EOF
+
         python <<EOF > "~{dataset}_join_and_merge.log"
 
         import warnings
@@ -185,6 +327,7 @@ task join_and_merge {
         from typing import Literal
         import numpy as np
         import polars as pl
+        from credible_set_stats import calculate_stats, write_stats_json, get_tsv_header, stats_to_tsv_row
 
         Datatype = Literal["GWAS", "eQTL", "sQTL", "pQTL", "edQTL", "metaboQTL"]
 
@@ -439,6 +582,8 @@ task join_and_merge {
         else:
             variant_annotation = None
 
+        all_stats = []
+
         for i, trait in enumerate(traits):
             try:
                 merged_df, null_traits = merge(
@@ -467,11 +612,27 @@ task join_and_merge {
                     separator="\t",
                     null_value="NA",
                 )
+
+                # calculate stats for each unique trait and write JSON
+                for unique_trait in merged_df.filter(pl.col("trait").is_not_null())["trait"].unique():
+                    trait_df = merged_df.filter(pl.col("trait") == unique_trait)
+                    stats = calculate_stats(trait_df)
+                    unique_trait_clean = unique_trait.replace("/", "_") # gene names can contain / which are not great in path names
+                    write_stats_json(stats, f"individual/{trait}.{unique_trait_clean}.SUSIE.munged.stats.json")
+                    all_stats.append(stats)
+
                 print(f"{i+1}/{len(traits)}: {trait}: OK ({len(merged_df)} rows)")
             except NoDataException as e:
                 print(f"{i+1}/{len(traits)}: {trait}: {e}")
             except pl.exceptions.NoDataError as e:
                 print(f"{i+1}/{len(traits)}: {trait}: {e}")
+
+        # write aggregate statistics TSV
+        with open("credible_set_stats.tsv", "w") as f:
+            f.write(get_tsv_header() + "\n")
+            for s in all_stats:
+                f.write(stats_to_tsv_row(s) + "\n")
+        print(f"Wrote aggregate stats for {len(all_stats)} traits")
         EOF
 
         # merge per-trait files to one file and tabix it

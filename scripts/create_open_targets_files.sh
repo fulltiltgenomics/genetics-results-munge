@@ -25,13 +25,27 @@ time cat \
 | bgzip -@4 > $data_dir/$output_file \
 && tabix -f -@4 -s 6 -b 7 -e 7 $data_dir/$output_file
 
-# create per-study files
+# create per-study files with stats
 time python3 <<EOF
+import sys
+sys.path.insert(0, "scripts")
 import polars as pl
+from credible_set_stats import calculate_stats, write_stats_json, get_tsv_header, stats_to_tsv_row
+
 data = pl.read_csv("$data_dir/$output_file", separator="\t", null_values=["NA"])
+all_stats = []
 for trait in data["trait"].unique():
     study_data = data.filter(pl.col("trait") == trait)
     study_data.write_csv(f"$data_dir/opentargets_per_study/{trait}.SUSIE.munged.tsv", separator="\t", null_value="NA")
+    stats = calculate_stats(study_data)
+    write_stats_json(stats, f"$data_dir/opentargets_per_study/{trait}.SUSIE.munged.stats.json")
+    all_stats.append(stats)
+
+with open(f"$data_dir/opentargets_per_study/credible_set_stats.tsv", "w") as f:
+    f.write(get_tsv_header() + "\n")
+    for s in all_stats:
+        f.write(stats_to_tsv_row(s) + "\n")
+print(f"Wrote aggregate stats for {len(all_stats)} traits")
 EOF
 
 # create study metadata file

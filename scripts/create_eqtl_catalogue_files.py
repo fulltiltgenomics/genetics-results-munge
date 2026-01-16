@@ -4,6 +4,12 @@ from scipy.special import log_ndtr
 from typing import Literal
 import numpy as np
 import polars as pl
+from credible_set_stats import (
+    calculate_stats,
+    write_stats_json,
+    get_tsv_header,
+    stats_to_tsv_row,
+)
 
 Datatype = Literal["eQTL", "sQTL", "pQTL"]
 
@@ -170,7 +176,7 @@ def merge(
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print(
-            "Usage: python create_open_targets_files.py <data_dir> <variant_annotation_file>"
+            "Usage: python create_eqtl_catalogue_files.py <data_dir> <variant_annotation_file>"
         )
         sys.exit(1)
     data_dir = sys.argv[1]
@@ -220,6 +226,8 @@ if __name__ == "__main__":
     else:
         variant_annotation = None
 
+    all_stats = []
+
     for i, study in enumerate(studies):
         tissue_label = study_metadata.filter(pl.col("dataset_id").eq(study))[
             "tissue_label"
@@ -267,6 +275,26 @@ if __name__ == "__main__":
                 separator="\t",
                 null_value="NA",
             )
+
+            # calculate stats for each trait and write JSON
+            for trait in merged_df.filter(pl.col("trait").is_not_null())[
+                "trait"
+            ].unique():
+                trait_df = merged_df.filter(pl.col("trait") == trait)
+                stats = calculate_stats(trait_df)
+                write_stats_json(
+                    stats,
+                    f"{data_dir}/eqtlcat_per_study/{study}.{trait}.SUSIE.munged.stats.json",
+                )
+                all_stats.append(stats)
+
             print(f"{i+1}/{len(studies)}: {study}: OK")
         except NoDataException as e:
             print(f"{i+1}/{len(studies)}: {study}: {e}")
+
+    # write aggregate statistics TSV
+    with open(f"{data_dir}/eqtlcat_per_study/credible_set_stats.tsv", "w") as f:
+        f.write(get_tsv_header() + "\n")
+        for s in all_stats:
+            f.write(stats_to_tsv_row(s) + "\n")
+    print(f"Wrote aggregate stats for {len(all_stats)} traits")
