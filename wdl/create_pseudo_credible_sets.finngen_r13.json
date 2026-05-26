@@ -1,0 +1,10 @@
+{
+    "create_pseudo_credible_sets.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20251024",
+    "create_pseudo_credible_sets.input_files_list": "gs://finngen-commons/results_api_metadata/autoreporting.fgr13.release.ukbb_mvp_overlap.fofn",
+    "create_pseudo_credible_sets.flags": "--dataset FinnGen_R13 --no-proximity-filter --mlog10p-diff 2 --r2-to-lead-thres 0.6",
+    "create_pseudo_credible_sets.output_suffix": ".pseudo_cs.tsv",
+    "create_pseudo_credible_sets.r2_high_ld_thres": 0.95,
+    "create_pseudo_credible_sets.filter_hla": true,
+    "create_pseudo_credible_sets.output_file": "FinnGen_R13_pseudo_credible_sets.tsv.gz",
+    "create_pseudo_credible_sets.phenotype_json": "gs://finngen-commons/results_api_data/mapping_files/finngen_r13_pheno_202509.json"
+}
