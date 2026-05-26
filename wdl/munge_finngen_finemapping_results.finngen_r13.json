@@ -3,7 +3,10 @@
     "munge_finngen_finemapping_results.dataset": "FinnGen_R13",
     "munge_finngen_finemapping_results.metadata_file": "gs://finngen-commons/results_api_metadata/metadata_FinnGen_R13_20250915_credible_sets.tsv",
     "munge_finngen_finemapping_results.trait_is_cell_type": false,
+    "munge_finngen_finemapping_results.keep_low_purity_cs": false,
+    "munge_finngen_finemapping_results.keep_first_low_purity_cs": false,
     "munge_finngen_finemapping_results.variant_annotation_file": "gs://finngen-commons/results_api_data/mapping_files/R13_annotated_variants_v0.small.gz",
     "munge_finngen_finemapping_results.output_file": "FinnGen_R13_credible_sets.tsv.gz",
-    "munge_finngen_finemapping_results.create_qtl_file": false
+    "munge_finngen_finemapping_results.create_qtl_file": false,
+    "munge_finngen_finemapping_results.phenotype_json": "gs://finngen-commons/results_api_data/mapping_files/finngen_r13_pheno_202509.json"
 }

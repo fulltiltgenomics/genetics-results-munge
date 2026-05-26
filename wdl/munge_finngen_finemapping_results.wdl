@@ -11,7 +11,10 @@ workflow munge_finngen_finemapping_results {
         Boolean trait_is_cell_type
         File? trait_mapping_file
         Boolean? require_trait_mapping
+        Boolean keep_low_purity_cs
+        Boolean keep_first_low_purity_cs
         File? variant_annotation_file
+        File? phenotype_json
         String? cell_type
         String output_file
         Boolean create_qtl_file
@@ -40,8 +43,17 @@ workflow munge_finngen_finemapping_results {
         require_trait_mapping: {
             help: "Optional, whether to require trait mapping (if not given or false, traits that are not in the trait mapping file will be set to the original trait name)"
         }
+        keep_low_purity_cs: {
+            help: "Whether to keep all low purity credible sets"
+        }
+        keep_first_low_purity_cs: {
+            help: "Whether to keep low purity credible sets when cs number is 1 (only applies when keep_low_purity_cs is false)"
+        }
         variant_annotation_file: {
             help: "Optional location of variant annotation file (tsv file with at least these columns: #variant, most_severe, gene_most_severe)"
+        }
+        phenotype_json: {
+            help: "Optional JSON file with phenotype metadata (array of objects with phenocode and phenostring fields) for mapping trait names"
         }
         cell_type: {
             help: "Cell type (optional, e.g. plasma)"
@@ -64,7 +76,10 @@ workflow munge_finngen_finemapping_results {
         cell_type = cell_type,
         trait_mapping_file = trait_mapping_file,
         require_trait_mapping = require_trait_mapping,
+        keep_low_purity_cs = keep_low_purity_cs,
+        keep_first_low_purity_cs = keep_first_low_purity_cs,
         variant_annotation_file = variant_annotation_file,
+        phenotype_json = phenotype_json,
         data_types = metadata[0],
         traits = metadata[1],
         snp_files = metadata[2],
@@ -107,7 +122,10 @@ task join_and_merge {
         Boolean trait_is_cell_type
         File? trait_mapping_file
         Boolean? require_trait_mapping
+        Boolean keep_low_purity_cs
+        Boolean keep_first_low_purity_cs
         File? variant_annotation_file
+        File? phenotype_json
         String? cell_type
         String output_file
     }
@@ -149,6 +167,9 @@ task join_and_merge {
         }
         variant_annotation_file: {
             help: "Optional location of variant annotation file (tsv file with at least these columns: #variant, most_severe, gene_most_severe)"
+        }
+        phenotype_json: {
+            help: "Optional JSON file with phenotype metadata (array of objects with phenocode and phenostring fields) for mapping trait names"
         }
         output_file: {
             help: "Output filename"
@@ -322,6 +343,7 @@ task join_and_merge {
 
         python <<EOF > "~{dataset}_join_and_merge.log"
 
+        import json
         import warnings
         from scipy.special import log_ndtr
         from typing import Literal
@@ -344,6 +366,8 @@ task join_and_merge {
             trait_mapping: pl.DataFrame | None = None,
             require_trait_mapping: bool = False,
             variant_annotation: pl.DataFrame | None = None,
+            keep_low_purity_cs: bool = False,
+            keep_first_low_purity_cs: bool = False,
         ) -> tuple[pl.DataFrame, pl.DataFrame]:
             snp_df = pl.read_csv(
                 snp_file,
@@ -383,7 +407,10 @@ task join_and_merge {
                     },
                     null_values=["NA"],
                 )
-                .filter(~pl.col("low_purity"))
+                .filter(
+                    pl.lit(True) if keep_low_purity_cs
+                    else (~pl.col("low_purity") | (pl.lit(keep_first_low_purity_cs) & (pl.col("cs") == 1)))
+                )
                 .with_columns(
                     pl.concat_str(
                         [pl.col("region"), pl.col("cs").cast(pl.Utf8)], separator="_"
@@ -496,6 +523,10 @@ task join_and_merge {
                 merged_df = merged_df.with_columns(pl.col("trait").alias("trait_original"))
                 null_traits = merged_df.filter(False)
 
+            # replace spaces with underscores in trait names
+            merged_df = merged_df.with_columns(pl.col("trait").str.replace_all(" ", "_"))
+            null_traits = null_traits.with_columns(pl.col("trait").str.replace_all(" ", "_"))
+
             if variant_annotation is not None:
                 # drop existing annotation columns if any
                 merged_df = merged_df.drop(
@@ -556,7 +587,10 @@ task join_and_merge {
         cell_type = "~{cell_type}" if "~{defined(cell_type)}" == "true" else None
         trait_mapping_file = "~{trait_mapping_file}" if "~{defined(trait_mapping_file)}" == "true" else None
         require_trait_mapping = True if "~{require_trait_mapping}" == "true" else False
+        keep_low_purity_cs = True if "~{keep_low_purity_cs}" == "true" else False
+        keep_first_low_purity_cs = True if "~{keep_first_low_purity_cs}" == "true" else False
         variant_annotation_file = "~{variant_annotation_file}" if "~{defined(variant_annotation_file)}" == "true" else None
+        phenotype_json_file = "~{phenotype_json}" if "~{defined(phenotype_json)}" == "true" else None
 
         if trait_mapping_file is not None:
             trait_mapping = (
@@ -566,6 +600,18 @@ task join_and_merge {
             )
         else:
             trait_mapping = None
+
+        if phenotype_json_file is not None:
+            with open(phenotype_json_file) as f:
+                pheno_list = json.load(f)
+            phenotype_json_mapping = pl.DataFrame({
+                "trait": [p["phenocode"] for p in pheno_list],
+                "mapped_trait": [p["phenostring"] for p in pheno_list],
+            })
+            if trait_mapping is not None:
+                trait_mapping = pl.concat([trait_mapping, phenotype_json_mapping]).unique(subset=["trait"], keep="first")
+            else:
+                trait_mapping = phenotype_json_mapping
 
         if variant_annotation_file is not None:
             variant_annotation = (
@@ -596,6 +642,8 @@ task join_and_merge {
                     trait_mapping,
                     require_trait_mapping,
                     variant_annotation,
+                    keep_low_purity_cs,
+                    keep_first_low_purity_cs,
                 )
                 if len(null_traits) > 0:
                     null_traits.write_csv(
