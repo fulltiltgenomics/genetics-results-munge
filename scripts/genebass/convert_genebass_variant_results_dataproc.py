@@ -236,6 +236,16 @@ def main():
         )
     )
 
+    # sort numerically by chr/pos before stringifying them in the select below,
+    # otherwise the sort would be lexicographic and break tabix indexing
+    print("Sorting results...")
+    entries = entries.order_by(
+        entries.chr,
+        entries.pos,
+        entries.ref,
+        entries.alt,
+    )
+
     # format and select output columns
     entries = entries.select(
         **{
@@ -248,25 +258,20 @@ def main():
         gene=hl.or_else(entries.gene, "NA"),
         annotation=hl.or_else(entries.annotation, "NA"),
         mlog10p=hl.or_else(hl.str(entries.mlog10p), "NA"),
-        beta=hl.or_else(hl.format("%.3e", entries.beta), "NA"),
-        se=hl.or_else(hl.format("%.3e", entries.se), "NA"),
-        af_overall=hl.or_else(hl.format("%.3e", entries.af_overall), "NA"),
-        af_cases=hl.or_else(hl.format("%.3e", entries.af_cases), "NA"),
-        af_controls=hl.or_else(hl.format("%.3e", entries.af_controls), "NA"),
+        # hl.format renders missing values as the string "null", so guard with
+        # is_defined and emit "NA" for missing instead
+        beta=hl.if_else(hl.is_defined(entries.beta), hl.format("%.3e", entries.beta), "NA"),
+        se=hl.if_else(hl.is_defined(entries.se), hl.format("%.3e", entries.se), "NA"),
+        af_overall=hl.if_else(hl.is_defined(entries.af_overall), hl.format("%.3e", entries.af_overall), "NA"),
+        af_cases=hl.if_else(hl.is_defined(entries.af_cases), hl.format("%.3e", entries.af_cases), "NA"),
+        af_controls=hl.if_else(hl.is_defined(entries.af_controls), hl.format("%.3e", entries.af_controls), "NA"),
         ac=hl.or_else(hl.str(entries.ac), "NA"),
         an=hl.or_else(hl.str(entries.an), "NA"),
         n_cases=hl.or_else(hl.str(entries.n_cases), "NA"),
         n_controls=hl.or_else(hl.str(entries.n_controls), "NA"),
-        trait=hl.or_else(entries.trait, "NA"),
+        # fall back to trait_original when no readable description is available
+        trait=hl.or_else(hl.or_else(entries.trait, entries.trait_original), "NA"),
         trait_original=hl.or_else(entries.trait_original, "NA"),
-    )
-
-    print("Sorting results...")
-    entries = entries.order_by(
-        entries.chr,
-        entries.pos,
-        entries.ref,
-        entries.alt,
     )
 
     print(f"Exporting to {args.output}...")

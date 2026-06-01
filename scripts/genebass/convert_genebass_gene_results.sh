@@ -26,4 +26,23 @@ tabix -f -s5 -b6 -e6 "${PREFIX}.tsv.gz"
 } | bgzip > "${PREFIX}.mlog10p_gt4.tsv.gz"
 tabix -f -s5 -b6 -e6 "${PREFIX}.mlog10p_gt4.tsv.gz"
 
-echo "Done! Created ${PREFIX}.tsv.gz and ${PREFIX}.mlog10p_gt4.tsv.gz"
+# split per-trait full (unfiltered) files, named by trait_original (column 16),
+# bgzipped + tabixed. Rows are already sorted by gene_chr/gene_start_pos.
+PER_TRAIT_DIR="${PREFIX}_per_trait"
+TRAIT_COL=16
+mkdir -p "$PER_TRAIT_DIR"
+
+HEADER=$(zcat "${PREFIX}.tsv.gz" | head -1)
+echo "Splitting per-trait files..."
+zcat "${PREFIX}.tsv.gz" | tail -n +2 | awk -F'\t' -v dir="$PER_TRAIT_DIR" -v tc="$TRAIT_COL" \
+    '{print >> (dir "/" $tc ".tsv")}'
+
+echo "Bgzipping and tabixing per-trait files..."
+for f in "$PER_TRAIT_DIR"/*.tsv; do
+    { echo "$HEADER"; cat "$f"; } | bgzip -@2 > "$f.gz"
+    rm "$f"
+    tabix -f -s5 -b6 -e6 "$f.gz"
+done
+
+N_TRAITS=$(ls "$PER_TRAIT_DIR"/*.tsv.gz | wc -l)
+echo "Done! Created ${PREFIX}.tsv.gz, ${PREFIX}.mlog10p_gt4.tsv.gz and $N_TRAITS per-trait files in ${PER_TRAIT_DIR}/"

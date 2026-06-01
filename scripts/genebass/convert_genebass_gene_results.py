@@ -228,7 +228,16 @@ def main():
     # convert missing values and empty strings to "NA" strings for export
     entries = entries.select(
         dataset=hl.literal("genebass"),
-        trait=hl.if_else(hl.is_missing(entries.trait) | (entries.trait == ""), "NA", entries.trait),
+        # fall back to trait_original when no readable description is available
+        trait=hl.if_else(
+            hl.is_missing(entries.trait) | (entries.trait == ""),
+            hl.if_else(
+                hl.is_missing(entries.trait_original) | (entries.trait_original == ""),
+                "NA",
+                entries.trait_original,
+            ),
+            entries.trait,
+        ),
         gene=hl.if_else(hl.is_missing(entries.gene) | (entries.gene == ""), "NA", entries.gene),
         gene_id=hl.if_else(hl.is_missing(entries.gene_id) | (entries.gene_id == ""), "NA", entries.gene_id),
         gene_chr=hl.bind(
