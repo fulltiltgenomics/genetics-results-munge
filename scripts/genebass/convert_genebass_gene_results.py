@@ -58,8 +58,8 @@ def main():
     parser.add_argument(
         "--pval-threshold",
         type=float,
-        default=1e-4,
-        help="P-value threshold (default: 1e-4)",
+        default=1,
+        help="P-value threshold, keeps Pvalue_Burden <= threshold (default: 1, no filtering)",
     )
     parser.add_argument(
         "--preview",
@@ -149,10 +149,10 @@ def main():
     )
     entries = entries.drop("gencode_data")
 
-    print(f"Filtering by burden p-value < {args.pval_threshold}...")
+    print(f"Filtering by burden p-value <= {args.pval_threshold}...")
     entries = entries.filter(
         hl.is_defined(entries.Pvalue_Burden)
-        & (entries.Pvalue_Burden < args.pval_threshold)
+        & (entries.Pvalue_Burden <= args.pval_threshold)
     )
 
     # drop keys so we can freely select/rename columns
@@ -292,7 +292,7 @@ def main():
 
     n_results = entries.count()
     print(f"\nDone! Exported {n_results} results to {args.output}")
-    print(f"Filtered by p-value < {args.pval_threshold}")
+    print(f"Filtered by p-value <= {args.pval_threshold}")
 
 
 if __name__ == "__main__":
