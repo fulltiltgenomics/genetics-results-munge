@@ -92,21 +92,6 @@ def main():
     # Add computed columns
     print("Adding computed columns...")
     entries = entries.annotate(
-        # Compute -log10(p-value)
-        # TODO underflow?
-        mlog10p_skato=hl.if_else(
-            hl.is_defined(entries.Pvalue),
-            hl.if_else(
-                entries.Pvalue == 0,
-                324.0,
-                hl.if_else(
-                    entries.Pvalue > 0,
-                    -hl.log10(entries.Pvalue),
-                    hl.missing(hl.tfloat64),
-                ),
-            ),
-            hl.missing(hl.tfloat64),
-        ),
         mlog10p_burden=hl.if_else(
             hl.is_defined(entries.Pvalue_Burden),
             hl.if_else(
@@ -120,21 +105,7 @@ def main():
             ),
             hl.missing(hl.tfloat64),
         ),
-        mlog10p_skat=hl.if_else(
-            hl.is_defined(entries.Pvalue_SKAT),
-            hl.if_else(
-                entries.Pvalue_SKAT == 0,
-                324.0,
-                hl.if_else(
-                    entries.Pvalue_SKAT > 0,
-                    -hl.log10(entries.Pvalue_SKAT),
-                    hl.missing(hl.tfloat64),
-                ),
-            ),
-            hl.missing(hl.tfloat64),
-        ),
-        # create trait identifier combining all trait fields
-        trait=hl.delimit(
+        trait_original=hl.delimit(
             [
                 entries.trait_type,
                 entries.phenocode,
@@ -143,6 +114,24 @@ def main():
                 entries.modifier,
             ],
             "_",
+        ),
+        # readable trait name from description and coding_description
+        trait=hl.bind(
+            lambda desc, coding: hl.if_else(
+                hl.is_defined(desc) & (desc != "") & hl.is_defined(coding) & (coding != ""),
+                desc + " | " + coding,
+                hl.if_else(
+                    hl.is_defined(desc) & (desc != ""),
+                    desc,
+                    hl.if_else(
+                        hl.is_defined(coding) & (coding != ""),
+                        coding,
+                        hl.missing(hl.tstr),
+                    ),
+                ),
+            ),
+            entries.description,
+            entries.coding_description,
         ),
         beta=entries.BETA_Burden,
         se=entries.SE_Burden,
@@ -160,19 +149,10 @@ def main():
     )
     entries = entries.drop("gencode_data")
 
-    print(f"Filtering by p-value < {args.pval_threshold}...")
+    print(f"Filtering by burden p-value < {args.pval_threshold}...")
     entries = entries.filter(
-        (
-            (hl.is_defined(entries.Pvalue) & (entries.Pvalue < args.pval_threshold))
-            | (
-                hl.is_defined(entries.Pvalue_Burden)
-                & (entries.Pvalue_Burden < args.pval_threshold)
-            )
-            | (
-                hl.is_defined(entries.Pvalue_SKAT)
-                & (entries.Pvalue_SKAT < args.pval_threshold)
-            )
-        )
+        hl.is_defined(entries.Pvalue_Burden)
+        & (entries.Pvalue_Burden < args.pval_threshold)
     )
 
     # drop keys so we can freely select/rename columns
@@ -228,17 +208,13 @@ def main():
         gene_end_pos=entries.gene_end_pos,
         annotation=entries.annotation,
         mlog10p_burden=entries.mlog10p_burden,
-        mlog10p_skat=entries.mlog10p_skat,
-        mlog10p_skato=entries.mlog10p_skato,
         beta=entries.beta,
         se=entries.se,
         total_variants=entries.total_variants,
         total_variants_pheno=entries.total_variants_pheno,
         n_cases=entries.n_cases,
         n_controls=entries.n_controls,
-        description=entries.description,
-        coding_description=entries.coding_description,
-        category=entries.category,
+        trait_original=entries.trait_original,
     )
 
     # sort the results for stable output ordering
@@ -272,14 +248,6 @@ def main():
             lambda s: hl.if_else(s == "", "NA", s),
             hl.or_else(hl.str(entries.mlog10p_burden), "")
         ),
-        mlog10p_skat=hl.bind(
-            lambda s: hl.if_else(s == "", "NA", s),
-            hl.or_else(hl.str(entries.mlog10p_skat), "")
-        ),
-        mlog10p_skato=hl.bind(
-            lambda s: hl.if_else(s == "", "NA", s),
-            hl.or_else(hl.str(entries.mlog10p_skato), "")
-        ),
         beta=hl.bind(
             lambda s: hl.if_else(s == "", "NA", s),
             hl.or_else(hl.str(entries.beta), "")
@@ -304,9 +272,8 @@ def main():
             lambda s: hl.if_else(s == "", "NA", s),
             hl.or_else(hl.str(entries.n_controls), "")
         ),
-        description=hl.if_else(hl.is_missing(entries.description) | (entries.description == ""), "NA", entries.description),
-        coding_description=hl.if_else(hl.is_missing(entries.coding_description) | (entries.coding_description == ""), "NA", entries.coding_description),
-        category=hl.if_else(hl.is_missing(entries.category) | (entries.category == ""), "NA", entries.category),
+        trait_original=hl.if_else(hl.is_missing(entries.trait_original) | (entries.trait_original == ""), "NA", entries.trait_original),
+        flags=hl.literal("NA"),
     )
     
     entries = entries.rename({"dataset": "#dataset"})
