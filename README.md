@@ -161,6 +161,16 @@ For Open Targets, only the lead variant in each credible set has an `mlog10p` va
 
 There are no spaces in the output files and missing values are represented with `NA`.
 
+### pseudo credible sets
+
+For external GWAS that ship only summary statistics (no fine-mapping), credible sets are
+approximated as *pseudo credible sets*: LD clumps around genome-wide-significant leads,
+trimmed by LD and significance and given a heuristic PIP. These are produced in two steps —
+the FinnGen autoreporting tool (LD clumping) followed by
+[`wdl/create_pseudo_credible_sets.wdl`](wdl/create_pseudo_credible_sets.wdl). See
+[docs/pseudo-credible-sets.md](docs/pseudo-credible-sets.md) for how they are defined and
+which variants are excluded.
+
 ## variant annotation
 
 Currently `most_severe` and `gene_most_severe` annotations come from FinnGen variant annotation. This means that variants not present in FinnGen imputation panel have `NA` in the `most_severe` and `gene_most_severe` columns. We're working on more comprehensive variant annotation.
