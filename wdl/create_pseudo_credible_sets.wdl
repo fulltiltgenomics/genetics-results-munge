@@ -23,10 +23,10 @@ workflow create_pseudo_credible_sets {
             help: "Docker image to use"
         }
         input_files_list: {
-            help: "File of filenames (one GCS path per line) to process"
+            help: "TSV file with two columns per line: dataset name and GCS path of the report file. A single run can mix multiple datasets."
         }
         flags: {
-            help: "Flags passed to the script (e.g. '--dataset FinnGen_R13 --no-proximity-filter --min-r2 0.05 --mlog10p-diff 2 --r2-to-lead-thres 0.6')"
+            help: "Flags passed to the script (e.g. '--no-proximity-filter --min-r2 0.05 --mlog10p-diff 2 --r2-to-lead-thres 0.6'). Do not include --dataset here; it is taken from input_files_list."
         }
         output_suffix: {
             help: "Appended to basename of input file to form output filename (e.g. '.pseudo_cs.tsv')"
@@ -48,13 +48,14 @@ workflow create_pseudo_credible_sets {
         }
     }
 
-    Array[String] input_files = read_lines(input_files_list)
+    Array[Array[String]] input_rows = read_tsv(input_files_list)
 
-    scatter (input_file in input_files) {
+    scatter (row in input_rows) {
         call create_pseudo_cs {
             input:
             docker = docker,
-            input_file = input_file,
+            dataset = row[0],
+            input_file = row[1],
             flags = flags,
             output_suffix = output_suffix,
             r2_high_ld_thres = r2_high_ld_thres,
@@ -82,6 +83,7 @@ task create_pseudo_cs {
 
     input {
         String docker
+        String dataset
         File input_file
         String flags
         String output_suffix
@@ -670,7 +672,7 @@ if __name__ == "__main__":
     main()
 PYEOF
 
-        python3 create_pseudo_credible_sets.py ~{input_file} ~{output_filename} ~{flags} --r2-high-ld-thres ~{r2_high_ld_thres} ~{if filter_hla then "--filter-hla" else "--no-filter-hla"} ~{"--phenotype-json " + phenotype_json} --column-aliases ~{write_json(column_aliases)}
+        python3 create_pseudo_credible_sets.py ~{input_file} ~{output_filename} --dataset ~{dataset} ~{flags} --r2-high-ld-thres ~{r2_high_ld_thres} ~{if filter_hla then "--filter-hla" else "--no-filter-hla"} ~{"--phenotype-json " + phenotype_json} --column-aliases ~{write_json(column_aliases)}
 
     >>>
 }

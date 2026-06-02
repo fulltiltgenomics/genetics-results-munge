@@ -1,5 +1,5 @@
 {
-    "final_workflow_outputs_dir": "gs://finngen-commons/results_api_data/credible_sets/covid_hgi/",
+    "final_workflow_outputs_dir": "gs://finngen-commons/results_api_data/credible_sets/ext/",
     "use_relative_output_paths": true,
     "write_to_cache": true,
     "read_from_cache": true,

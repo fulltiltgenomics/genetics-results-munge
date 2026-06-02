@@ -1,7 +1,7 @@
 {
     "create_pseudo_credible_sets.docker": "europe-west1-docker.pkg.dev/phewas-development/genetics-results/genetics-results-munge:20251024",
     "create_pseudo_credible_sets.input_files_list": "gs://finngen-commons/results_api_metadata/autoreporting.mvp_ukbb.labs.fofn",
-    "create_pseudo_credible_sets.flags": "--dataset FinnGen_R13_MVP_UKBB_labs --no-proximity-filter --mlog10p-diff 2 --r2-to-lead-thres 0.6",
+    "create_pseudo_credible_sets.flags": "--no-proximity-filter --mlog10p-diff 2 --r2-to-lead-thres 0.6",
     "create_pseudo_credible_sets.output_suffix": ".pseudo_cs.mlog10p_2.r2_0.6.tsv",
     "create_pseudo_credible_sets.r2_high_ld_thres": 0.95,
     "create_pseudo_credible_sets.filter_hla": true,
