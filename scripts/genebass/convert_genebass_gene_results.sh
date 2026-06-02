@@ -3,16 +3,23 @@
 # Run genebass gene burden Hail export, then bgzip+tabix both full and filtered files.
 #
 # Usage:
-#   ./convert_genebass_gene_results.sh [input_mt] [output_prefix]
+#   ./convert_genebass_gene_results.sh [input_mt] [output_prefix] [pheno_blacklist]
 
 set -euxo pipefail
 
 INPUT="${1:-/mnt/disks/data/results.mt}"
 PREFIX="${2:-gene_burden_results}"
+BLACKLIST="${3:-}"
+
+BLACKLIST_ARG=()
+if [ -n "$BLACKLIST" ]; then
+    BLACKLIST_ARG=(--pheno-blacklist "$BLACKLIST")
+fi
 
 time python3 scripts/genebass/convert_genebass_gene_results.py \
     --input "$INPUT" \
-    --output "${PREFIX}.tsv"
+    --output "${PREFIX}.tsv" \
+    "${BLACKLIST_ARG[@]}"
 
 # bgzip and tabix the full file
 bgzip -f "${PREFIX}.tsv"

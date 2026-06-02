@@ -45,6 +45,20 @@ def load_gencode_gene_positions():
     return gencode_ht
 
 
+def load_blacklist(path):
+    """Load phenotype blacklist from a text file (one trait per line)."""
+    if path.startswith("gs://"):
+        import subprocess
+        result = subprocess.run(
+            ["gsutil", "cat", path], capture_output=True, text=True, check=True
+        )
+        lines = result.stdout.strip().split("\n")
+    else:
+        with open(path) as f:
+            lines = f.read().strip().split("\n")
+    return set(line.strip() for line in lines if line.strip())
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Convert Hail gene burden results to TSV"
@@ -62,11 +76,20 @@ def main():
         help="P-value threshold, keeps Pvalue_Burden <= threshold (default: 1, no filtering)",
     )
     parser.add_argument(
+        "--pheno-blacklist",
+        help="Path to phenotype blacklist file (one trait per line, local or gs://)",
+    )
+    parser.add_argument(
         "--preview",
         action="store_true",
         help="Preview schema and sample data without writing output",
     )
     args = parser.parse_args()
+
+    blacklist = set()
+    if args.pheno_blacklist:
+        blacklist = load_blacklist(args.pheno_blacklist)
+        print(f"Loaded {len(blacklist)} blacklisted phenotypes")
 
     hl.init(log="/tmp/hail.log", tmp_dir=TMP_DIR, local_tmpdir=TMP_DIR, spark_conf={"spark.local.dir": TMP_DIR}, quiet=True)
 
@@ -85,6 +108,17 @@ def main():
         print("\n=== Sample Entries ===")
         mt.entries().show(5)
         return
+
+    # filter out blacklisted phenotypes
+    if blacklist:
+        # build trait key from column fields to match blacklist format
+        mt = mt.annotate_cols(
+            _trait_key=hl.delimit(
+                [mt.trait_type, mt.phenocode, mt.pheno_sex, mt.coding, mt.modifier],
+                "_",
+            )
+        )
+        mt = mt.filter_cols(~hl.literal(blacklist).contains(mt._trait_key))
 
     print("Flattening MatrixTable to entries table...")
     entries = mt.entries()
