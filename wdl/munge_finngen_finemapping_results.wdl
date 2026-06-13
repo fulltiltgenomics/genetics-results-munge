@@ -666,6 +666,10 @@ task join_and_merge {
                     trait_df = merged_df.filter(pl.col("trait") == unique_trait)
                     stats = calculate_stats(trait_df)
                     unique_trait_clean = unique_trait.replace("/", "_") # gene names can contain / which are not great in path names
+                    # cap the basename to the 255-byte filesystem limit; some phenostrings (e.g. kanta "extra" traits) are very long
+                    max_len = 255 - len(trait) - len(".SUSIE.munged.stats.json") - 1
+                    if len(unique_trait_clean) > max_len:
+                        unique_trait_clean = unique_trait_clean[:max_len]
                     write_stats_json(stats, f"individual/{trait}.{unique_trait_clean}.SUSIE.munged.stats.json")
                     all_stats.append(stats)
 
