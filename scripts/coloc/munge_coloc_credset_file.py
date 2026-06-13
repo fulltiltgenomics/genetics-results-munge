@@ -1,117 +1,70 @@
 import polars as pl
-from scipy.special import log_ndtr
-import numpy as np
-import warnings
 import sys
 
-warnings.filterwarnings(
-    "ignore", category=RuntimeWarning, message="divide by zero encountered in log10"
-)
+# R14 coloc credible set munging.
+# Input columns: trait region rsid cs low_purity p beta se mlogp cs_specific_prob dataset tissue quant
+# dataset/tissue/quant are now explicit columns (in R13 they were packed into one string).
 
-# convert dataset column in data file to these names
-dataset_mapping = {
-    "FIN-R12-Metabolism--Plasma-Metabolism": "FinnGen_NMR",
-    "FIN-R12-Somascan--Plasma-Proteomics": "FinnGen_SomaScan",
-    "FinnGen-Olink-pQTL-meta--Plasma-Proteomics": "FinnGen_Olink",
-    "FinnGen-R13--GWAS": "FinnGen_R13",
-    "FinnLiver_exon_Liver--FinnLiver": "FinnLiver",
-    "FinnLiver_ge_Liver--FinnLiver": "FinnLiver",
-    "FinnLiver_leafcutter_Liver--FinnLiver": "FinnLiver",
-    "FinnLiver_tx_Liver--FinnLiver": "FinnLiver",
-    "FinnLiver_txrev_Liver--FinnLiver": "FinnLiver",
-    "GeneRisk--GWAS": "GeneRisk",
-    "INTERVAL--Plasma-Proteomics": "INTERVAL",
-    "Kanta_labs--GWAS": "FinnGen_kanta",
-    "UKB-PPP--Plasma-Proteomics": "UKB-PPP",
-    "UKB-finucane--GWAS": "UKB-Finucane",
-    "FinnGen-R12--GWAS": "FinnGen_R12",
-    "FinnGen-KANTA--GWAS": "FinnGen_kanta",
+# quant method -> data_type (applies to all rows; in R13 this was derived from dataset suffixes)
+QUANT_DATA_TYPE = {
+    "genome": "GWAS",
+    "metabolite": "metaboQTL",
+    "protein": "pQTL",
+    "aptamer": "pQTL",
+    "ge": "eQTL",
+    "exon": "eQTL",
+    "tx": "eQTL",
+    "txrev": "eQTL",
+    "microarray": "eQTL",
+    "leafcutter": "sQTL",
+    "majiq": "sQTL",
 }
 
-data_type_mapping = {
-    "FIN-R12-Metabolism--Plasma-Metabolism": "metaboQTL",
-    "FIN-R12-Somascan--Plasma-Proteomics": "pQTL",
-    "FinnGen-Olink-pQTL-meta--Plasma-Proteomics": "pQTL",
-    "FinnGen-R13--GWAS": "GWAS",
-    "FinnLiver_exon_Liver--FinnLiver": "eQTL",
-    "FinnLiver_ge_Liver--FinnLiver": "eQTL",
-    "FinnLiver_leafcutter_Liver--FinnLiver": "sQTL",
-    "FinnLiver_tx_Liver--FinnLiver": "eQTL",
-    "FinnLiver_txrev_Liver--FinnLiver": "eQTL",
-    "GeneRisk--GWAS": "GWAS",
-    "INTERVAL--Plasma-Proteomics": "pQTL",
-    "Kanta_labs--GWAS": "GWAS",
-    "UKB-PPP--Plasma-Proteomics": "pQTL",
-    "UKB-finucane--GWAS": "GWAS",
-    "FinnGen-R12--GWAS": "GWAS",
-    "FinnGen-KANTA--GWAS": "GWAS",
+# FinnGen-internal / external datasets: bare dataset name -> (#dataset display name, cell_type).
+# Everything not listed here is treated as eQTL Catalogue and resolved via the catalogue metadata.
+# cell_type is None for GWAS datasets (no cell type), constant otherwise.
+FINNGEN_DATASETS = {
+    "FIN-R12-Metabolism": ("FinnGen_NMR", "plasma"),
+    "FIN-R12-Somascan": ("FinnGen_SomaScan", "plasma"),
+    "FIN-R12-Olink-3K": ("FinnGen_Olink_3K", "plasma"),
+    "FIN-R14-Olink-5K-b1-b2": ("FinnGen_Olink_5K", "plasma"),
+    "FinnGen-Olink-pQTL-meta": ("FinnGen_Olink", "plasma"),
+    "FinnGen-R14": ("FinnGen_R14", None),
+    "GeneRisk": ("GeneRisk", None),
+    "Kanta_labs_v3": ("FinnGen_kanta", None),
+    "UKB-finucane": ("UKB_Finucane", None),
+    "UKB-PPP": ("UKB_PPP", "plasma"),
+    "INTERVAL": ("INTERVAL", "plasma"),
+    "FIN-SingleCell-b1": ("FinnGen_snRNAseq", "PBMC"),
+    "FinnLiver": ("FinnLiver", "liver"),
 }
+# FinnLiver is FinnGen-internal but a multi-quant molecular QTL, so its trait_original
+# also gets the quant suffix (like eQTL Catalogue traits)
+QUANT_TAG_FINNGEN = {"FinnLiver"}
 
-cell_type_mapping = {
-    "FIN-R12-Metabolism--Plasma-Metabolism": "plasma",
-    "FIN-R12-Somascan--Plasma-Proteomics": "plasma",
-    "FinnGen-Olink-pQTL-meta--Plasma-Proteomics": "plasma",
-    "FinnGen-R13--GWAS": None,
-    "FinnLiver_exon_Liver--FinnLiver": "liver",
-    "FinnLiver_ge_Liver--FinnLiver": "liver",
-    "FinnLiver_leafcutter_Liver--FinnLiver": "liver",
-    "FinnLiver_tx_Liver--FinnLiver": "liver",
-    "FinnLiver_txrev_Liver--FinnLiver": "liver",
-    "GeneRisk--GWAS": None,
-    "INTERVAL--Plasma-Proteomics": "plasma",
-    "Kanta_labs--GWAS": None,
-    "UKB-PPP--Plasma-Proteomics": "plasma",
-    "UKB-finucane--GWAS": None,
-    "FinnGen-R12--GWAS": None,
-    "FinnGen-KANTA--GWAS": None,
-}
+finngen_name_map = {k: v[0] for k, v in FINNGEN_DATASETS.items()}
+finngen_cell_type_map = {k: v[1] for k, v in FINNGEN_DATASETS.items()}
 
 
 def main(filename, eqtl_cat_metadata_filename, output_filename):
-
-    eqtl_cat_metadata = (
+    # catalogue metadata: (study_label, sample_group, quant_method) -> (dataset_id, cell_type)
+    # cell_type = tissue_label|condition_label with spaces replaced by underscores
+    meta = (
         pl.read_csv(eqtl_cat_metadata_filename, separator="\t")
         .with_columns(
-            pl.col("sample_group")
-            .str.replace("+", "_", literal=True)
-            .alias("sample_group")
-        )
-        .with_columns(
-            pl.concat_str(
-                pl.col("study_label"),
-                pl.col("sample_group"),
-                pl.col("quant_method"),
-                pl.lit("eQTL_Catalogue"),
-                separator="--",
-            ).alias("dataset"),
-            pl.concat_str(
-                pl.col("tissue_label"),
-                pl.col("condition_label"),
-                separator="|",
-            )
+            pl.concat_str(pl.col("tissue_label"), pl.col("condition_label"), separator="|")
             .str.replace_all(" ", "_")
-            .alias("cell_type"),
-            pl.when(pl.col("quant_method").str.contains("leafcutter"))
-            .then(pl.lit("sQTL"))
-            .when(pl.col("quant_method").str.contains("aptamer"))
-            .then(pl.lit("pQTL"))
-            .otherwise(pl.lit("eQTL"))
-            .alias("data_type"),
+            .alias("cat_cell_type")
         )
-        .select("dataset_id", "dataset", "cell_type", "quant_method", "data_type")
-        .to_dict(as_series=False)
-    )
-    eqtl_cat_dataset_mapping = dict(
-        zip(eqtl_cat_metadata["dataset"], eqtl_cat_metadata["dataset_id"])
-    )
-    eqtl_cat_cell_type_mapping = dict(
-        zip(eqtl_cat_metadata["dataset"], eqtl_cat_metadata["cell_type"])
-    )
-    eqtl_cat_data_type_mapping = dict(
-        zip(eqtl_cat_metadata["dataset"], eqtl_cat_metadata["data_type"])
-    )
-    eqtl_cat_quant_method_mapping = dict(
-        zip(eqtl_cat_metadata["dataset"], eqtl_cat_metadata["quant_method"])
+        .select(
+            pl.col("study_label").alias("dataset"),
+            pl.col("sample_group").alias("tissue"),
+            pl.col("quant_method").alias("quant"),
+            pl.col("dataset_id").alias("cat_dataset"),
+            "cat_cell_type",
+        )
+        .unique(subset=["dataset", "tissue", "quant"])
+        .lazy()
     )
 
     data = (
@@ -121,172 +74,50 @@ def main(filename, eqtl_cat_metadata_filename, output_filename):
             infer_schema_length=100000,
             schema_overrides={
                 "trait": pl.Utf8,
-                "p": pl.Float64 | None,
-                "beta": pl.Utf8,  # some data files are broken so first read beta as string and then filter non-numeric values out
-                "se": pl.Utf8,
+                "p": pl.Float64,
+                "beta": pl.Float64,
+                "se": pl.Float64,
+                "mlogp": pl.Float64,
+                "low_purity": pl.Utf8,  # 0 / 1 / NA (NA for catalogue datasets)
+                "dataset": pl.Utf8,
+                "tissue": pl.Utf8,
+                "quant": pl.Utf8,
             },
-            null_values=["NA", "T"],  # T allele...
+            null_values=["NA"],
         )
-        .with_columns(
-            pl.col("beta").cast(pl.Float64, strict=False),
-            pl.col("se").cast(pl.Float64, strict=False),
-        )
+        # keep good and unknown-purity credible sets, drop only explicitly low purity (=1)
+        .filter(pl.col("low_purity").ne("1").fill_null(True))
         .filter(pl.col("beta").is_not_null())
-        .filter(pl.col("low_purity") == 0)
-        # filter out Plasma-SingleCell because newer snRNAseq data are in separate files
-        .filter(~(pl.col("dataset").str.ends_with("--Plasma-SingleCell")))
-        # filter out old Olink
-        .filter(~(pl.col("dataset").str.ends_with("FIN-R12-Olink--Plasma-Proteomics")))
-        # TODO filter out SomaScan?
         .with_columns(
-            pl.when((pl.col("p").eq(0)) | (pl.col("p").is_null()))
-            .then(
-                pl.when((pl.col("se").eq(0)) | (pl.col("se").is_null()))
-                .then(None)
-                .otherwise(
-                    (
-                        (-log_ndtr(-(pl.col("beta") / pl.col("se")).abs()) - np.log(2))
-                        / np.log(10)
-                    ).round(4)
-                )
-            )
-            .otherwise((-np.log10(pl.col("p")).round(4)))
-            .alias("mlog10p")
-        )
-        .with_columns(
-            pl.concat_str(pl.col("region"), pl.col("cs"), separator="_").alias("cs_id")
-        )
-        .with_columns(
-            pl.col("rsid")
-            .str.split("_")
-            .list.get(0)
-            .str.replace("chr", "")
-            .str.replace("X", "23")
-            .cast(pl.Int8)
-            .alias("chr"),
+            pl.col("mlogp").round(4).alias("mlog10p"),
+            pl.concat_str(pl.col("region"), pl.col("cs"), separator="_").alias("cs_id"),
+            pl.col("rsid").str.split("_").list.get(0).str.replace("chr", "").str.replace("X", "23").cast(pl.Int8).alias("chr"),
             pl.col("rsid").str.split("_").list.get(1).cast(pl.Int32).alias("pos"),
             pl.col("rsid").str.split("_").list.get(2).alias("ref"),
             pl.col("rsid").str.split("_").list.get(3).alias("alt"),
+            pl.col("quant").replace_strict(QUANT_DATA_TYPE, default=None).alias("data_type"),
+            pl.col("dataset").is_in(list(FINNGEN_DATASETS.keys())).alias("_is_finngen"),
         )
+        .join(meta, on=["dataset", "tissue", "quant"], how="left")
         .with_columns(
-            pl.col("beta")
-            .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
-            .alias("beta"),
-            pl.col("se")
-            .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
-            .alias("se"),
-            pl.col("cs_specific_prob").round(4),
-        )
-        .with_columns(
-            pl.when(pl.col("dataset").str.ends_with("--eQTL_Catalogue"))
-            .then(
-                pl.col("dataset").replace_strict(eqtl_cat_dataset_mapping, default=None)
-            )
-            .when(pl.col("dataset").str.ends_with("--FinnGen_eQTL"))
-            .then(pl.lit("FinnGen_snRNAseq"))
-            .when(pl.col("dataset").str.ends_with("--FinnGen_caQTL"))
-            .then(pl.lit("FinnGen_ATACseq"))
-            .otherwise(pl.col("dataset").replace_strict(dataset_mapping, default=None))
-            .alias("#dataset")
-        )
-        .with_columns(
-            pl.when(pl.col("dataset").str.ends_with("--eQTL_Catalogue"))
-            .then(
-                pl.col("dataset").replace_strict(
-                    eqtl_cat_data_type_mapping, default=None
-                )
-            )
-            .when(pl.col("dataset").str.ends_with("--FinnGen_eQTL"))
-            .then(pl.lit("eQTL"))
-            .when(pl.col("dataset").str.ends_with("--FinnGen_caQTL"))
-            .then(pl.lit("caQTL"))
-            .otherwise(
-                pl.col("dataset").replace_strict(data_type_mapping, default=None)
-            )
-            .alias("data_type")
-        )
-        .with_columns(
-            pl.when(pl.col("dataset").str.ends_with("--eQTL_Catalogue"))
-            .then(
-                pl.col("dataset").replace_strict(
-                    eqtl_cat_cell_type_mapping, default=None
-                )
-            )
-            .when(pl.col("dataset").str.ends_with("--FinnGen_caQTL"))
-            .then(
-                pl.col("dataset")
-                .str.replace(r"--FinnGen_caQTL$", "")
-                .str.replace(r"^.*predicted\.celltype\.", "")
-                .str.replace(r"\.chr\d+$|\.chrX$", "")
-                .str.replace(r"\.mean\.inv\.SAIGE", "")
-                .str.replace(r"\.sum\.inv", "")
-            )
-            .when(pl.col("dataset").str.ends_with("--FinnGen_eQTL"))
-            .then(
-                pl.col("dataset")
-                .str.replace(r"--FinnGen_eQTL$", "")
-                .str.replace(r"^.*predicted\.celltype\.", "")
-                .str.replace(r"\.chr\d+$|\.chrX$", "")
-                .str.replace(r"\.mean\.inv\.SAIGE", "")
-            )
-            .otherwise(
-                pl.col("dataset").replace_strict(cell_type_mapping, default=None)
-            )
-            .alias("cell_type")
-        )
-        # TODO map to trait_original like we do in credible set munging
-        .with_columns(
-            pl.when(
-                (pl.col("dataset").str.contains("_ge_"))
-                | (pl.col("dataset").str.contains("--ge--"))
-            )
-            .then(pl.concat_str(pl.col("trait"), pl.lit("ge"), separator="|"))
-            .when(
-                (pl.col("dataset").str.contains("_tx_"))
-                | (pl.col("dataset").str.contains("--tx--"))
-            )
-            .then(pl.concat_str(pl.col("trait"), pl.lit("tx"), separator="|"))
-            .when(
-                (pl.col("dataset").str.contains("_txrev_"))
-                | (pl.col("dataset").str.contains("--txrev--"))
-            )
-            .then(pl.concat_str(pl.col("trait"), pl.lit("txrev"), separator="|"))
-            .when(
-                (pl.col("dataset").str.contains("_exon_"))
-                | (pl.col("dataset").str.contains("--exon--"))
-            )
-            .then(pl.concat_str(pl.col("trait"), pl.lit("exon"), separator="|"))
-            .when(
-                (pl.col("dataset").str.contains("_leafcutter_"))
-                | (pl.col("dataset").str.contains("--leafcutter--"))
-            )
-            .then(pl.concat_str(pl.col("trait"), pl.lit("leafcutter"), separator="|"))
-            .when(pl.col("dataset").str.ends_with("--eQTL_Catalogue"))
-            .then(
-                pl.concat_str(
-                    pl.col("trait"),
-                    pl.col("dataset").replace_strict(
-                        eqtl_cat_quant_method_mapping, default=None
-                    ),
-                    separator="|",
-                )
-            )
+            pl.col("beta").map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8).alias("beta"),
+            pl.col("se").map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8).alias("se"),
+            pl.col("cs_specific_prob").round(4).alias("pip"),
+            pl.when(pl.col("_is_finngen"))
+            .then(pl.col("dataset").replace_strict(finngen_name_map, default=None))
+            .otherwise(pl.col("cat_dataset"))
+            .alias("#dataset"),
+            pl.when(pl.col("_is_finngen"))
+            .then(pl.col("dataset").replace_strict(finngen_cell_type_map, default=None))
+            .otherwise(pl.col("cat_cell_type"))
+            .alias("cell_type"),
+            # quant suffix on trait_original for molecular QTLs (catalogue + FinnLiver)
+            pl.when(~pl.col("_is_finngen") | pl.col("dataset").is_in(list(QUANT_TAG_FINNGEN)))
+            .then(pl.concat_str(pl.col("trait"), pl.col("quant"), separator="|"))
             .otherwise(pl.col("trait"))
-            .alias("trait_original")
+            .alias("trait_original"),
         )
-        .rename({"cs_specific_prob": "pip"})
     )
-
-    # if data.select("#dataset").is_null().any():
-    #     raise ValueError(f"Could not map dataset in {filename} for some rows")
-
-    # if data.select("data_type").is_null().any():
-    #     raise ValueError(f"Could not map data type in {filename} for some rows")
-
-    # if data.filter(pl.col("data_type").ne("GWAS")).select("cell_type").is_null().any():
-    #     raise ValueError(
-    #         f"Could not determine cell type for some non-GWAS rows in {filename}"
-    #     )
 
     data.select(
         [
@@ -310,11 +141,6 @@ def main(filename, eqtl_cat_metadata_filename, output_filename):
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print(
-            "Usage: python munge_coloc_credset_file.py <filename> <eqtl_cat_metadata_filename> <output_filename>"
-        )
+        print("Usage: python munge_coloc_credset_file.py <filename> <eqtl_cat_metadata_filename> <output_filename>")
         sys.exit(1)
-    filename = sys.argv[1]
-    eqtl_cat_metadata_filename = sys.argv[2]
-    output_filename = sys.argv[3]
-    main(filename, eqtl_cat_metadata_filename, output_filename)
+    main(sys.argv[1], sys.argv[2], sys.argv[3])
