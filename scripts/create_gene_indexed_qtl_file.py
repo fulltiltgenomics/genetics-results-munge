@@ -3,11 +3,13 @@ import polars as pl
 
 def merge(
     data_file: str,
-    gene_mapping: pl.DataFrame,
+    gene_mapping: pl.LazyFrame,
     map_from_column: str,
     map_to_column: str,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    df = (
+) -> pl.LazyFrame:
+    # lazy plan; sinked with the streaming engine (low memory) below. order does not
+    # matter because the output is sorted by gene position afterwards.
+    return (
         pl.scan_csv(
             data_file,
             separator="\t",
@@ -40,16 +42,9 @@ def merge(
             left_on=map_from_column,
             right_on=map_to_column,
             how="left",
-            maintain_order="right",
         )
         .drop(["ensg", "gene_name"], strict=False)
-        # .sort(
-        #     "trait_chr", "trait_start", "trait_end", "chr", "pos", "ref", "alt", "trait"
-        # )
-        .collect()
     )
-    unmapped = df.filter(pl.col("trait_chr").is_null())
-    return df, unmapped
 
 
 # data_file = "/mnt/disks/dist_data/FinnGen_Olink_1-4_credible_sets.tsv.gz"
@@ -67,8 +62,8 @@ def merge(
 # map_from_column = "trait"
 # map_to_column = "gene_name"
 
-data_file = "/mnt/disks/dist_data/eQTL_Catalogue_R7.tsv.gz"
-gene_mapping_file = "/mnt/disks/dist_data/gencode.v39.annotation.genes.tsv"
+data_file = "/mnt/disks/data/eqtl_cat_r8_run/eQTL_Catalogue_R8.tsv"
+gene_mapping_file = "/mnt/disks/data/gencode.v39.annotation.genes.tsv"
 map_from_column = "trait"
 map_to_column = "gene_name"
 
@@ -106,26 +101,31 @@ gene_mapping = (
     .select("ensg", "gene_name", "trait_chr", "trait_start", "trait_end")
 )
 
-merged_df, unmapped = merge(
+merged_lf = merge(
     data_file,
     gene_mapping,
     map_from_column,
     map_to_column,
 )
 
-if len(unmapped) > 0:
-    unmapped.write_csv(
-        f"{data_file.removesuffix('.tsv.gz').removesuffix('.gz').removesuffix('.tsv')}.qtl.unmapped.tsv",
-        separator="\t",
-        null_value="NA",
-    )
-print(f"{len(set(unmapped.select('trait').to_series().to_list()))} unmapped genes")
+out_base = data_file.removesuffix(".tsv.gz").removesuffix(".gz").removesuffix(".tsv")
 
-
-merged_df.filter(~pl.col("trait_chr").is_null()).write_csv(
-    f"{data_file.removesuffix('.tsv.gz').removesuffix('.gz').removesuffix('.tsv')}.qtl.tsv",
-    separator="\t",
-    null_value="NA",
+# stream (low memory) the gene-mapped rows and, separately, the unmapped ones
+merged_lf.filter(pl.col("trait_chr").is_not_null()).sink_csv(
+    f"{out_base}.qtl.tsv", separator="\t", null_value="NA"
+)
+merged_lf.filter(pl.col("trait_chr").is_null()).sink_csv(
+    f"{out_base}.qtl.unmapped.tsv", separator="\t", null_value="NA"
 )
 
-# bgzip -f FinnGen_Olink.qtl.tsv && tabix -f -s19 -b20 -e20 FinnGen_Olink.qtl.tsv.gz
+n_unmapped = (
+    merged_lf.filter(pl.col("trait_chr").is_null())
+    .select(pl.col("trait").n_unique())
+    .collect()
+    .item()
+)
+print(f"{n_unmapped} unmapped genes")
+
+# eQTL Catalogue qtl schema is 19 data cols + trait_chr/trait_start/trait_end (cols 20-22):
+# sort -T . -k20,20g -k21,21g -k22,22g -k6,6g -k7,7g -k8,8 -k9,9 -k3,3 <out>.qtl.tsv \
+#   | bgzip -@4 > <out>.qtl.tsv.gz && tabix -f -s20 -b21 -e21 <out>.qtl.tsv.gz
