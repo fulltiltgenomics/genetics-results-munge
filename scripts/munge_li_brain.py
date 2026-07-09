@@ -121,6 +121,17 @@ def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
     )
 
 
+# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
+# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
+# (alt/random/scaffold/unplaced/Un_*) must be DROPPED here or they break the BigQuery chr load.
+CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
+
+
+def _drop_noncanonical(df: pl.DataFrame) -> pl.DataFrame:
+    """Keep only rows whose (already numeric) chrom is a canonical primary chromosome."""
+    return df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ccre-matrix", help="cCRE x cell-type accessibility matrix TSV (see header)")
@@ -158,21 +169,21 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     parsed = df.select(
         pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")
     ).unnest("_g")
-    return df.with_columns(
+    return _drop_noncanonical(df.with_columns(
         _numeric_chrom(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
-    )
+    ))
 
 
 def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     """Rename explicit coordinate columns to chrom/start/end and enforce numeric chrom + int coords."""
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return df.with_columns(
+    return _drop_noncanonical(df.with_columns(
         _numeric_chrom(pl.col("chrom")).alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
-    )
+    ))
 
 
 def load_matrix(args: argparse.Namespace) -> pl.DataFrame:
@@ -333,6 +344,8 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str]:
         "chr1\t200200\t200700\t7.2\t0.0\t1.1\n"
         "chr2\t50050\t50550\t0.0\t0.0\t4.4\n"
         "chrX\t900900\t901400\t2.0\t0.0\t0.0\n"
+        # non-canonical hg38 contig (alt/random/scaffold) — MUST be dropped by the canonical filter
+        "chr1_KI270706v1_random\t300300\t300800\t5.0\t1.0\t0.0\n"
     )
     links = tmpdir / "ccre_gene_links.tsv"
     links.write_text(
@@ -385,6 +398,12 @@ def run_sample() -> None:
     xrow = out.filter(pl.col("chrom") == "23").row(0, named=True)
     assert xrow["peak_id"] == "23-900900-901400", xrow["peak_id"]
     print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
+
+    # non-canonical hg38 contigs (alt/random/scaffold/Un) are DROPPED (Fix A) or they break the
+    # INT64 chr load; the "chr1_KI270706v1_random" synthetic cCRE must not survive while chrX does
+    assert not any("KI270706" in p for p in out["peak_id"].to_list()), "non-canonical contig leaked"
+    assert chroms == {"1", "2", "23"}, f"expected canonical chroms only; got {chroms}"
+    print("  non-canonical contig (chr1_KI270706v1_random) dropped: OK")
 
     # symbols-but-no-ids link: target_gene keeps the symbols, target_gene_id renders as NA (fix)
     sym_only = out.filter(pl.col("peak_id") == "1-100100-100600").row(0, named=True)

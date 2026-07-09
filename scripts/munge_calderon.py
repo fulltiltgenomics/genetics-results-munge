@@ -250,6 +250,13 @@ def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
     )
 
 
+# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
+# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
+# (alt/random/scaffold/unplaced/Un_*) must be DROPPED or they break the BigQuery chr load. liftOver
+# can emit alt/random contigs from an hg19 primary locus, so this is applied AFTER liftOver.
+CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
+
+
 # ---------------------------------------------------------------------------
 # sample-name parsing: "<donor>-<cell_type>-<U|S>" or "<cell_type>-<U|S>"
 # ---------------------------------------------------------------------------
@@ -471,6 +478,9 @@ def build_output(long_hg38: pl.LazyFrame, args: argparse.Namespace) -> pl.LazyFr
     """
     # convert the final hg38 chrom to numeric (X->23, ...) AFTER liftOver, then build peak_id/keys
     df = long_hg38.with_columns(_numeric_chrom(pl.col("chrom")).alias("chrom"))
+    # liftOver can map an hg19 primary locus onto an hg38 alt/random contig; drop those non-canonical
+    # seqnames so the platform's INT64 chr load never sees a scaffold/alt/Un name
+    df = df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
     df = df.with_columns(_peak_key().alias("peak_id"))
 
     if args.links:
@@ -587,6 +597,9 @@ def _synthetic_inputs(tmpdir: Path) -> str:
         "chr1_200200_200700\t10\t0\t8\t15\t0\n"
         "chr2_50050_50550\t0\t0\t0\t0\t9\n"
         "chrX_900900_901400\t3\t3\t5\t0\t0\n"
+        # non-canonical unplaced contig (liftOver can emit alt/random/Un contigs) — MUST be dropped
+        # by the canonical filter that runs AFTER the numeric-chrom conversion in build_output
+        "chrUn_300300_300800\t8\t8\t0\t0\t0\n"
     )
     return str(counts)
 
@@ -634,6 +647,12 @@ def run_sample() -> None:
     xrow = out.filter(pl.col("chrom") == "23").row(0, named=True)
     assert xrow["peak_id"] == "23-900900-901400", xrow["peak_id"]
     print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
+
+    # non-canonical contigs (alt/random/scaffold/Un that liftOver can emit) are DROPPED (Fix A)
+    # AFTER the numeric-chrom conversion; the "chrUn" synthetic peak must not survive while chrX does
+    assert not any("Un" in str(p) for p in out["peak_id"].to_list()), "non-canonical contig leaked"
+    assert chroms == {"1", "2", "23"}, f"expected canonical chroms only; got {chroms}"
+    print("  non-canonical contig (chrUn) dropped: OK")
 
     # Bulk_B resting aggregates donors 1001(4) + 1002(6) -> mean 5.0 at 1-100100-100600
     bulk_b_rest = out.filter(

@@ -79,6 +79,18 @@ Field rules for Catlas (see task genetics-results-suite-bzl.15):
   target_gene(_id) from --ccre-gene-links when present, else empty.
   version          "2021".
 
+MEMORY-BOUNDED FULL RUN (built in — no external driver needed):
+  The full atlas is a ~1.2M-cCRE x 222-cell-type matrix; a single dense in-RAM unpivot is ~266M
+  rows and OOMs a 31GB box. The normal matrix path instead processes the cell-type COLUMNS in
+  --col-batch-size batches (default 25): each batch reads only its columns, melts+build_output's,
+  and streams its 18-col body rows to an on-disk temp (--tmpdir); after all batches the concatenated
+  body is header-prepended, externally sorted (LC_ALL=C sort -k1,1 -k2,2n, scratch in --tmpdir),
+  bgzipped and tabix-indexed once. Output is content-identical to a single-shot run (rows differ
+  only in pre-sort order, which the sort fixes). So a full 222-cell-type run is ONE command:
+    python3 scripts/munge_catlas.py --ccre-matrix ccre_matrix.presence.tsv --score-type presence \
+      --celltype-tissue-map celltype_tissue_map.tsv --tmpdir /mnt/disks/data/oc_munge/catlas/_tmp \
+      --output catlas_open_chromatin.tsv.gz
+
 INDEXING CONTRACT (from the epic design, surfaced by the results-api open_chromatin review):
   open_chromatin files MUST be INTERVAL-indexed: `tabix -p bed` (i.e. -s1 -b2 -e3, distinct
   start/end columns). Do NOT point-index (-b2 -e2) or the API variant-overlap fast path would
@@ -133,6 +145,18 @@ def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
         .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
         .otherwise(e)
     )
+
+
+# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
+# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
+# (alt/random/scaffold/unplaced/Un_*) must be DROPPED here or they break the BigQuery chr load.
+CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
+
+
+def _drop_noncanonical(df: pl.DataFrame) -> pl.DataFrame:
+    """Keep only rows whose (already numeric) chrom is a canonical primary chromosome."""
+    return df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
+
 
 # best-effort keyword -> harmonized tissue for the fallback path when no explicit
 # cell-type -> tissue map is provided. Matched on lowercased cell-type label, longest key first.
@@ -213,6 +237,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--score-type", default="cpm", help="score_type token (default: cpm; use 'presence' for a binary matrix)")
     p.add_argument("--min-score", type=float, default=0.0, help="keep cell-type entries with value > min-score (default: 0.0)")
 
+    p.add_argument("--col-batch-size", type=int, default=25,
+                   help="process the matrix's cell-type COLUMNS in batches of this many, streaming each "
+                        "batch's long rows to an on-disk temp then external-sorting, so a full 222-cell-type "
+                        "matrix never triggers a dense in-RAM unpivot that OOMs (default: 25)")
+    p.add_argument("--tmpdir", help="directory for the on-disk body + external sort scratch "
+                                    "(default: system temp; point at a big disk for the full matrix)")
+
     p.add_argument("--celltype-tissue-map", help="optional cell_type -> tissue (+ optional uberon_id) TSV")
     p.add_argument("--map-celltype-col", default="cell_type", help="map: cell_type column (default: cell_type)")
     p.add_argument("--map-tissue-col", default="tissue", help="map: tissue column (default: tissue)")
@@ -247,39 +278,39 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     parsed = df.select(
         pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")
     ).unnest("_g")
-    return df.with_columns(
+    return _drop_noncanonical(df.with_columns(
         _numeric_chrom(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
-    )
+    ))
 
 
 def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     """Rename explicit coordinate columns to chrom/start/end and enforce numeric chrom + int coords."""
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return df.with_columns(
+    return _drop_noncanonical(df.with_columns(
         _numeric_chrom(pl.col("chrom")).alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
-    )
+    ))
 
 
-def load_matrix(args: argparse.Namespace) -> pl.DataFrame:
-    """Read the cCRE x cell-type matrix and unpivot to long: one row per (cCRE, cell_type)."""
-    df = pl.read_csv(args.ccre_matrix, separator="\t", infer_schema_length=10_000)
-
+def _normalize_matrix_coords(df: pl.DataFrame, args: argparse.Namespace) -> tuple[pl.DataFrame, list[str]]:
+    """Normalize coords to numeric chrom/start/end (dropping non-canonical contigs) and return the
+    frame plus the original coordinate/id source columns present (to exclude from the cell columns)."""
     if args.id_col:
         df = _coords_from_id(df, args.id_col)
         coord_source_cols = [args.id_col]
     else:
         df = _normalize_coords(df, args.chrom_col, args.start_col, args.end_col)
         coord_source_cols = [args.chrom_col, args.start_col, args.end_col]
-
     coord_source_cols = [c for c in coord_source_cols if c in df.columns]
-    cell_cols = [c for c in df.columns if c not in {"chrom", "start", "end", *coord_source_cols}]
-    if not cell_cols:
-        raise ValueError("no cell-type value columns found in --ccre-matrix (check coordinate/id flags)")
+    return df, coord_source_cols
 
+
+def _unpivot_to_long(df: pl.DataFrame, cell_cols: list[str], args: argparse.Namespace) -> pl.DataFrame:
+    """Unpivot a wide (already coord-normalized) frame to one row per accessible (cCRE, cell_type),
+    keeping entries with value > min-score and emitting the `score` column per score_type."""
     long = df.unpivot(
         index=["chrom", "start", "end"], on=cell_cols,
         variable_name="cell_type", value_name="_value",
@@ -292,6 +323,61 @@ def load_matrix(args: argparse.Namespace) -> pl.DataFrame:
     else:
         long = long.with_columns(pl.col("_value").alias("score"))
     return long.drop("_value")
+
+
+def load_matrix(args: argparse.Namespace) -> pl.DataFrame:
+    """Read the cCRE x cell-type matrix and unpivot to long: one row per (cCRE, cell_type).
+
+    In-RAM path used by --sample and small matrices; the full 222-cell-type matrix is processed by
+    build_matrix_batched() instead, which avoids the dense in-RAM unpivot.
+    """
+    df = pl.read_csv(args.ccre_matrix, separator="\t", infer_schema_length=10_000)
+    df, coord_source_cols = _normalize_matrix_coords(df, args)
+    cell_cols = [c for c in df.columns if c not in {"chrom", "start", "end", *coord_source_cols}]
+    if not cell_cols:
+        raise ValueError("no cell-type value columns found in --ccre-matrix (check coordinate/id flags)")
+    return _unpivot_to_long(df, cell_cols, args)
+
+
+def build_matrix_batched(args: argparse.Namespace, output_path: str) -> int:
+    """Memory-bounded matrix transform: process the cell-type COLUMNS in --col-batch-size batches,
+    melting+building each batch and streaming its 18-col body rows to an on-disk temp, then externally
+    sort -> bgzip -> tabix once. Avoids the dense (n_cCRE x n_cell_type) in-RAM unpivot that OOMs on a
+    full 222-cell-type matrix. build_output (tissue/uberon/life_stage derivation, gene links, metadata,
+    canonical 18-col order) is reused UNCHANGED per batch, so output content matches a single-shot run
+    (rows differ only in pre-sort order, which the external sort fixes)."""
+    header_cols = pl.read_csv(args.ccre_matrix, separator="\t", n_rows=0).columns
+    coord_cols = [args.id_col] if args.id_col else [args.chrom_col, args.start_col, args.end_col]
+    coord_cols = [c for c in coord_cols if c in header_cols]
+    cell_cols = [c for c in header_cols if c not in {"chrom", "start", "end", *coord_cols}]
+    if not cell_cols:
+        raise ValueError("no cell-type value columns found in --ccre-matrix (check coordinate/id flags)")
+
+    tmp_root = Path(args.tmpdir) if args.tmpdir else None
+    if tmp_root is not None:
+        tmp_root.mkdir(parents=True, exist_ok=True)
+    tmpdir = Path(tempfile.mkdtemp(dir=tmp_root))
+    body = tmpdir / "body.tsv"
+    batch_size = max(1, args.col_batch_size)
+    total_rows = 0
+    print(f"  {len(cell_cols)} cell-type columns; batching {batch_size} at a time (tmpdir={tmpdir})")
+    with open(body, "wb") as bfh:
+        for start in range(0, len(cell_cols), batch_size):
+            batch = cell_cols[start:start + batch_size]
+            sub = pl.read_csv(args.ccre_matrix, separator="\t", columns=[*coord_cols, *batch],
+                              infer_schema_length=10_000)
+            sub, coord_source_cols = _normalize_matrix_coords(sub, args)
+            long = _unpivot_to_long(sub, batch, args)
+            out = build_output(long, args)
+            assert out.columns == OUTPUT_COLUMNS, f"column order mismatch: {out.columns}"
+            bfh.write(out.write_csv(separator="\t", include_header=False, null_value="NA").encode())
+            total_rows += out.height
+            print(f"    cols {start}-{start + len(batch) - 1}: +{out.height} rows (cum {total_rows})")
+
+    _sort_index_bgzip(body, output_path, tmp_root)
+    print(f"  wrote {total_rows} rows -> {output_path}")
+    print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
+    return total_rows
 
 
 def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
@@ -435,21 +521,27 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     return df.select(OUTPUT_COLUMNS)
 
 
+def _sort_index_bgzip(body: Path, output_path: str, sort_tmp: Path | None = None) -> None:
+    """External LC_ALL=C sort -k1,1 -k2,2n of an on-disk body TSV, prepend the header, bgzip, and
+    tabix -p bed (interval index). sort_tmp keeps the sort's scratch off a tiny root disk when set."""
+    header = "#" + "\t".join(OUTPUT_COLUMNS)
+    tflag = f"-T {shell_quote(str(sort_tmp))} " if sort_tmp is not None else ""
+    # prepend header AFTER sorting the body (header must stay on top, not be sorted)
+    pipeline = (
+        f'( printf "%s\\n" {shell_quote(header)}; '
+        f'LC_ALL=C sort {tflag}-k1,1 -k2,2n {shell_quote(str(body))} ) | bgzip -c > {shell_quote(output_path)}'
+    )
+    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
+    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
+
+
 def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
     """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as "NA"."""
     tmpdir = tempfile.mkdtemp()
     body = Path(tmpdir) / "body.tsv"
     # write body without header; every empty/missing cell serialized as the literal "NA"
     df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-
-    header = "#" + "\t".join(OUTPUT_COLUMNS)
-    # prepend header AFTER sorting the body (header must stay on top, not be sorted)
-    pipeline = (
-        f'( printf "%s\\n" {shell_quote(header)}; '
-        f'LC_ALL=C sort -k1,1 -k2,2n {shell_quote(str(body))} ) | bgzip -c > {shell_quote(output_path)}'
-    )
-    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
+    _sort_index_bgzip(body, output_path)
     print(f"  wrote {df.height} rows -> {output_path}")
     print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
 
@@ -482,6 +574,8 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str, str]:
         "chr1\t200200\t200700\t7.2\t0.0\t1.1\t0.0\t0.0\n"
         "chr2\t50050\t50550\t0.0\t0.0\t4.4\t0.0\t0.0\n"
         "chrX\t900900\t901400\t2.0\t0.0\t0.0\t0.0\t0.0\n"
+        # non-canonical hg38 contig (alt/random/scaffold) — MUST be dropped by the canonical filter
+        "chr1_KI270706v1_random\t300300\t300800\t5.0\t0.0\t0.0\t0.0\t0.0\n"
     )
     # explicit map covers heart/liver (with uberon for heart); Alveolar Type 2 -> lung via
     # keyword fallback; "Mystery Cell" is unmapped and has no keyword -> tissue "unknown"
@@ -564,6 +658,12 @@ def run_sample() -> None:
     assert xrow["peak_id"] == "23-900900-901400", xrow["peak_id"]
     print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
 
+    # non-canonical hg38 contigs (alt/random/scaffold/Un) are DROPPED (Fix A) or they break the
+    # INT64 chr load; the "chr1_KI270706v1_random" synthetic cCRE must not survive while chrX does
+    assert not any("KI270706" in p for p in out["peak_id"].to_list()), "non-canonical contig leaked"
+    assert chroms == {"1", "2", "23"}, f"expected canonical chroms only; got {chroms}"
+    print("  non-canonical contig (chr1_KI270706v1_random) dropped: OK")
+
     # multi-gene cCRE: symbol and id lists must be paired positionally (SAMD11<->ENSG..634)
     multi = out.filter(pl.col("peak_id") == "1-200200-200700").row(0, named=True)
     assert multi["target_gene"] == "NOC2L,SAMD11", multi["target_gene"]
@@ -622,14 +722,12 @@ def main() -> None:
         raise SystemExit("--ccre-matrix is required (or use --sample). See --help.")
 
     output_path = args.output or f"./{DATASET}.tsv.gz"
-    print(f"Reading matrix {args.ccre_matrix} ...")
-    long = load_matrix(args)
-    print(f"  {long.height} (cCRE, cell_type) accessible entries")
-
-    out = build_output(long, args)
-    assert out.columns == OUTPUT_COLUMNS, f"column order mismatch: {out.columns}"
-
-    write_open_chromatin(out, output_path)
+    print(f"Reading matrix {args.ccre_matrix} (column-batched, --col-batch-size={args.col_batch_size}) ...")
+    # memory-bounded: process cell-type columns in batches to an on-disk temp then external-sort, so
+    # a full 222-cell-type matrix never triggers the dense in-RAM unpivot that OOMs. This is the normal
+    # path for both small and full matrices (the batch loop degenerates to a single batch when the
+    # matrix has <= --col-batch-size cell-type columns).
+    build_matrix_batched(args, output_path)
 
     if args.stage:
         print("Staging to GCS (both buckets) ...")

@@ -389,6 +389,8 @@ def build_open_chromatin(long: pl.DataFrame, args: argparse.Namespace) -> pl.Dat
     # convention A: chrom + peak_id are NUMERIC (chrX=23, chrY=24, chrM/MT=25). load_peaks yields a
     # chr-prefixed chrom; normalize it first so peak_id = "<numchrom>-<start>-<end>" (e.g. 23-100-200).
     df = long.with_columns(_numeric_chrom_expr().alias("chrom"))
+    # drop non-canonical hg38 contigs (alt/random/scaffold/Un) so the INT64 chr load never sees them
+    df = df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
     df = df.with_columns(_peak_key().alias("peak_id"))
     ctx_map = derive_context_map(df["cell_type"].unique().to_list(), args)
     df = df.join(ctx_map, on="cell_type", how="left")
@@ -438,6 +440,12 @@ def _numeric_chrom_expr(col: str = "chrom") -> pl.Expr:
     )
 
 
+# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
+# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
+# (alt/random/scaffold/unplaced/Un_*) must be DROPPED from BOTH products or they break the chr load.
+CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
+
+
 def _variant_string(numeric_chrom: bool) -> pl.Expr:
     # variant = "chr:pos:ref:alt". Canonical platform convention (default): numeric chromosome with
     # X=23/Y=24/M/MT=25 and NO "chr" prefix (e.g. "1:1000:A:G", "23:100:A:G"), matching the
@@ -452,6 +460,9 @@ def _finalize_variant_effect(df: pl.DataFrame, args: argparse.Namespace) -> pl.D
     convention A: the output `chrom` column is made NUMERIC (chrX=23 etc.), consistent with the
     numeric-chrom `variant` token, so tabix seqnames match the variant_effect table's chr encoding.
     """
+    # drop non-canonical hg38 contigs (alt/random/scaffold/Un) regardless of --variant-keep-chr:
+    # filter on the numeric mapping so the platform's INT64 chr load never sees a scaffold/alt name
+    df = df.filter(_numeric_chrom_expr().is_in(CANONICAL_CHROMS))
     variant = _variant_string(numeric_chrom=not args.variant_keep_chr)
     df = df.with_columns(variant.alias("variant"))
     if not args.variant_keep_chr:
@@ -1128,6 +1139,8 @@ def _sample_open_chromatin(tmpdir: Path) -> None:
         "chr2\t50050\t50550\tfetal_heart_Cardiomyocyte\t4.4\n"
         "chr2\t80080\t80580\tadult_heart_Ventricular_CM\t3.3\n"
         "chrX\t900900\t901400\tENCODE_adult_heart_snATAC_CM\t2.0\n"
+        # non-canonical hg38 contig (alt/random/scaffold) — MUST be dropped by the canonical filter
+        "chr1_KI270706v1_random\t300300\t300800\tadult_brain_Astrocyte\t9.0\n"
     )
     ctx_map = tmpdir / "context_map.tsv"
     ctx_map.write_text(
@@ -1160,6 +1173,11 @@ def _sample_open_chromatin(tmpdir: Path) -> None:
     assert pk["23"] == "23-900900-901400", pk  # chrX row -> numeric peak_id
     assert out.filter(pl.col("chrom") == "23").height == 1, "chrX should map to numeric chrom 23"
     print(f"  numeric chrom + peak_id (chrX->23, peak_id 23-900900-901400): OK")
+    # non-canonical hg38 contigs (alt/random/scaffold/Un) are DROPPED (Fix A) or they break the
+    # INT64 chr load; the "chr1_KI270706v1_random" synthetic peak must not survive
+    assert not any("KI270706" in p for p in out["peak_id"].to_list()), "non-canonical contig leaked"
+    assert set(out["chrom"].to_list()) == {"1", "2", "23"}, out["chrom"].unique().to_list()
+    print(f"  non-canonical contig (chr1_KI270706v1_random) dropped: OK")
     with pl.Config(tbl_cols=-1, tbl_width_chars=240, fmt_str_lengths=40):
         print(out.head())
 
@@ -1265,6 +1283,8 @@ def _sample_flare(tmpdir: Path) -> None:
         "chr1\t3000\tG\tC\t0.55\trs222\n"
         "chr2\t7000\tC\tG\t0.10\trs333\n"
         "chrX\t100\tA\tT\t0.40\trs444\n"
+        # non-canonical hg38 contig — MUST be dropped from the variant_effect output too (Fix A)
+        "chr1_KI270706v1_random\t500\tA\tT\t0.30\trs555\n"
     )
     args = parse_args()
     args.product = "flare"
@@ -1290,7 +1310,10 @@ def _sample_flare(tmpdir: Path) -> None:
     assert var_by_chrom["1"].startswith("1:"), var_by_chrom
     assert var_by_chrom["23"] == "23:100:A:T", var_by_chrom
     assert all(not c.startswith("chr") for c in out["chrom"].to_list()), out["chrom"].to_list()
-    print(f"  pan-context (cell_type/tissue/life_stage empty) + global quantile_rank + numeric chrom (chrX->23): OK")
+    # non-canonical hg38 contigs are DROPPED from variant_effect too (Fix A): rs555 must not survive
+    assert set(out["chrom"].to_list()) == {"1", "2", "23"}, out["chrom"].unique().to_list()
+    assert "rs555" not in out["rsid"].to_list(), "non-canonical contig variant leaked"
+    print(f"  pan-context (cell_type/tissue/life_stage empty) + global quantile_rank + numeric chrom (chrX->23) + non-canonical dropped: OK")
     with pl.Config(tbl_cols=-1, tbl_width_chars=240, fmt_str_lengths=40):
         print(out.head())
 

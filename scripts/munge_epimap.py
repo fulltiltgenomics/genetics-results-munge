@@ -277,6 +277,17 @@ def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
     )
 
 
+# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
+# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
+# (alt/random/scaffold/unplaced/Un_*) must be DROPPED here or they break the BigQuery chr load.
+CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
+
+
+def _drop_noncanonical(df: pl.DataFrame) -> pl.DataFrame:
+    """Keep only rows whose (already numeric) chrom is a canonical primary chromosome."""
+    return df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
+
+
 def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
     """Read one biosample's ChromHMM CALLS BED, filter to included states, return long rows.
 
@@ -300,29 +311,29 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
     df = df.with_columns(pl.col("_state_raw").replace_strict(mapping, default=None).alias("state"))
     df = df.filter(pl.col("state").is_in(list(INCLUDED_STATES)))
 
-    return df.select(
+    return _drop_noncanonical(df.select(
         "chrom", "start", "end",
         pl.lit(biosample).alias("cell_type"),
         pl.col("state"),
-    )
+    ))
 
 
 def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     parsed = df.select(pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")).unnest("_g")
-    return df.with_columns(
+    return _drop_noncanonical(df.with_columns(
         _numeric_chrom(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
-    )
+    ))
 
 
 def _normalize_link_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return df.with_columns(
+    return _drop_noncanonical(df.with_columns(
         _numeric_chrom(pl.col("chrom")).alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
-    )
+    ))
 
 
 def _peak_key() -> pl.Expr:
@@ -562,6 +573,8 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[list[str], str, str]:
         "chr1\t903820\t904020\t9_EnhA1\t0\t.\t903820\t904020\t255,195,77\n"
         "chr2\t500000\t500200\tZNF/Rpts\t0\t.\t500000\t500200\t102,205,170\n"
         "chrX\t155000\t155300\tTssA\t0\t.\t155000\t155300\t255,0,0\n"
+        # non-canonical hg38 contig (unplaced/Un) with an INCLUDED state — MUST be dropped by Fix A
+        "chrUn_KI270742v1\t1000\t1300\tTssA\t0\t.\t1000\t1300\t255,0,0\n"
     )
     # BSS00099: EnhA2(incl,name), 5(excl,numeric->Tx), EnhBiv(incl,name), E18(excl,numeric->Quies)
     b2 = tmpdir / "BSS00099_18_CALLS_segments.bed"
@@ -652,6 +665,12 @@ def run_sample() -> None:
     xrow = out.filter(pl.col("chrom") == "23").row(0, named=True)
     assert xrow["peak_id"] == "23-155000-155300", xrow["peak_id"]
     print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
+
+    # non-canonical hg38 contigs (alt/random/scaffold/Un) are DROPPED (Fix A) or they break the
+    # INT64 chr load; the "chrUn_KI270742v1" synthetic segment must not survive while chrX does
+    assert not any("KI270742" in p for p in out["peak_id"].to_list()), "non-canonical contig leaked"
+    assert chroms <= {"1", "2", "3", "23"}, f"expected canonical chroms only; got {chroms}"
+    print("  non-canonical contig (chrUn_KI270742v1) dropped: OK")
 
     # multi-gene enhancer link joined with joint symbol/id pairing
     linked = out.filter(pl.col("peak_id") == "1-903820-904020").row(0, named=True)
