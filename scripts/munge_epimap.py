@@ -100,7 +100,9 @@ Local validation without the full dataset or any upload:
 """
 
 import argparse
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -197,6 +199,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--links-geneid-col", default="gene_id", help="links: Ensembl gene id column (default: gene_id)")
 
     p.add_argument("--output", help="output .tsv.gz path (default: ./epimap_open_chromatin.tsv.gz)")
+    p.add_argument("--tmpdir", help="dir for the on-disk temp + external sort (default: alongside --output). "
+                   "Keeps peak RAM bounded regardless of biosample count.")
     p.add_argument("--stage", action="store_true", help="upload .tsv.gz + .tbi to BOTH GCS buckets (OFF by default)")
     p.add_argument("--gcs-finngen", default=GCS_FINNGEN, help="finngen GCS destination")
     p.add_argument("--gcs-daly", default=GCS_DALY, help="daly GCS destination")
@@ -384,27 +388,30 @@ def load_biosample_metadata(args: argparse.Namespace) -> dict[str, tuple[str, st
     return out
 
 
-def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
-    """Assemble the 18 canonical columns in order from the long (segment, biosample, state) table."""
-    df = long.with_columns(_peak_key().alias("peak_id"))
+def build_output_rows(
+    long: pl.DataFrame,
+    biosample: str,
+    biomap: dict[str, tuple[str, str]],
+    links: pl.DataFrame | None,
+    args: argparse.Namespace,
+) -> pl.DataFrame:
+    """Assemble the 18 canonical columns for ONE biosample's long (segment, state) rows.
 
-    # per-biosample tissue + life_stage (+ derived uberon); default unknown/adult when absent
-    biomap = load_biosample_metadata(args)
-    biosamples = df["cell_type"].unique().to_list()
-    rows = []
-    for bs in biosamples:
-        tissue, life = biomap.get(bs, ("unknown", "adult"))
-        uberon = _TISSUE_UBERON.get(tissue.lower())
-        rows.append((bs, tissue, life, uberon))
-    meta = pl.DataFrame(
-        rows,
-        schema={"cell_type": pl.Utf8, "tissue": pl.Utf8, "life_stage": pl.Utf8, "uberon_id": pl.Utf8},
-        orient="row",
+    tissue/life_stage/uberon are constant per biosample so they are added as literals (no join),
+    keeping the transform memory-bounded when called per-file in the streaming path. `links` (if
+    present) is the pre-aggregated interval->gene table, joined by exact interval key.
+    """
+    tissue, life = biomap.get(biosample, ("unknown", "adult"))
+    uberon = _TISSUE_UBERON.get(tissue.lower())
+
+    df = long.with_columns(
+        _peak_key().alias("peak_id"),
+        pl.lit(tissue).alias("tissue"),
+        pl.lit(life).alias("life_stage"),
+        pl.lit(uberon, dtype=pl.Utf8).alias("uberon_id"),
     )
-    df = df.join(meta, on="cell_type", how="left")
 
-    if args.links:
-        links = load_gene_links(args)
+    if links is not None:
         df = df.with_columns(_peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
     else:
         df = df.with_columns(
@@ -426,6 +433,17 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     return df.select(OUTPUT_COLUMNS)
 
 
+def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
+    """In-memory assembly of the full 18-col table (used by --sample); loops per biosample."""
+    biomap = load_biosample_metadata(args)
+    links = load_gene_links(args) if args.links else None
+    frames = [
+        build_output_rows(long.filter(pl.col("cell_type") == bs), bs, biomap, links, args)
+        for bs in long["cell_type"].unique().to_list()
+    ]
+    return pl.concat(frames) if frames else pl.DataFrame(schema={c: pl.Utf8 for c in OUTPUT_COLUMNS})
+
+
 def resolve_calls_files(args: argparse.Namespace) -> list[str]:
     files = list(args.calls)
     if args.calls_dir:
@@ -442,21 +460,77 @@ def load_all_calls(files: list[str], args: argparse.Namespace) -> pl.DataFrame:
 
 
 def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as "NA"."""
+    """In-memory writer (used by --sample): serialize the small frame then sort/index/bgzip."""
     tmpdir = tempfile.mkdtemp()
     body = Path(tmpdir) / "body.tsv"
     # every empty/missing cell serialized as the literal "NA"
     df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-
-    header = "#" + "\t".join(OUTPUT_COLUMNS)
-    pipeline = (
-        f'( printf "%s\\n" {shell_quote(header)}; '
-        f'LC_ALL=C sort -k1,1 -k2,2n {shell_quote(str(body))} ) | bgzip -c > {shell_quote(output_path)}'
-    )
-    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
+    _finalize_interval_external_sort(str(body), OUTPUT_COLUMNS, output_path, tmpdir)
     print(f"  wrote {df.height} rows -> {output_path}")
+
+
+def _append_rows(df: pl.DataFrame, temp_fh) -> None:
+    """Append 18-col rows to the on-disk temp (no header; empty cells coerced to null -> "NA")."""
+    df = df.select(OUTPUT_COLUMNS).with_columns(
+        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0).then(None).otherwise(pl.col(c)).alias(c)
+        for c in OUTPUT_COLUMNS
+    )
+    df.write_csv(temp_fh, separator="\t", include_header=False, null_value="NA")
+
+
+def _finalize_interval_external_sort(temp_path: str, columns: list[str], output_path: str, tmpdir: str) -> None:
+    """External `LC_ALL=C sort -k1,1 -k2,2n` -> bgzip -> tabix -p bed (INTERVAL: -s1 -b2 -e3).
+
+    Sorting on disk (not in RAM) keeps the finalize step memory-bounded regardless of the temp size."""
+    sorted_path = temp_path + ".sorted"
+    env = {**os.environ, "LC_ALL": "C"}
+    with open(sorted_path, "wb") as out:
+        subprocess.run(["sort", "-T", tmpdir, "-k1,1", "-k2,2n", temp_path],
+                       env=env, stdout=out, check=True)
+    header = ("#" + "\t".join(columns) + "\n").encode()
+    with open(output_path, "wb") as out_fh:
+        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
+        assert proc.stdin is not None
+        proc.stdin.write(header)
+        with open(sorted_path, "rb") as sf:
+            shutil.copyfileobj(sf, proc.stdin, length=1 << 20)
+        proc.stdin.close()
+        rc = proc.wait()
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, "bgzip -c")
+    os.remove(sorted_path)
+    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
     print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
+
+
+def run_streaming(files: list[str], args: argparse.Namespace, output_path: str) -> None:
+    """Full build processing ONE CALLS file at a time, appending 18-col rows to an on-disk temp.
+
+    No biosample's rows are held in RAM beyond its own file; after all files the temp is
+    external-sorted, bgzipped and interval-indexed. Peak RAM ~ one biosample's segment frame."""
+    tmpdir = args.tmpdir or os.path.dirname(os.path.abspath(output_path)) or "."
+    Path(tmpdir).mkdir(parents=True, exist_ok=True)
+    temp_path = os.path.join(tmpdir, f"{DATASET}.long.tmp.tsv")
+
+    biomap = load_biosample_metadata(args)
+    links = load_gene_links(args) if args.links else None
+
+    total_rows = 0
+    biosamples: set[str] = set()
+    print(f"Reading {len(files)} biosample CALLS file(s) (streaming, tmpdir={tmpdir}) ...")
+    with open(temp_path, "wb") as temp_fh:
+        for i, path in enumerate(files, 1):
+            bs = biosample_from_path(path, args.cell_type if len(files) == 1 else None)
+            long = load_calls(path, bs, args.state_col)
+            if long.height:
+                _append_rows(build_output_rows(long, bs, biomap, links, args), temp_fh)
+            total_rows += long.height
+            biosamples.add(bs)
+            if i % 50 == 0 or i == len(files):
+                print(f"  [{i}/{len(files)}] {bs}: {long.height} segments (cumulative {total_rows} rows)")
+    print(f"  {total_rows} accessible/active segments across {len(biosamples)} biosamples")
+    _finalize_interval_external_sort(temp_path, OUTPUT_COLUMNS, output_path, tmpdir)
+    os.remove(temp_path)
 
 
 def shell_quote(s: str) -> str:
@@ -635,14 +709,7 @@ def main() -> None:
         raise SystemExit("no CALLS files (pass paths and/or --calls-dir, or use --sample). See --help.")
 
     output_path = args.output or f"./{DATASET}.tsv.gz"
-    print(f"Reading {len(files)} biosample CALLS file(s) ...")
-    long = load_all_calls(files, args)
-    print(f"  {long.height} accessible/active segments across {long['cell_type'].n_unique()} biosamples")
-
-    out = build_output(long, args)
-    assert out.columns == OUTPUT_COLUMNS, f"column order mismatch: {out.columns}"
-
-    write_open_chromatin(out, output_path)
+    run_streaming(files, args, output_path)
 
     if args.stage:
         print("Staging to GCS (both buckets) ...")
