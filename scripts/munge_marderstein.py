@@ -28,6 +28,20 @@ summit. Read directly with --peaks-dir (signalValue col 7 -> `score`, score_type
 (tissue/life_stage/assay; domcke tissue split from the filename). --context-map still overrides it.
 The variant_effect (chrombpnet/flare) source column names remain DEFAULTS overridable via --*-col.
 
+REAL chrombpnet layout (VERIFIED as a WIDE per-variant matrix, syn64713923): one row per variant, id in
+`snp_id` (e.g. "chr19:58326671:C:A"), ~43 annotation columns + 132 context TRIPLETS of columns:
+`abs_logfc.mean.<ctx>` (ABSOLUTE effect, >=0), `abs_logfc.mean.pval.<ctx>` (its p-value), and
+`peak_overlap.<ctx>`; the context label is "<celltype>.<study>". These files are large (asd 160MB,
+common 12GB, rare 16.6GB, ldsc 19GB compressed => >100GB uncompressed EACH). The --product chrombpnet
+path STREAMS them in bounded row batches (--cbp-batch-rows): each batch is reshaped wide->long (melt the
+132 triplets to one row per (variant,context) with abs_logfc+pval), mapped context->cell_type +
+tissue/life_stage via the study suffix, thresholded single-pass on mlog10p = -log10(pval)
+(>= --mlog10p-thresh, default 3), and APPENDED to an on-disk temp; peak RAM stays ~one batch, NOT the
+100GB uncompress. Input files are processed ONE AT A TIME and (with --download) each raw file is deleted
+before the next, so peak disk is bounded by the largest single input + the small filtered output. After
+all files the temp is external-sorted (LC_ALL=C sort -k1,1 -k2,2n), bgzipped and POINT-indexed. A
+legacy already-LONG single TSV is still accepted (auto-detected; falls back to the in-memory builder).
+
 OUTPUT CONVENTIONS (applied to all three products):
   - chrom NUMERIC: the `chrom` column, `peak_id`, and the `variant` token strip any "chr" prefix and
     map X->23, Y->24, M/MT->25 (else the numeric contig). peak_id = "<numchrom>-<start>-<end>".
@@ -55,7 +69,11 @@ Local validation without any real data / download / upload:
 """
 
 import argparse
+import io
+import itertools
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -84,6 +102,9 @@ VE_COLUMNS = [
 DATASET_CHROMBPNET = "marderstein_chrombpnet"
 MODEL_CHROMBPNET = "chrombpnet"
 SCORE_TYPE_CHROMBPNET = "chrombpnet_logfc"
+# the REAL Synapse ChromBPNet release scores `abs_logfc.mean.<ctx>` are ABSOLUTE (>=0), so the
+# wide-streaming path tags them distinctly and leaves predicted_direction NA.
+SCORE_TYPE_CHROMBPNET_ABS = "chrombpnet_abs_logfc"
 DATASET_FLARE = "marderstein_flare"
 MODEL_FLARE = "flare"
 SCORE_TYPE_FLARE = "flare_score"
@@ -456,8 +477,12 @@ def build_chrombpnet(args: argparse.Namespace) -> pl.DataFrame:
          per context, i.e. quantile_rank >= 1 - top_quantile).
     is_significant AND mlog10p are ALWAYS set so the cutoff is transparent/re-filterable. A variant is
     retained if significant in ANY context (its passing contexts are emitted).
+
+    LEGACY long-input path: the real release is WIDE and handled by the streaming path
+    (run_chrombpnet_streaming); this builder is retained for an already-LONG single TSV.
     """
-    df = pl.read_csv(args.chrombpnet, separator="\t", infer_schema_length=10_000)
+    path = args.chrombpnet[0] if isinstance(args.chrombpnet, list) else args.chrombpnet
+    df = pl.read_csv(path, separator="\t", infer_schema_length=10_000)
     df = _load_variant_coords(df, args)
     df = df.rename({args.cbp_context_col: "cell_type"})
     df = df.with_columns(pl.col(args.cbp_score_col).cast(pl.Float64, strict=False).alias("score"))
@@ -513,6 +538,267 @@ def build_chrombpnet(args: argparse.Namespace) -> pl.DataFrame:
     ctx_map = derive_context_map(df["cell_type"].unique().to_list(), args)
     df = df.join(ctx_map.select("cell_type", "tissue", "life_stage"), on="cell_type", how="left")
     return _finalize_variant_effect(df, args)
+
+
+# ------------------------------------------------------------------------------------------------
+# Product B1 (REAL data): ChromBPNet WIDE per-variant matrix -> STREAMING, memory-bounded reshape.
+# The release files are >100GB uncompressed each, so we NEVER load a whole file: we read raw lines in
+# bounded batches, melt each batch's 132 context triplets to long, single-pass threshold on mlog10p,
+# and APPEND the passing rows to an on-disk temp. Files are processed one at a time (and deleted after
+# download), then the temp is external-sorted + bgzipped + POINT-indexed.
+# ------------------------------------------------------------------------------------------------
+class _WideLayout:
+    """Column layout of a wide ChromBPNet file: which columns are score/pval and their contexts."""
+
+    def __init__(self, header_cols: list[str], args: argparse.Namespace):
+        self.var_col = args.cbp_variant_col
+        if self.var_col not in header_cols:
+            raise SystemExit(
+                f"--cbp-variant-col '{self.var_col}' not in the wide header (have e.g. {header_cols[:5]}...)"
+            )
+        sp = args.cbp_score_prefix                 # "abs_logfc.mean."
+        pm = args.cbp_pval_infix.strip(".")        # ".pval." -> "pval"
+        self.ctx_of_score: dict[str, str] = {}     # score column name -> context label
+        self.ctx_of_pval: dict[str, str] = {}      # pval  column name -> context label
+        for c in header_cols:
+            if not c.startswith(sp):
+                continue
+            rem = c[len(sp):]
+            if rem.startswith(pm + "."):
+                self.ctx_of_pval[c] = rem[len(pm) + 1:]
+            else:
+                self.ctx_of_score[c] = rem
+        score_ctx = set(self.ctx_of_score.values())
+        if not score_ctx:
+            raise SystemExit(
+                f"no wide score columns start with --cbp-score-prefix '{sp}' (is this a wide file?)"
+            )
+        # only contexts with BOTH a score and a pval column are usable (need pval to threshold)
+        pval_ctx = set(self.ctx_of_pval.values())
+        self.contexts = sorted(score_ctx & pval_ctx)
+        ctx_ok = set(self.contexts)
+        self.score_cols = [c for c, ctx in self.ctx_of_score.items() if ctx in ctx_ok]
+        self.pval_cols = [c for c, ctx in self.ctx_of_pval.items() if ctx in ctx_ok]
+        self.needed = [self.var_col] + self.score_cols + self.pval_cols
+
+
+def is_wide_chrombpnet_header(header_cols: list[str], args: argparse.Namespace) -> bool:
+    return any(c.startswith(args.cbp_score_prefix) for c in header_cols)
+
+
+def _line_reader(path: str):
+    """Yield raw bytes lines from a possibly-gzipped file, STREAMING (bounded memory).
+
+    gzip/bgzip is detected by magic bytes and decompressed via `gzip -dc` (bgzip output is
+    gzip-compatible); plain files are read directly. Nothing is ever fully buffered.
+    """
+    with open(path, "rb") as fh:
+        magic = fh.read(2)
+    if magic == b"\x1f\x8b":
+        proc = subprocess.Popen(["gzip", "-dc", str(path)], stdout=subprocess.PIPE, bufsize=1 << 20)
+        stream, closer = proc.stdout, proc
+    else:
+        stream, closer = open(path, "rb"), None
+    try:
+        yield from stream
+    finally:
+        stream.close()
+        if closer is not None:
+            closer.wait()
+
+
+def _read_header_cols(path: str, sep: str) -> list[str]:
+    for line in _line_reader(path):
+        return line.decode().rstrip("\r\n").split(sep)
+    raise SystemExit(f"empty input file: {path}")
+
+
+def _wide_batches(path: str, layout: _WideLayout, args: argparse.Namespace):
+    """Yield polars DataFrames of ~--cbp-batch-rows variants, reading only the needed columns.
+
+    We accumulate raw byte lines and hand each batch (header + lines) to polars, projecting to the
+    needed columns with an explicit schema so peak RAM is bounded by one batch, not the whole file.
+    """
+    sep = args.cbp_sep
+    overrides = {c: pl.Float64 for c in layout.needed if c != layout.var_col}
+    overrides[layout.var_col] = pl.Utf8
+    it = _line_reader(path)
+    header = next(it)
+    while True:
+        lines = list(itertools.islice(it, args.cbp_batch_rows))
+        if not lines:
+            break
+        buf = header + b"".join(lines)
+        yield pl.read_csv(
+            io.BytesIO(buf), separator=sep, columns=layout.needed, schema_overrides=overrides,
+            infer_schema_length=0, null_values=["NA", "NaN", "nan", ""],
+        )
+
+
+def _wide_study_lookup(study: str, label: str) -> tuple[str | None, str | None]:
+    """(tissue, life_stage) from the study SUFFIX of a "<celltype>.<study>" context label.
+
+    Reuses the baked-in DEFAULT_STUDY_CONTEXT (domcke_2020 tissue split from the celltype text).
+    """
+    if study == "domcke_2020":
+        lo = label.lower()
+        tissue = "brain" if "brain" in lo else "heart" if "heart" in lo else None
+        return tissue, "fetal"
+    t = DEFAULT_STUDY_CONTEXT.get(study)
+    return (t[0], t[1]) if t else (None, None)
+
+
+def _wide_context_map(contexts: list[str]) -> pl.DataFrame:
+    """context ("<celltype>.<study>") -> (cell_type verbatim, tissue, life_stage).
+
+    Precedence: study-suffix DEFAULT_STUDY_CONTEXT, then the free-text keyword parser, then "unknown".
+    """
+    rows = []
+    for ct in contexts:
+        study = ct.rsplit(".", 1)[-1].lower() if "." in ct else ct.lower()
+        d_tissue, d_life = _wide_study_lookup(study, ct)
+        kw_tissue, kw_life = parse_context(ct)
+        rows.append((ct, d_tissue or kw_tissue or "unknown", d_life or kw_life or "unknown"))
+    return pl.DataFrame(
+        rows, schema={"context": pl.Utf8, "tissue": pl.Utf8, "life_stage": pl.Utf8}, orient="row",
+    )
+
+
+def _reshape_wide_batch(
+    df: pl.DataFrame, layout: _WideLayout, ctx_map: pl.DataFrame, args: argparse.Namespace,
+) -> tuple[pl.DataFrame, int]:
+    """One wide batch -> filtered 18-col variant_effect long rows. Returns (rows, total_pairs_seen).
+
+    Streamable single-pass thresholding: melt the pval triplet, compute mlog10p = -log10(pval), keep
+    only rows with mlog10p >= --mlog10p-thresh, THEN join the (much smaller) survivors to the melted
+    scores — so we never materialize the full unfiltered variant x context product beyond the melt.
+    """
+    var_col = layout.var_col
+    total_pairs = df.height * len(layout.contexts)
+
+    plong = (
+        df.select([var_col, *layout.pval_cols]).rename(layout.ctx_of_pval)
+        .unpivot(index=var_col, variable_name="context", value_name="pval")
+        .with_columns(
+            pl.when(pl.col("pval") > 0).then(-pl.col("pval").log10())
+            .when(pl.col("pval") == 0).then(pl.lit(float("inf")))
+            .otherwise(pl.lit(None, dtype=pl.Float64)).alias("mlog10p")
+        )
+        .filter(pl.col("mlog10p") >= args.mlog10p_thresh)
+    )
+    if plong.height == 0:
+        return plong.clear(), total_pairs
+
+    slong = (
+        df.select([var_col, *layout.score_cols]).rename(layout.ctx_of_score)
+        .unpivot(index=var_col, variable_name="context", value_name="score")
+    )
+    long = plong.join(slong, on=[var_col, "context"], how="left")
+    long = long.join(ctx_map, on="context", how="left").rename({"context": "cell_type"})
+    long = _coords_from_variant_id(long, var_col)
+    long = long.with_columns(
+        pl.lit(None, dtype=pl.Utf8).alias("rsid"),
+        pl.lit(DATASET_CHROMBPNET).alias("dataset"),
+        pl.lit(MODEL_CHROMBPNET).alias("model"),
+        pl.lit(SCORE_TYPE_CHROMBPNET_ABS).alias("score_type"),
+        pl.lit(None, dtype=pl.Utf8).alias("predicted_direction"),   # abs_logfc has no direction
+        pl.lit(None, dtype=pl.Float64).alias("quantile_rank"),      # not computable single-pass
+        pl.lit(True).alias("is_significant"),
+        pl.lit(VERSION).alias("version"),
+    )
+    return _finalize_variant_effect(long, args), total_pairs
+
+
+def _append_ve_batch(df: pl.DataFrame, temp_fh) -> None:
+    """Append 18-col rows to the temp (no header; empty cells coerced to null -> written as "NA")."""
+    df = df.select(VE_COLUMNS).with_columns(
+        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0).then(None).otherwise(pl.col(c)).alias(c)
+        for c in VE_COLUMNS
+    )
+    df.write_csv(temp_fh, separator="\t", include_header=False, null_value="NA")
+
+
+def _iter_chrombpnet_inputs(args: argparse.Namespace):
+    """Yield (path, delete_after) for each wide input, ONE AT A TIME.
+
+    With --download each file is fetched from the Synapse predictions folder just before it is needed
+    (and delete_after=True so the raw file is removed before the next), bounding peak disk usage.
+    """
+    if args.download:
+        syn = _synapse_login()
+        dest = args.download_dir or "."
+        Path(dest).mkdir(parents=True, exist_ok=True)
+        for child in _synapse_file_children("syn64713923", syn, args.cbp_name_filter):
+            print(f"  downloading {child['name']} ({child['id']}) -> {dest}")
+            ent = syn.get(child["id"], downloadLocation=dest)
+            yield ent.path, True
+    else:
+        if not args.chrombpnet:
+            raise SystemExit("--product chrombpnet needs --chrombpnet FILE(s) or --download (or --sample).")
+        for p in args.chrombpnet:
+            yield p, False
+
+
+def run_chrombpnet_streaming(args: argparse.Namespace, output_path: str) -> None:
+    """Full wide->long ChromBPNet build in ONE pass over bounded batches, per input file."""
+    tmpdir = args.cbp_tmpdir or os.path.dirname(os.path.abspath(output_path)) or "."
+    Path(tmpdir).mkdir(parents=True, exist_ok=True)
+    temp_path = os.path.join(tmpdir, f"{DATASET_CHROMBPNET}.long.tmp.tsv")
+    ctx_cache: dict[tuple[str, ...], pl.DataFrame] = {}
+    kept = total = 0
+    print(f"Building {DATASET_CHROMBPNET} (WIDE streaming; batch={args.cbp_batch_rows} variants) ...")
+    with open(temp_path, "wb") as temp_fh:
+        for path, delete_after in _iter_chrombpnet_inputs(args):
+            layout = _WideLayout(_read_header_cols(path, args.cbp_sep), args)
+            key = tuple(layout.contexts)
+            if key not in ctx_cache:
+                ctx_cache[key] = _wide_context_map(layout.contexts)
+            ctx_map = ctx_cache[key]
+            print(f"  processing {path}: {len(layout.contexts)} contexts")
+            f_kept = f_total = 0
+            for batch in _wide_batches(path, layout, args):
+                out, pairs = _reshape_wide_batch(batch, layout, ctx_map, args)
+                f_total += pairs
+                f_kept += out.height
+                if out.height:
+                    _append_ve_batch(out, temp_fh)
+            kept += f_kept
+            total += f_total
+            print(f"    kept {f_kept}/{f_total} (variant,context) pairs")
+            if delete_after:
+                os.remove(path)
+                print(f"    deleted raw input {path}")
+    print(f"  chrombpnet thresholding TOTAL: kept {kept}/{total} (variant,context) pairs "
+          f"(mlog10p >= {args.mlog10p_thresh})")
+    _finalize_point_external_sort(temp_path, VE_COLUMNS, output_path, tmpdir)
+    os.remove(temp_path)
+
+
+def _finalize_point_external_sort(temp_path: str, columns: list[str], output_path: str, tmpdir: str) -> None:
+    """External `LC_ALL=C sort -k1,1 -k2,2n` (numeric pos, seqnames grouped) -> bgzip -> POINT index.
+
+    Sorting on disk (not in RAM) keeps the finalize step memory-bounded regardless of the temp size.
+    """
+    sorted_path = temp_path + ".sorted"
+    env = {**os.environ, "LC_ALL": "C"}
+    with open(sorted_path, "wb") as out:
+        subprocess.run(["sort", "-T", tmpdir, "-k1,1", "-k2,2n", temp_path],
+                       env=env, stdout=out, check=True)
+    header = ("#" + "\t".join(columns) + "\n").encode()
+    with open(output_path, "wb") as out_fh:
+        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
+        assert proc.stdin is not None
+        proc.stdin.write(header)
+        with open(sorted_path, "rb") as sf:
+            shutil.copyfileobj(sf, proc.stdin, length=1 << 20)
+        proc.stdin.close()
+        rc = proc.wait()
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, "bgzip -c")
+    os.remove(sorted_path)
+    subprocess.run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", output_path], check=True)
+    print(f"  wrote {output_path}")
+    print(f"  indexed {output_path}.tbi (POINT: tabix -s1 -b2 -e2)")
 
 
 def build_flare(args: argparse.Namespace) -> pl.DataFrame:
@@ -618,6 +904,35 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
         print(f"  uploaded {gcs_path}.tbi")
 
 
+def _synapse_login():
+    """Authenticate synapseclient. SYNAPSE_AUTH_TOKEN wins, else ~/.synapseConfig. Never prints it."""
+    import synapseclient   # imported lazily so the script runs without the dep when not downloading
+
+    syn = synapseclient.Synapse()
+    token = os.environ.get("SYNAPSE_AUTH_TOKEN")
+    if token:
+        syn.login(authToken=token)            # token never logged/printed
+    else:
+        syn.login()                           # reads ~/.synapseConfig
+    return syn
+
+
+def _synapse_file_children(folder_id: str, syn, name_filter: str | None):
+    """List FILE entities under a Synapse folder (recursing into subfolders), optional name regex.
+
+    Used by the chrombpnet streaming path to fetch wide files one at a time; --cbp-name-filter narrows
+    the set (e.g. 'asd' for the bounded real test) so we never pull all 52GB at once.
+    """
+    rx = re.compile(name_filter, re.I) if name_filter else None
+    out = []
+    for child in syn.getChildren(folder_id, includeTypes=["file", "folder"]):
+        if child.get("type", "").endswith("Folder") or "Folder" in child.get("concreteType", ""):
+            out.extend(_synapse_file_children(child["id"], syn, name_filter))
+        elif rx is None or rx.search(child["name"]):
+            out.append(child)
+    return out
+
+
 def synapse_download(args: argparse.Namespace) -> None:
     """Fetch the Synapse folder for --product RECURSIVELY (peaks has per-study SUBFOLDERS).
 
@@ -638,19 +953,12 @@ def synapse_download(args: argparse.Namespace) -> None:
         print("  --download NOT set: skipping actual download (this is the default).")
         return
 
-    import os
     import time
 
-    import synapseclient   # imported lazily so the script runs without the dep when not downloading
     import synapseutils
 
     Path(dest).mkdir(parents=True, exist_ok=True)
-    syn = synapseclient.Synapse()
-    token = os.environ.get("SYNAPSE_AUTH_TOKEN")
-    if token:
-        syn.login(authToken=token)            # token never logged/printed
-    else:
-        syn.login()                           # reads ~/.synapseConfig
+    syn = _synapse_login()
     t0 = time.time()
     results = synapseutils.syncFromSynapse(syn, folder, path=dest)
     elapsed = time.time() - t0
@@ -698,8 +1006,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--variant-keep-chr", action="store_true", help="escape hatch: keep the chr-prefixed `variant` token (e.g. chr1:1000:A:G) instead of the canonical numeric-chrom X=23 form")
 
     # Product B1: chrombpnet
-    p.add_argument("--chrombpnet", help="[chrombpnet] LONG variant-effect TSV (one row per variant x context)")
-    p.add_argument("--cbp-context-col", default="cell_type", help="[chrombpnet] context column (default: cell_type)")
+    p.add_argument("--chrombpnet", nargs="+", help="[chrombpnet] wide per-variant matrix FILE(s), processed one at a time (auto-detected; a legacy LONG TSV also works)")
+    p.add_argument("--cbp-wide", action="store_true", help="[chrombpnet] force the WIDE streaming reshape (else auto-detected from the header)")
+    p.add_argument("--cbp-variant-col", default="snp_id", help="[chrombpnet, wide] variant-id column (default: snp_id, e.g. chr19:58326671:C:A)")
+    p.add_argument("--cbp-score-prefix", default="abs_logfc.mean.", help="[chrombpnet, wide] per-context score column prefix (default: 'abs_logfc.mean.'); context = the remainder")
+    p.add_argument("--cbp-pval-infix", default=".pval.", help="[chrombpnet, wide] token marking a p-value column right after the score prefix (default: '.pval.')")
+    p.add_argument("--cbp-batch-rows", type=int, default=100_000, help="[chrombpnet, wide] variants per streamed batch (default: 100000; bounds peak RAM)")
+    p.add_argument("--cbp-sep", default="\t", help="[chrombpnet, wide] field separator of the wide file (default: tab)")
+    p.add_argument("--cbp-name-filter", help="[chrombpnet, --download] regex to select which predictions files to fetch (e.g. 'asd')")
+    p.add_argument("--cbp-tmpdir", help="[chrombpnet, wide] dir for the on-disk temp + external sort (default: alongside --output)")
+    p.add_argument("--cbp-context-col", default="cell_type", help="[chrombpnet, LONG] context column (default: cell_type)")
     p.add_argument("--cbp-score-col", default="logfc", help="[chrombpnet] effect column (default: logfc)")
     p.add_argument("--cbp-mlog10p-col", default="mlog10p", help="[chrombpnet] optional mlog10p column (default: mlog10p)")
     p.add_argument("--cbp-pval-col", default="pval", help="[chrombpnet] optional p-value column (default: pval)")
@@ -740,8 +1056,21 @@ def _default_output(product: str) -> str:
     }[product]
 
 
+def _use_wide_chrombpnet(args: argparse.Namespace) -> bool:
+    """Wide streaming vs legacy long: forced (--cbp-wide), implied by --download (real files are wide),
+    else auto-detected from the first local file's header."""
+    if args.cbp_wide or args.download:
+        return True
+    if not args.chrombpnet:
+        return False
+    return is_wide_chrombpnet_header(_read_header_cols(args.chrombpnet[0], args.cbp_sep), args)
+
+
 def run_product(args: argparse.Namespace) -> None:
-    if args.download:
+    # chrombpnet-wide manages its own per-file Synapse download; only the other products (and the
+    # legacy long path) use the whole-folder recursive sync.
+    chrombpnet_wide = args.product == "chrombpnet" and _use_wide_chrombpnet(args)
+    if args.download and not chrombpnet_wide:
         synapse_download(args)
 
     if args.product == "open_chromatin":
@@ -753,13 +1082,16 @@ def run_product(args: argparse.Namespace) -> None:
         output_path = args.output or _default_output("open_chromatin")
         write_interval(out, output_path)
     elif args.product == "chrombpnet":
-        if not args.chrombpnet:
-            raise SystemExit("--product chrombpnet needs --chrombpnet (or use --sample).")
-        print(f"Building {DATASET_CHROMBPNET} ...")
-        out = build_chrombpnet(args)
-        assert out.columns == VE_COLUMNS, f"variant_effect column order mismatch: {out.columns}"
         output_path = args.output or _default_output("chrombpnet")
-        write_point(out, output_path)
+        if chrombpnet_wide:
+            run_chrombpnet_streaming(args, output_path)   # streams wide files; POINT-indexes the output
+        else:
+            if not args.chrombpnet:
+                raise SystemExit("--product chrombpnet needs --chrombpnet (or use --sample).")
+            print(f"Building {DATASET_CHROMBPNET} (legacy LONG) ...")
+            out = build_chrombpnet(args)
+            assert out.columns == VE_COLUMNS, f"variant_effect column order mismatch: {out.columns}"
+            write_point(out, output_path)
     elif args.product == "flare":
         if not args.flare:
             raise SystemExit("--product flare needs --flare (or use --sample).")
@@ -969,11 +1301,79 @@ def _sample_flare(tmpdir: Path) -> None:
     print(f"  POINT exact-pos query 1:1500-1500: OK")
 
 
+def _sample_chrombpnet_wide(tmpdir: Path) -> None:
+    print("\n--- [2b/3] chrombpnet WIDE streaming (wide->long reshape + threshold, POINT index) ---")
+    import gzip
+
+    # two contexts x 3 columns each (score / score.pval / peak_overlap); context = "<celltype>.<study>".
+    # trevino_2021 -> brain/fetal, encode_2024 -> heart/adult (from the study suffix). Rows:
+    #   chr1:1000:A:G significant in ctx1 (pval 1e-6), SUB-THRESHOLD in ctx2 (pval 0.5 -> dropped);
+    #   chrX:200:C:T  significant in ctx1 (pval 1e-5), sub-threshold in ctx2 (pval 0.9 -> dropped).
+    ctx1, ctx2 = "GABAergic_neuron.trevino_2021", "Ventricular_CM.encode_2024"
+    wide = tmpdir / "chrombpnet_wide.tsv.gz"
+    header = "\t".join([
+        "snp_id", f"abs_logfc.mean.{ctx1}", f"abs_logfc.mean.{ctx2}",
+        f"abs_logfc.mean.pval.{ctx1}", f"abs_logfc.mean.pval.{ctx2}",
+        f"peak_overlap.{ctx1}", f"peak_overlap.{ctx2}",
+    ])
+    rows = [
+        ("chr1:1000:A:G", "1.8", "0.5", "1e-6", "0.5", "1", "0"),
+        ("chrX:200:C:T", "2.0", "0.1", "1e-5", "0.9", "1", "0"),
+    ]
+    with gzip.open(wide, "wt") as fh:   # gzipped -> exercises the streaming decompression path too
+        fh.write(header + "\n")
+        for r in rows:
+            fh.write("\t".join(r) + "\n")
+
+    args = parse_args()
+    args.product, args.chrombpnet, args.cbp_wide, args.download = "chrombpnet", [str(wide)], True, False
+    args.cbp_variant_col, args.cbp_score_prefix, args.cbp_pval_infix = "snp_id", "abs_logfc.mean.", ".pval."
+    args.cbp_sep, args.cbp_batch_rows, args.cbp_tmpdir = "\t", 1, str(tmpdir)   # batch=1 forces >1 batch
+    args.cbp_name_filter, args.mlog10p_thresh = None, 3.0
+    args.variant_keep_chr = False
+
+    out_path = str(tmpdir / f"{DATASET_CHROMBPNET}.wide.sample.tsv.gz")
+    run_chrombpnet_streaming(args, out_path)
+
+    # POINT index present + exact-pos queries
+    assert Path(out_path + ".tbi").exists(), "POINT index .tbi not written"
+    q1 = subprocess.run(["tabix", out_path, "1:1000-1000"], capture_output=True, text=True, check=True)
+    assert q1.stdout.strip(), "POINT exact-pos query 1:1000 returned nothing"
+    qx = subprocess.run(["tabix", out_path, "23:200-200"], capture_output=True, text=True, check=True)
+    assert qx.stdout.strip(), "chrX variant not indexed under numeric seqname 23"
+
+    body = subprocess.run(["bgzip", "-dc", out_path], capture_output=True, text=True, check=True).stdout
+    lines = [l for l in body.strip().split("\n") if l]
+    cols = lines[0].lstrip("#").split("\t")
+    assert cols == VE_COLUMNS, f"18-col order mismatch: {cols}"
+    data = [dict(zip(cols, l.split("\t"))) for l in lines[1:]]
+    kept = {(d["variant"], d["cell_type"]) for d in data}
+    assert kept == {("1:1000:A:G", ctx1), ("23:200:C:T", ctx1)}, kept   # ctx2 sub-threshold dropped
+    for d in data:
+        assert not d["chrom"].startswith("chr"), d          # numeric chrom
+        assert not d["variant"].startswith("chr"), d        # numeric variant token
+        assert d["is_significant"] == "true", d
+        assert d["mlog10p"] not in ("", "NA") and float(d["mlog10p"]) >= 3.0, d
+        assert d["score_type"] == SCORE_TYPE_CHROMBPNET_ABS, d
+        assert d["predicted_direction"] == "NA" and d["rsid"] == "NA", d   # absolute + no rsid -> NA
+        assert d["model"] == MODEL_CHROMBPNET, d
+    chrom_of = {d["variant"]: d["chrom"] for d in data}
+    assert chrom_of["23:200:C:T"] == "23", chrom_of        # chrX -> 23
+    tissue_of = {d["cell_type"]: (d["tissue"], d["life_stage"]) for d in data}
+    assert tissue_of[ctx1] == ("brain", "fetal"), tissue_of
+    print("  wide->long reshape: sub-threshold (variant,context) dropped; is_significant/mlog10p set; "
+          "numeric chrom+variant (chrX->23); NA nulls; 18-col order + POINT index: OK")
+    print("  kept rows:")
+    for d in data:
+        print(f"    {d['chrom']}\t{d['variant']}\t{d['cell_type']}\t{d['score']}\t{d['mlog10p']}")
+
+
 def run_sample() -> None:
     print("=== SAMPLE / DRY-RUN: synthetic input, no Synapse download, no GCS upload ===")
     tmpdir = Path(tempfile.mkdtemp())
     _sample_open_chromatin(tmpdir)
     _sample_chrombpnet(tmpdir)
+    _sample_chrombpnet_wide(tmpdir)
     _sample_flare(tmpdir)
     print("\n=== SAMPLE OK — open_chromatin=INTERVAL index; chrombpnet+flare=POINT index; "
           "no download / no upload performed ===")

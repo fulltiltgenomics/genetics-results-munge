@@ -162,6 +162,10 @@ def parse_args() -> argparse.Namespace:
                    help="how to aggregate a sample's value across donors within a (peak,cell_type,condition) group (default: mean)")
     p.add_argument("--min-score", type=float, default=0.0,
                    help="keep (peak,cell_type,condition) groups with aggregate value > min-score (default: 0.0)")
+    p.add_argument("--chunk-size", type=int, default=100_000,
+                   help="peaks per batch when melting/aggregating the count matrix (default: 100000). "
+                        "Each peak row is fully contained in one batch, so cross-donor aggregation stays "
+                        "exact while peak RAM is bounded to ~one batch instead of the full melt.")
     p.add_argument("--blood-uberon", action="store_true",
                    help="fill uberon_id with UBERON:0000178 (blood) instead of leaving it empty")
 
@@ -275,32 +279,28 @@ def _parse_sample(sample: str) -> tuple[str, str]:
     return cell_type, condition
 
 
-def load_counts(args: argparse.Namespace) -> pl.DataFrame:
-    """Read the peak x sample matrix, unpivot to long, parse sample -> (cell_type, condition),
-    aggregate across donors within (peak, cell_type, condition), keep aggregate > min-score.
-
-    Returns a long hg19 table: chrom, start, end, cell_type, condition, score.
-    """
-    df = pl.read_csv(args.counts, separator="\t", infer_schema_length=10_000)
-    peak_col = args.peak_col if (args.peak_col and args.peak_col in df.columns) else df.columns[0]
-
-    df = _coords_from_id(df, peak_col)
-    sample_cols = [c for c in df.columns if c not in {"chrom", "start", "end", peak_col}]
-    if not sample_cols:
-        raise ValueError("no sample value columns found in --counts (check --peak-col)")
-
-    long = df.unpivot(
-        index=["chrom", "start", "end"], on=sample_cols,
-        variable_name="_sample", value_name="_value",
-    ).with_columns(pl.col("_value").cast(pl.Float64, strict=False))
-
-    # map each sample column name to (cell_type, condition) once, then join
+def _sample_map(sample_cols: list[str]) -> pl.DataFrame:
+    """One-shot sample-column -> (cell_type, condition) lookup table for a join."""
     mapping = {s: _parse_sample(s) for s in sample_cols}
-    map_df = pl.DataFrame(
+    return pl.DataFrame(
         [(s, ct, cond) for s, (ct, cond) in mapping.items()],
         schema={"_sample": pl.Utf8, "cell_type": pl.Utf8, "condition": pl.Utf8},
         orient="row",
     )
+
+
+def _aggregate_batch(df: pl.DataFrame, peak_col: str, sample_cols: list[str],
+                     map_df: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
+    """Melt one peak-row batch to long, parse sample -> (cell_type, condition), aggregate across
+    donors within (peak, cell_type, condition), keep aggregate > min-score. Because a peak is a
+    single matrix ROW, every sample for that peak is inside this batch, so the aggregation is exact
+    per batch — no cross-batch merge is ever required.
+    """
+    df = _coords_from_id(df, peak_col)
+    long = df.unpivot(
+        index=["chrom", "start", "end"], on=sample_cols,
+        variable_name="_sample", value_name="_value",
+    ).with_columns(pl.col("_value").cast(pl.Float64, strict=False))
     long = long.join(map_df, on="_sample", how="left").drop("_sample")
 
     agg_expr = {"mean": pl.mean, "sum": pl.sum, "max": pl.max}[args.agg]("_value")
@@ -313,6 +313,37 @@ def load_counts(args: argparse.Namespace) -> pl.DataFrame:
     else:
         grouped = grouped.with_columns(pl.col("_agg").cast(pl.Utf8).alias("score"))
     return grouped.drop("_agg").with_columns(pl.lit(args.score_type).alias("score_type"))
+
+
+def load_counts_chunked(args: argparse.Namespace, work_dir: Path) -> None:
+    """Stream the peak x sample matrix in --chunk-size peak batches, aggregating each batch to the
+    long hg19 shape (chrom, start, end, cell_type, condition, score, score_type) and writing it to
+    an on-disk parquet part in `work_dir` INCREMENTALLY. Peak RAM stays bounded to ~one batch's melt
+    rather than the full ~145M-row melt that OOM-killed the single-shot path.
+    """
+    header = pl.read_csv(args.counts, separator="\t", n_rows=0).columns
+    peak_col = args.peak_col if (args.peak_col and args.peak_col in header) else header[0]
+    sample_cols = [c for c in header if c != peak_col]
+    if not sample_cols:
+        raise ValueError("no sample value columns found in --counts (check --peak-col)")
+    map_df = _sample_map(sample_cols)
+
+    reader = pl.read_csv_batched(
+        args.counts, separator="\t", batch_size=args.chunk_size, infer_schema_length=10_000,
+    )
+    part = n_peaks = n_rows = 0
+    while True:
+        batches = reader.next_batches(1)
+        if not batches:
+            break
+        for batch in batches:
+            n_peaks += batch.height
+            grouped = _aggregate_batch(batch, peak_col, sample_cols, map_df, args)
+            grouped.write_parquet(work_dir / f"counts_{part:05d}.parquet")
+            n_rows += grouped.height
+            part += 1
+    print(f"  chunked melt/aggregate: {n_peaks} peaks in {part} batches "
+          f"(<= {args.chunk_size}/batch) -> {n_rows} aggregated hg19 rows on disk")
 
 
 def load_da_peaks(args: argparse.Namespace) -> pl.DataFrame:
@@ -428,28 +459,22 @@ def liftover_intervals(intervals: pl.DataFrame, args: argparse.Namespace) -> pl.
     return mapped.select("_hg19key", "new_chrom", "new_start", "new_end")
 
 
-def apply_liftover(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
-    """Join the hg38 mapping onto the long hg19 table, replacing coords with hg38 ones."""
-    long = long.with_columns(_peak_key().alias("_hg19key"))
-    mapping = liftover_intervals(long.select("chrom", "start", "end").unique(), args)
-    lifted = long.join(mapping, on="_hg19key", how="inner").drop("_hg19key", "chrom", "start", "end")
-    return lifted.rename({"new_chrom": "chrom", "new_start": "start", "new_end": "end"})
-
-
 # ---------------------------------------------------------------------------
 # assemble canonical output
 # ---------------------------------------------------------------------------
-def build_output(long_hg38: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
+def build_output(long_hg38: pl.LazyFrame, args: argparse.Namespace) -> pl.LazyFrame:
     """Assemble the 18 canonical columns from a lifted (hg38) long table.
 
-    long_hg38 carries: chrom, start, end, cell_type, condition, score, score_type.
+    long_hg38 carries: chrom, start, end, cell_type, condition, score, score_type. Operates lazily
+    so the full atlas is never materialized in RAM (the count-matrix melt/aggregate already happened
+    on disk); the caller streams the result to CSV via sink.
     """
     # convert the final hg38 chrom to numeric (X->23, ...) AFTER liftOver, then build peak_id/keys
     df = long_hg38.with_columns(_numeric_chrom(pl.col("chrom")).alias("chrom"))
     df = df.with_columns(_peak_key().alias("peak_id"))
 
     if args.links:
-        links = load_gene_links(args)
+        links = load_gene_links(args).lazy()
         df = df.with_columns(_peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
     else:
         df = df.with_columns(
@@ -470,15 +495,10 @@ def build_output(long_hg38: pl.DataFrame, args: argparse.Namespace) -> pl.DataFr
     return df.select(OUTPUT_COLUMNS)
 
 
-def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as empty.
+def _sort_index_bgzip(body: Path, output_path: str) -> None:
+    """external LC_ALL=C sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index) of a body TSV.
 
-    Re-sorting here also absorbs liftOver's coordinate reordering before bgzip."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    # every empty/missing cell serialized as the literal "NA"
-    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-
+    The on-disk sort keeps memory bounded and absorbs liftOver's coordinate reordering before bgzip."""
     header = "#" + "\t".join(OUTPUT_COLUMNS)
     pipeline = (
         f'( printf "%s\\n" {shell_quote(header)}; '
@@ -486,8 +506,28 @@ def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
     )
     subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
     subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
-    print(f"  wrote {df.height} rows -> {output_path}")
     print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
+
+
+def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
+    """In-memory writer (used by --sample): serialize the small frame then sort/index/bgzip."""
+    tmpdir = tempfile.mkdtemp()
+    body = Path(tmpdir) / "body.tsv"
+    # every empty/missing cell serialized as the literal "NA"
+    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
+    _sort_index_bgzip(body, output_path)
+    print(f"  wrote {df.height} rows -> {output_path}")
+
+
+def write_open_chromatin_lazy(lf: pl.LazyFrame, output_path: str) -> None:
+    """Streaming writer (real run): sink the lazy atlas to an on-disk body TSV without materializing
+    it in RAM, then sort/index/bgzip. Keeps the final write memory-bounded like the melt/aggregate."""
+    tmpdir = tempfile.mkdtemp()
+    body = Path(tmpdir) / "body.tsv"
+    lf.sink_csv(body, separator="\t", include_header=False, null_value="NA",
+                maintain_order=False, engine="streaming")
+    _sort_index_bgzip(body, output_path)
+    print(f"  streamed atlas -> {output_path}")
 
 
 def shell_quote(s: str) -> str:
@@ -503,14 +543,31 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
         print(f"  uploaded {gcs_path}.tbi")
 
 
-def transform(args: argparse.Namespace) -> pl.DataFrame:
-    """counts (+ optional DA) -> long hg19 -> liftOver -> hg38 -> 18 canonical columns."""
-    long = load_counts(args)
+def transform(args: argparse.Namespace, work_dir: Path) -> pl.LazyFrame:
+    """counts (+ optional DA) -> chunked/disk-backed long hg19 -> liftOver -> hg38 -> 18 columns.
+
+    Returns a LazyFrame scanning the on-disk aggregated parts joined to the hg38 liftOver mapping.
+    Nothing except the small unique-peak set and the liftOver mapping is held in RAM; `work_dir`
+    holds the parquet parts and must outlive the returned frame (until it is sunk/collected).
+    """
+    load_counts_chunked(args, work_dir)
     if args.da_peaks:
-        long = pl.concat([long, load_da_peaks(args)], how="vertical_relaxed")
-    lifted = apply_liftover(long, args)
+        # DA rows share the long hg19 schema and are lifted over together with the count atlas
+        load_da_peaks(args).write_parquet(work_dir / "da_peaks.parquet")
+
+    lf = pl.scan_parquet(str(work_dir / "*.parquet"))
+    peaks = lf.select("chrom", "start", "end").unique().collect(engine="streaming")
+    mapping = liftover_intervals(peaks, args)  # small: one row per unique hg19 interval
+
+    lifted = (
+        lf.with_columns(_peak_key().alias("_hg19key"))
+        .join(mapping.lazy(), on="_hg19key", how="inner")
+        .drop("_hg19key", "chrom", "start", "end")
+        .rename({"new_chrom": "chrom", "new_start": "start", "new_end": "end"})
+    )
     out = build_output(lifted, args)
-    assert out.columns == OUTPUT_COLUMNS, f"column order mismatch: {out.columns}"
+    names = out.collect_schema().names()
+    assert names == OUTPUT_COLUMNS, f"column order mismatch: {names}"
     return out
 
 
@@ -549,6 +606,8 @@ def run_sample() -> None:
     args.links = None
     args.blood_uberon = False
     args.skip_liftover = True  # synthetic input is already hg38
+    if not getattr(args, "chunk_size", None):
+        args.chunk_size = 100_000
 
     # condition parsing from sample names
     assert _parse_sample("1001-Bulk_B-U") == ("Bulk_B", "resting"), _parse_sample("1001-Bulk_B-U")
@@ -557,7 +616,8 @@ def run_sample() -> None:
     assert _parse_sample("1001-CD8pos_T-S") == ("CD8pos_T", "stimulated"), _parse_sample("1001-CD8pos_T-S")
     print("  sample-name -> (cell_type, condition) parsing: OK")
 
-    out = transform(args)
+    # exercise the real chunked/disk-backed path, then collect the tiny result for assertions
+    out = transform(args, Path(tempfile.mkdtemp())).collect(engine="streaming")
     assert out.columns == OUTPUT_COLUMNS, f"column order mismatch: {out.columns}"
     print(f"  output has {len(out.columns)} columns in canonical order: OK")
 
@@ -634,9 +694,10 @@ def main() -> None:
         )
 
     output_path = args.output or f"./{DATASET}.tsv.gz"
-    print(f"Reading counts {args.counts} ...")
-    out = transform(args)
-    write_open_chromatin(out, output_path)
+    print(f"Reading counts {args.counts} (chunk-size={args.chunk_size} peaks/batch) ...")
+    work_dir = Path(tempfile.mkdtemp())
+    out = transform(args, work_dir)
+    write_open_chromatin_lazy(out, output_path)
 
     if args.stage:
         print("Staging to GCS (both buckets) ...")

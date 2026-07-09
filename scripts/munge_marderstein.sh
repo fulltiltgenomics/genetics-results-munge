@@ -25,7 +25,10 @@ SCRIPT="$SCRIPTS_DIR/munge_marderstein.py"
 # TO-VERIFY: real file names + column layouts once confirmed against the Synapse/ENCODE downloads.
 PEAKS=${PEAKS:-"$DATA_DIR/peaks_long.tsv"}                 # long: chrom,start,end,cell_type,score
 CONTEXT_MAP=${CONTEXT_MAP:-"$DATA_DIR/context_map.tsv"}    # cell_type -> tissue,life_stage[,assay] overrides
-CHROMBPNET=${CHROMBPNET:-"$DATA_DIR/chrombpnet_scores.tsv"}
+# ChromBPNet: the REAL release is a WIDE per-variant matrix (~439 cols; 132 context triplets), streamed
+# in bounded batches. Point CHROMBPNET at the downloaded wide file(s), or pass --download to fetch +
+# stream + delete each file one at a time (peak disk = largest single input + the filtered output).
+CHROMBPNET=${CHROMBPNET:-"$DATA_DIR/asd.all_dataset.K562_bias.annot2.txt.gz"}
 FLARE=${FLARE:-"$DATA_DIR/flare_scores.tsv"}
 
 OUT_OPEN=${OUT_OPEN:-"$DATA_DIR/marderstein_open_chromatin.tsv.gz"}
@@ -44,10 +47,11 @@ python3 "$SCRIPT" --product open_chromatin \
     "$@"
 
 echo ""
-echo "=== [2/3] ChromBPNet -> variant_effect (thresholded; POINT index) ==="
+echo "=== [2/3] ChromBPNet -> variant_effect (WIDE streaming reshape; thresholded; POINT index) ==="
+# tissue/life_stage come from the study suffix of each "<celltype>.<study>" context (no --context-map).
+# For the full common/rare/ldsc run, replace --chrombpnet with: --download [--cbp-name-filter <regex>]
 python3 "$SCRIPT" --product chrombpnet \
     --chrombpnet "$CHROMBPNET" \
-    --context-map "$CONTEXT_MAP" \
     --output "$OUT_CHROMBPNET" \
     "$@"
 
