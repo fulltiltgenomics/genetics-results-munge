@@ -226,7 +226,7 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
     # aggregate the (symbol, id) pairs JOINTLY: build a struct per link, dedup the pairs, and
     # sort the structs (lexicographic by _gene first, then _geneid) so the i-th token of
     # target_gene always corresponds to the i-th token of target_gene_id
-    return (
+    agg = (
         df.group_by("_key")
         .agg(pl.struct("_gene", "_geneid").unique().sort().alias("_pairs"))
         .with_columns(
@@ -234,6 +234,18 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
             pl.col("_pairs").list.eval(pl.element().struct.field("_geneid")).list.join(",").alias("target_gene_id"),
         )
         .drop("_pairs")
+    )
+    # empty-cell -> NA convention: a joined list with no real token (only commas/whitespace, e.g.
+    # when the source provides gene symbols but no Ensembl ids) becomes NA, not "" / "," / ",,".
+    # applied symmetrically; rows that DO have real tokens keep their positional pairing intact.
+    return agg.with_columns(
+        *[
+            pl.when(pl.col(c).str.replace_all(r"[,\s]", "").str.len_chars() == 0)
+            .then(pl.lit(None, dtype=pl.Utf8))
+            .otherwise(pl.col(c))
+            .alias(c)
+            for c in ("target_gene", "target_gene_id")
+        ]
     )
 
 
@@ -328,6 +340,9 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str]:
         "chr1\t200200\t200700\tSAMD11\tENSG00000187634\n"
         "chr1\t200200\t200700\tNOC2L\tENSG00000188976\n"
         "chr2\t50050\t50550\tSOX11\tENSG00000176887\n"
+        # symbols but NO Ensembl ids -> target_gene keeps the symbols, target_gene_id -> NA
+        "chr1\t100100\t100600\tFOXA1\t\n"
+        "chr1\t100100\t100600\tGATA3\t\n"
     )
     meta = tmpdir / "cell_metadata.tsv"
     meta.write_text(
@@ -371,6 +386,12 @@ def run_sample() -> None:
     assert xrow["peak_id"] == "23-900900-901400", xrow["peak_id"]
     print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
 
+    # symbols-but-no-ids link: target_gene keeps the symbols, target_gene_id renders as NA (fix)
+    sym_only = out.filter(pl.col("peak_id") == "1-100100-100600").row(0, named=True)
+    assert sym_only["target_gene"] == "FOXA1,GATA3", sym_only["target_gene"]
+    assert sym_only["target_gene_id"] is None, sym_only["target_gene_id"]
+    print(f"  symbols-without-ids -> target_gene={sym_only['target_gene']!r}, target_gene_id=NA: OK")
+
     print("\nfirst output rows:")
     with pl.Config(tbl_cols=-1, tbl_width_chars=240, fmt_str_lengths=60):
         print(out.head())
@@ -386,6 +407,11 @@ def run_sample() -> None:
     assert all(len(ln.rstrip("\n").split("\t")) == 18 for ln in body_lines), "not 18 columns"
     assert any("\tNA\t" in ln or ln.rstrip("\n").endswith("\tNA") for ln in body_lines), "no NA emitted"
     print(f"  empty cells rendered as NA, 18 columns per row: OK ({len(body_lines)} rows)")
+
+    # the symbols-without-ids peak serializes target_gene_id as the literal NA (not "" or ",")
+    na_fields = next(ln.rstrip("\n").split("\t") for ln in body_lines if "1-100100-100600" in ln)
+    assert na_fields[15] == "FOXA1,GATA3" and na_fields[16] == "NA", na_fields[15:17]
+    print(f"  serialized symbols/NA pair: target_gene={na_fields[15]!r}, target_gene_id={na_fields[16]!r}: OK")
 
     # validate the interval index answers overlap queries (numeric seqnames, incl. chrX->23)
     q = subprocess.run(["tabix", out_path, "1:200300-200400"], capture_output=True, text=True, check=True)

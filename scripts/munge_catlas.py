@@ -66,7 +66,9 @@ Field rules for Catlas (see task genetics-results-suite-bzl.15):
   dataset          "catlas_open_chromatin"  (drives resource mapping to catlas).
   cell_type        verbatim Catlas cell-type label (the matrix column name).
   tissue           per cell type, from --celltype-tissue-map, else keyword fallback, else "unknown".
-  life_stage       "adult"   (adult body-wide atlas).
+  life_stage       DERIVED per cell type: "fetal" when the cell-type label (or the map's optional
+                   life_stage column) marks it fetal (matches /fetal/i, e.g. "Fetal_*"), else
+                   "adult". Catlas mixes adult and fetal cell types. Force all rows with --life-stage.
   condition        "unknown" (default for atlases).
   assay            "snATAC".
   score/score_type CPM accessibility value + "cpm"  (or empty + "presence" for a binary matrix).
@@ -103,7 +105,6 @@ DATASET = "catlas_open_chromatin"
 RESOURCE = "catlas"
 VERSION = "2021"
 
-LIFE_STAGE = "adult"
 CONDITION = "unknown"
 ASSAY = "snATAC"
 
@@ -216,6 +217,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--map-celltype-col", default="cell_type", help="map: cell_type column (default: cell_type)")
     p.add_argument("--map-tissue-col", default="tissue", help="map: tissue column (default: tissue)")
     p.add_argument("--map-uberon-col", default="uberon_id", help="map: optional uberon_id column (default: uberon_id)")
+    p.add_argument("--map-lifestage-col", default="life_stage", help="map: optional life_stage column (default: life_stage)")
+    p.add_argument("--life-stage", help="force life_stage for ALL rows (default: derived per cell type; fetal if label/map marks it)")
 
     p.add_argument("--ccre-gene-links", help="optional cCRE->gene links TSV")
     p.add_argument("--links-id-col", help="links: cCRE id column to parse coords from")
@@ -312,7 +315,7 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
     # aggregate the (symbol, id) pairs JOINTLY: build a struct per link, dedup the pairs, and
     # sort the structs (lexicographic by _gene first, then _geneid) so the i-th token of
     # target_gene always corresponds to the i-th token of target_gene_id
-    return (
+    agg = (
         df.group_by("_key")
         .agg(pl.struct("_gene", "_geneid").unique().sort().alias("_pairs"))
         .with_columns(
@@ -321,10 +324,29 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
         )
         .drop("_pairs")
     )
+    # empty-cell -> NA convention: a joined list with no real token (only commas/whitespace, e.g.
+    # when the source provides gene symbols but no Ensembl ids) becomes NA, not "" / "," / ",,".
+    # applied symmetrically; rows that DO have real tokens keep their positional pairing intact.
+    return agg.with_columns(
+        *[
+            pl.when(pl.col(c).str.replace_all(r"[,\s]", "").str.len_chars() == 0)
+            .then(pl.lit(None, dtype=pl.Utf8))
+            .otherwise(pl.col(c))
+            .alias(c)
+            for c in ("target_gene", "target_gene_id")
+        ]
+    )
 
 
 def _peak_key() -> pl.Expr:
     return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
+
+
+def _derive_life_stage(cell_type: str, provided: str | None) -> str:
+    """fetal when the map's life_stage value (authoritative) or the cell-type label marks it
+    fetal (matches /fetal/i, e.g. a "Fetal_*" label); else adult."""
+    val = provided if provided else cell_type
+    return "fetal" if re.search(r"fetal", val, re.IGNORECASE) else "adult"
 
 
 def _fallback_tissue(cell_type: str) -> str:
@@ -338,30 +360,37 @@ def _fallback_tissue(cell_type: str) -> str:
 
 
 def derive_tissue_map(cell_types: list[str], args: argparse.Namespace) -> pl.DataFrame:
-    """Build a cell_type -> (tissue, uberon_id) table.
+    """Build a cell_type -> (tissue, uberon_id, life_stage) table.
 
     Priority per cell type: explicit --celltype-tissue-map, else keyword fallback, else 'unknown'.
     uberon_id: the map's uberon column if provided, else derived from the harmonized tissue.
+    life_stage: --life-stage override, else map life_stage column, else the cell-type label
+    (fetal if it marks fetal, e.g. "Fetal_*"), else adult.
     """
     provided_tissue: dict[str, str] = {}
     provided_uberon: dict[str, str] = {}
+    provided_life: dict[str, str] = {}
     if args.celltype_tissue_map:
         m = pl.read_csv(args.celltype_tissue_map, separator="\t", infer_schema_length=10_000)
         has_uberon = args.map_uberon_col in m.columns
+        has_life = args.map_lifestage_col in m.columns
         for row in m.iter_rows(named=True):
             ct = str(row[args.map_celltype_col])
             provided_tissue[ct] = str(row[args.map_tissue_col])
             if has_uberon and row.get(args.map_uberon_col) not in (None, ""):
                 provided_uberon[ct] = str(row[args.map_uberon_col])
+            if has_life and row.get(args.map_lifestage_col) not in (None, ""):
+                provided_life[ct] = str(row[args.map_lifestage_col])
 
     rows = []
     for ct in cell_types:
         tissue = provided_tissue.get(ct) or _fallback_tissue(ct)
         uberon = provided_uberon.get(ct) or _TISSUE_UBERON.get(tissue)
-        rows.append((ct, tissue, uberon))
+        life = args.life_stage or _derive_life_stage(ct, provided_life.get(ct))
+        rows.append((ct, tissue, uberon, life))
     return pl.DataFrame(
         rows,
-        schema={"cell_type": pl.Utf8, "tissue": pl.Utf8, "uberon_id": pl.Utf8},
+        schema={"cell_type": pl.Utf8, "tissue": pl.Utf8, "uberon_id": pl.Utf8, "life_stage": pl.Utf8},
         orient="row",
     )
 
@@ -395,7 +424,6 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
 
     df = df.with_columns(
         pl.lit(DATASET).alias("dataset"),
-        pl.lit(LIFE_STAGE).alias("life_stage"),
         pl.lit(CONDITION).alias("condition"),
         pl.lit(ASSAY).alias("assay"),
         pl.lit(args.score_type).alias("score_type"),
@@ -446,12 +474,14 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str, str]:
     paths: explicit map, keyword fallback, and unmapped->unknown) and a multi-gene cCRE.
     """
     matrix = tmpdir / "ccre_matrix.tsv"
+    # "Fetal_Hepatocyte" exercises the per-cell-type life_stage derivation (-> fetal); the other
+    # labels are adult. Catlas mixes adult and fetal cell types, so life_stage is NOT a constant.
     matrix.write_text(
-        "chrom\tstart\tend\tCardiomyocyte\tHepatocyte\tAlveolar Type 2\tMystery Cell\n"
-        "chr1\t100100\t100600\t0.0\t3.5\t0.0\t1.0\n"
-        "chr1\t200200\t200700\t7.2\t0.0\t1.1\t0.0\n"
-        "chr2\t50050\t50550\t0.0\t0.0\t4.4\t0.0\n"
-        "chrX\t900900\t901400\t2.0\t0.0\t0.0\t0.0\n"
+        "chrom\tstart\tend\tCardiomyocyte\tHepatocyte\tAlveolar Type 2\tMystery Cell\tFetal_Hepatocyte\n"
+        "chr1\t100100\t100600\t0.0\t3.5\t0.0\t1.0\t2.5\n"
+        "chr1\t200200\t200700\t7.2\t0.0\t1.1\t0.0\t0.0\n"
+        "chr2\t50050\t50550\t0.0\t0.0\t4.4\t0.0\t0.0\n"
+        "chrX\t900900\t901400\t2.0\t0.0\t0.0\t0.0\t0.0\n"
     )
     # explicit map covers heart/liver (with uberon for heart); Alveolar Type 2 -> lung via
     # keyword fallback; "Mystery Cell" is unmapped and has no keyword -> tissue "unknown"
@@ -467,6 +497,9 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str, str]:
         "chr1\t200200\t200700\tSAMD11\tENSG00000187634\n"
         "chr1\t200200\t200700\tNOC2L\tENSG00000188976\n"
         "chr2\t50050\t50550\tSOX11\tENSG00000176887\n"
+        # symbols but NO Ensembl ids -> target_gene keeps the symbols, target_gene_id -> NA
+        "chr1\t100100\t100600\tFOXA1\t\n"
+        "chr1\t100100\t100600\tGATA3\t\n"
     )
     meta = tmpdir / "cell_metadata.tsv"
     meta.write_text(
@@ -475,6 +508,7 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str, str]:
         "Hepatocyte\t30000\n"
         "Alveolar Type 2\t22000\n"
         "Mystery Cell\t500\n"
+        "Fetal_Hepatocyte\t15000\n"
     )
     return str(matrix), str(ct_map), str(links), str(meta)
 
@@ -490,6 +524,8 @@ def run_sample() -> None:
     args.chrom_col, args.start_col, args.end_col = "chrom", "start", "end"
     args.celltype_tissue_map = ct_map
     args.map_celltype_col, args.map_tissue_col, args.map_uberon_col = "cell_type", "tissue", "uberon_id"
+    args.map_lifestage_col = "life_stage"
+    args.life_stage = None
     args.ccre_gene_links = links
     args.links_id_col = None
     args.links_chrom_col, args.links_start_col, args.links_end_col = "chrom", "start", "end"
@@ -513,6 +549,13 @@ def run_sample() -> None:
     assert tissue_by_ct["Mystery Cell"] == "unknown", tissue_by_ct       # unmapped -> unknown
     print(f"  tissue derivation (map + fallback + unknown): OK  {tissue_by_ct}")
 
+    # life_stage derived per cell type: a Fetal_* label -> fetal, other labels -> adult (fix)
+    life_by_ct = {r["cell_type"]: r["life_stage"] for r in out.select("cell_type", "life_stage").unique().iter_rows(named=True)}
+    assert life_by_ct["Fetal_Hepatocyte"] == "fetal", life_by_ct
+    assert life_by_ct["Cardiomyocyte"] == "adult", life_by_ct
+    assert life_by_ct["Hepatocyte"] == "adult", life_by_ct
+    print(f"  life_stage derivation (fetal vs adult): OK  {life_by_ct}")
+
     # chrom / peak_id are numeric with chrX -> 23
     chroms = set(out["chrom"].to_list())
     assert chroms <= {"1", "2", "23"}, chroms
@@ -531,6 +574,12 @@ def run_sample() -> None:
     assert pairs["SAMD11"] == "ENSG00000187634" and pairs["NOC2L"] == "ENSG00000188976", pairs
     print(f"  gene/id positional pairing: OK  {pairs}")
 
+    # symbols-but-no-ids link: target_gene keeps the symbols, target_gene_id renders as NA (fix)
+    sym_only = out.filter(pl.col("peak_id") == "1-100100-100600").row(0, named=True)
+    assert sym_only["target_gene"] == "FOXA1,GATA3", sym_only["target_gene"]
+    assert sym_only["target_gene_id"] is None, sym_only["target_gene_id"]
+    print(f"  symbols-without-ids -> target_gene={sym_only['target_gene']!r}, target_gene_id=NA: OK")
+
     print("\nfirst output rows:")
     with pl.Config(tbl_cols=-1, tbl_width_chars=260, fmt_str_lengths=60):
         print(out.head())
@@ -545,6 +594,11 @@ def run_sample() -> None:
     assert all(len(ln.rstrip("\n").split("\t")) == 18 for ln in body_lines), "not 18 columns"
     assert any("\tNA\t" in ln or ln.rstrip("\n").endswith("\tNA") for ln in body_lines), "no NA emitted"
     print(f"  empty cells rendered as NA, 18 columns per row: OK ({len(body_lines)} rows)")
+
+    # the symbols-without-ids cCRE serializes target_gene_id as the literal NA (not "" or ",")
+    na_fields = next(ln.rstrip("\n").split("\t") for ln in body_lines if "1-100100-100600" in ln)
+    assert na_fields[15] == "FOXA1,GATA3" and na_fields[16] == "NA", na_fields[15:17]
+    print(f"  serialized symbols/NA pair: target_gene={na_fields[15]!r}, target_gene_id={na_fields[16]!r}: OK")
 
     # validate the interval index answers overlap queries (numeric seqnames, incl. chrX->23)
     q = subprocess.run(["tabix", out_path, "1:200300-200400"], capture_output=True, text=True, check=True)

@@ -46,7 +46,9 @@ INPUTS
     (the "BSS<digits>" token, else the filename stem); override a single file with --cell-type.
   --biosample-metadata (OPTIONAL): biosample -> tissue [-> life_stage] TSV. Default column
     names biosample/tissue/life_stage; point them at the raw EpiMap table with
-    --meta-biosample-col id --meta-tissue-col SECONDARY --meta-lifestage-col lifestage.
+    --meta-biosample-col id --meta-tissue-col GROUP --meta-lifestage-col lifestage.
+    (Prefer GROUP over SECONDARY as the tissue column: in the real main_metadata_table.tsv
+    SECONDARY is empty for ~78% of biosamples, whereas GROUP is fully populated.)
     Absent or missing biosample -> tissue="unknown". life_stage="adult" unless the metadata
     value marks the sample fetal/embryonic (then "fetal").
   --links (OPTIONAL): EpiMap activity-based enhancer->gene links. Joined to segments by exact
@@ -183,7 +185,7 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--biosample-metadata", help="biosample -> tissue [-> life_stage] TSV")
     p.add_argument("--meta-biosample-col", default="biosample", help="metadata: biosample id column (default: biosample)")
-    p.add_argument("--meta-tissue-col", default="tissue", help="metadata: tissue column (default: tissue)")
+    p.add_argument("--meta-tissue-col", default="tissue", help="metadata: tissue column (default: tissue; for the raw EpiMap table use GROUP, which is fully populated, not SECONDARY which is ~78%% empty)")
     p.add_argument("--meta-lifestage-col", default="life_stage", help="metadata: optional life_stage column (default: life_stage)")
 
     p.add_argument("--links", help="optional enhancer->gene links TSV")
@@ -340,7 +342,7 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
     geneid = pl.col(args.links_geneid_col).cast(pl.Utf8) if args.links_geneid_col in df.columns else pl.lit(None, dtype=pl.Utf8)
     df = df.with_columns(gene.fill_null("").alias("_gene"), geneid.fill_null("").alias("_geneid"))
 
-    return (
+    agg = (
         df.group_by("_key")
         .agg(pl.struct("_gene", "_geneid").unique().sort().alias("_pairs"))
         .with_columns(
@@ -348,6 +350,18 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
             pl.col("_pairs").list.eval(pl.element().struct.field("_geneid")).list.join(",").alias("target_gene_id"),
         )
         .drop("_pairs")
+    )
+    # empty-cell -> NA convention: a joined list with no real token (only commas/whitespace, e.g.
+    # when the source provides gene symbols but no Ensembl ids) becomes NA, not "" / "," / ",,".
+    # applied symmetrically; rows that DO have real tokens keep their positional pairing intact.
+    return agg.with_columns(
+        *[
+            pl.when(pl.col(c).str.replace_all(r"[,\s]", "").str.len_chars() == 0)
+            .then(pl.lit(None, dtype=pl.Utf8))
+            .otherwise(pl.col(c))
+            .alias(c)
+            for c in ("target_gene", "target_gene_id")
+        ]
     )
 
 
@@ -500,6 +514,9 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[list[str], str, str]:
         "chrom\tstart\tend\tgene_name\tgene_id\n"
         "chr1\t903820\t904020\tSAMD11\tENSG00000187634\n"   # matches BSS00001 9_EnhA1 segment
         "chr1\t903820\t904020\tNOC2L\tENSG00000188976\n"
+        # symbols but NO Ensembl ids (matches BSS00099 EnhBiv segment) -> target_gene_id -> NA
+        "chr3\t123400\t123900\tFOXA1\t\n"
+        "chr3\t123400\t123900\tGATA3\t\n"
     )
     return [str(b1), str(b2), str(b3)], str(meta), str(links)
 
@@ -570,6 +587,12 @@ def run_sample() -> None:
     assert pairs["SAMD11"] == "ENSG00000187634" and pairs["NOC2L"] == "ENSG00000188976", pairs
     print(f"  enhancer->gene joint pairing: OK  {pairs}")
 
+    # symbols-but-no-ids link: target_gene keeps the symbols, target_gene_id renders as NA (fix)
+    sym_only = out.filter(pl.col("peak_id") == "3-123400-123900").row(0, named=True)
+    assert sym_only["target_gene"] == "FOXA1,GATA3", sym_only["target_gene"]
+    assert sym_only["target_gene_id"] is None, sym_only["target_gene_id"]
+    print(f"  symbols-without-ids -> target_gene={sym_only['target_gene']!r}, target_gene_id=NA: OK")
+
     print("\nfirst output rows:")
     with pl.Config(tbl_cols=-1, tbl_width_chars=260, fmt_str_lengths=40):
         print(out.head(10))
@@ -584,6 +607,11 @@ def run_sample() -> None:
     assert all(len(ln.rstrip("\n").split("\t")) == 18 for ln in body_lines), "not 18 columns"
     assert any("\tNA\t" in ln for ln in body_lines), "no NA emitted"
     print(f"  empty cells rendered as NA, 18 columns per row: OK ({len(body_lines)} rows)")
+
+    # the symbols-without-ids segment serializes target_gene_id as the literal NA (not "" or ",")
+    na_fields = next(ln.rstrip("\n").split("\t") for ln in body_lines if "3-123400-123900" in ln)
+    assert na_fields[15] == "FOXA1,GATA3" and na_fields[16] == "NA", na_fields[15:17]
+    print(f"  serialized symbols/NA pair: target_gene={na_fields[15]!r}, target_gene_id={na_fields[16]!r}: OK")
 
     q = subprocess.run(["tabix", out_path, "1:903900-903950"], capture_output=True, text=True, check=True)
     print("\ntabix overlap query 1:903900-903950 ->")
