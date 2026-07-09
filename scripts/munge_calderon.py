@@ -62,9 +62,10 @@ convention (cf. munge_hpa.py `#dataset`, sumstats `#chr`): it makes the header a
 `tabix -p bed` skips it while the logical column name stays `chrom`.
 
 Field rules for Calderon (see task genetics-results-suite-bzl.17):
-  chrom            chr-prefixed hg38 (chr1..chr22, chrX/chrY); REQUIRED by the tabix contract.
+  chrom            NUMERIC hg38, no "chr" prefix (1..22, X->23, Y->24, M/MT->25); converted from
+                   the chr-prefixed liftOver output at the final write. REQUIRED by the tabix contract.
   start,end        peak interval, hg38 (AFTER liftOver), BED 0-based half-open.
-  peak_id          f"{chrom}-{start}-{end}" using the hg38 coordinates.
+  peak_id          f"{chrom}-{start}-{end}" using the numeric hg38 chrom (e.g. "23-100-200").
   dataset          "calderon_open_chromatin"  (drives resource mapping to calderon_immune).
   cell_type        verbatim immune population label parsed from the sample name (stim suffix
                    stripped into `condition`).
@@ -229,6 +230,22 @@ def _peak_key() -> pl.Expr:
     return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
 
 
+def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
+    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25).
+
+    Applied only at the FINAL (hg38) write: the coord helpers keep chr-prefixed names because
+    the liftOver chain (hg19ToHg38) is keyed on chr-prefixed seqnames.
+    """
+    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
+    up = e.str.to_uppercase()
+    return (
+        pl.when(up == "X").then(pl.lit("23"))
+        .when(up == "Y").then(pl.lit("24"))
+        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
+        .otherwise(e)
+    )
+
+
 # ---------------------------------------------------------------------------
 # sample-name parsing: "<donor>-<cell_type>-<U|S>" or "<cell_type>-<U|S>"
 # ---------------------------------------------------------------------------
@@ -332,6 +349,8 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
     else:
         df = _normalize_coords(df, args.links_chrom_col, args.links_start_col, args.links_end_col)
 
+    # links are already hg38; convert to numeric chrom so the key matches the final hg38 peak_key
+    df = df.with_columns(_numeric_chrom(pl.col("chrom")).alias("chrom"))
     df = df.with_columns(_peak_key().alias("_key"))
     gene = pl.col(args.links_gene_col).cast(pl.Utf8) if args.links_gene_col in df.columns else pl.lit(None, dtype=pl.Utf8)
     geneid = pl.col(args.links_geneid_col).cast(pl.Utf8) if args.links_geneid_col in df.columns else pl.lit(None, dtype=pl.Utf8)
@@ -425,7 +444,9 @@ def build_output(long_hg38: pl.DataFrame, args: argparse.Namespace) -> pl.DataFr
 
     long_hg38 carries: chrom, start, end, cell_type, condition, score, score_type.
     """
-    df = long_hg38.with_columns(_peak_key().alias("peak_id"))
+    # convert the final hg38 chrom to numeric (X->23, ...) AFTER liftOver, then build peak_id/keys
+    df = long_hg38.with_columns(_numeric_chrom(pl.col("chrom")).alias("chrom"))
+    df = df.with_columns(_peak_key().alias("peak_id"))
 
     if args.links:
         links = load_gene_links(args)
@@ -455,7 +476,8 @@ def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
     Re-sorting here also absorbs liftOver's coordinate reordering before bgzip."""
     tmpdir = tempfile.mkdtemp()
     body = Path(tmpdir) / "body.tsv"
-    df.write_csv(body, separator="\t", include_header=False, null_value="")
+    # every empty/missing cell serialized as the literal "NA"
+    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
 
     header = "#" + "\t".join(OUTPUT_COLUMNS)
     pipeline = (
@@ -545,9 +567,17 @@ def run_sample() -> None:
     assert conds == {"resting", "stimulated"}, conds
     print(f"  condition axis: OK  {sorted(conds)}")
 
-    # Bulk_B resting aggregates donors 1001(4) + 1002(6) -> mean 5.0 at chr1-100100-100600
+    # chrom / peak_id are numeric with chrX -> 23
+    chroms = set(out["chrom"].to_list())
+    assert chroms <= {"1", "2", "23"}, chroms
+    assert "23" in chroms, f"chrX should map to 23; got {chroms}"
+    xrow = out.filter(pl.col("chrom") == "23").row(0, named=True)
+    assert xrow["peak_id"] == "23-900900-901400", xrow["peak_id"]
+    print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
+
+    # Bulk_B resting aggregates donors 1001(4) + 1002(6) -> mean 5.0 at 1-100100-100600
     bulk_b_rest = out.filter(
-        (pl.col("peak_id") == "chr1-100100-100600")
+        (pl.col("peak_id") == "1-100100-100600")
         & (pl.col("cell_type") == "Bulk_B")
         & (pl.col("condition") == "resting")
     )
@@ -562,11 +592,24 @@ def run_sample() -> None:
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
     write_open_chromatin(out, out_path)
 
-    # validate the interval index answers an overlap query (pos inside a peak interval)
-    q = subprocess.run(["tabix", out_path, "chr1:200300-200400"], capture_output=True, text=True, check=True)
-    print("\ntabix overlap query chr1:200300-200400 ->")
+    # empty cells serialize as the literal "NA" (n_cells/cell_ontology_id/uberon_id/target_gene*);
+    # every row still has 18 columns
+    import gzip
+    with gzip.open(out_path, "rt") as fh:
+        body_lines = [ln for ln in fh if not ln.startswith("#")]
+    assert all(len(ln.rstrip("\n").split("\t")) == 18 for ln in body_lines), "not 18 columns"
+    assert any("\tNA\t" in ln or ln.rstrip("\n").endswith("\tNA") for ln in body_lines), "no NA emitted"
+    print(f"  empty cells rendered as NA, 18 columns per row: OK ({len(body_lines)} rows)")
+
+    # validate the interval index answers overlap queries (numeric seqnames, incl. chrX->23)
+    q = subprocess.run(["tabix", out_path, "1:200300-200400"], capture_output=True, text=True, check=True)
+    print("\ntabix overlap query 1:200300-200400 ->")
     print(q.stdout.rstrip() or "  (no rows)")
     assert q.stdout.strip(), "interval query returned nothing — indexing is wrong"
+    qx = subprocess.run(["tabix", out_path, "23:901000-901100"], capture_output=True, text=True, check=True)
+    print("tabix overlap query 23:901000-901100 (chrX) ->")
+    print(qx.stdout.rstrip() or "  (no rows)")
+    assert qx.stdout.strip(), "chrX (23) interval query returned nothing — indexing is wrong"
 
     if shutil.which("liftOver") is not None:
         print("\n  note: liftOver binary IS present; provide --chain to smoke-test the real liftOver path.")

@@ -20,26 +20,32 @@ This ONE script emits THREE files, selected by --product:
   --product chrombpnet      -> marderstein_chrombpnet.tsv.gz       (18 variant_effect cols; POINT index)
   --product flare           -> marderstein_flare.tsv.gz            (18 variant_effect cols; POINT index)
 
->>> TO-VERIFY (format assumptions) <<<
-No Synapse token is available in this environment, so the REAL per-file column layouts could not be
-inspected. Every source column name below is a DEFAULT that the user MUST verify against the real
-downloaded files and override with the corresponding --*-col flag (no code change needed for a
-column-name difference). The synthetic --sample run exercises the transform end-to-end so the logic
-is validated even though the real column names are unconfirmed.
+REAL peaks layout (VERIFIED against Synapse syn64716764): 5 study SUBFOLDERS, each with per-context
+ENCODE narrowPeak BEDs "<study>.<context>.overlap.peaks.bed.gz" (134 files, ~800 MB). narrowPeak is
+10 headerless cols: chrom(chr) start(0-based) end name score(0-1000) strand signalValue pValue qValue
+summit. Read directly with --peaks-dir (signalValue col 7 -> `score`, score_type=signal). cell_type =
+"<study>.<context>" from the filename; the study prefix drives the baked-in DEFAULT_STUDY_CONTEXT map
+(tissue/life_stage/assay; domcke tissue split from the filename). --context-map still overrides it.
+The variant_effect (chrombpnet/flare) source column names remain DEFAULTS overridable via --*-col.
+
+OUTPUT CONVENTIONS (applied to all three products):
+  - chrom NUMERIC: the `chrom` column, `peak_id`, and the `variant` token strip any "chr" prefix and
+    map X->23, Y->24, M/MT->25 (else the numeric contig). peak_id = "<numchrom>-<start>-<end>".
+  - EMPTY -> "NA": every empty/missing output cell is written as the literal string "NA".
 
 INDEXING CONTRACT (from the epic design — the results-api overlap/point engines depend on it):
   - open_chromatin (Product A): INTERVAL-indexed  `tabix -p bed` (-s1 -b2 -e3, distinct start/end).
     Point-indexing would make the API's variant-overlap fast path SILENTLY MISS peaks whose
     interval contains pos.
   - variant_effect (Product B, chrombpnet + flare): POINT-indexed  `tabix -s1 -b2 -e2`.
-  All files: `sort -k1,1 -k2,2n` before bgzip; chr-prefixed seqnames; exact canonical column order.
-  The API prepends `resource` itself; it is NOT written into the file.
+  All files: numeric-aware `sort -k1,1n -k2,2n` before bgzip (numeric seqnames group per tabix);
+  exact canonical column order. The API prepends `resource` itself; it is NOT written into the file.
 
-DATA ACCESS (documented; download is OFF by default and NOT run here):
-  Fetching the Synapse folders requires synapseclient + a SYNAPSE_AUTH_TOKEN in the environment.
-  This script assumes the input files are ALREADY downloaded (paths passed via flags). With
-  --download (and only then) it would call synapseclient — see synapse_download() for the exact,
-  documented commands. Never commit the token; put a fresh token in the runner env as a secret.
+DATA ACCESS (download is OFF by default):
+  synapseclient authenticates from ~/.synapseConfig (a SYNAPSE_AUTH_TOKEN env var, if set, wins).
+  With --download the peaks folder is pulled RECURSIVELY (synapseutils.syncFromSynapse) to
+  --download-dir, subfolders and all; --peaks-dir then reads those narrowPeak files. Without
+  --download the script assumes inputs are already present. The token is never logged/printed.
 
 STAGING (off by default): with --stage the .tsv.gz + .tsv.gz.tbi are uploaded to BOTH GCS buckets
   (finngen-commons + daly-genetics-results). Without --stage nothing is uploaded.
@@ -120,6 +126,36 @@ _HEART_KEYWORDS = [
 _FETAL_KEYWORDS = ["fetal", "fetus", "foetal", "prenatal", "embry", "developing", "gestation", "gw"]
 _ADULT_KEYWORDS = ["adult", "postnatal", "aging", "aged", "mature"]
 
+# ------------------------------------------------------------------------------------------------
+# DEFAULT study-level context map (VERIFIED against the real Synapse peaks layout syn64716764).
+# The 5 study subfolders each carry per-context narrowPeak files named "<study>.<context>...";
+# cell_type = "<study>.<context>" and the study prefix determines tissue/life_stage/assay. This is
+# baked in so tissue/life_stage/assay resolve with NO manual --context-map (which still overrides).
+# domcke_2020 mixes tissues, so its tissue is split from the filename (fetal_brain vs fetal_heart).
+# ------------------------------------------------------------------------------------------------
+DEFAULT_STUDY_CONTEXT: dict[str, tuple[str, str, str]] = {
+    # study        -> (tissue, life_stage, assay)
+    "ameen_2022":  ("heart", "fetal", "scATAC"),
+    "corces_2020": ("brain", "adult", "scATAC"),
+    "trevino_2021": ("brain", "fetal", "scATAC"),
+    "encode_2024": ("heart", "adult", "snATAC"),
+    # domcke_2020 handled specially below (life_stage/assay fixed, tissue from filename)
+}
+
+
+def _default_study_context(cell_type: str) -> tuple[str | None, str | None, str | None]:
+    """(tissue, life_stage, assay) from the study prefix of a "<study>.<context>" cell_type.
+
+    Returns None for any field that the default map cannot resolve so lower-priority resolvers
+    (an explicit --context-map, then the keyword parser) can still fill it in.
+    """
+    study = cell_type.split(".", 1)[0].lower()
+    if study == "domcke_2020":
+        lo = cell_type.lower()
+        tissue = "brain" if "fetal_brain" in lo else "heart" if "fetal_heart" in lo else None
+        return tissue, "fetal", "scATAC"
+    return DEFAULT_STUDY_CONTEXT.get(study, (None, None, None))
+
 
 def _match_keyword(label: str, keywords: list[str]) -> bool:
     lo = label.lower()
@@ -149,10 +185,13 @@ def parse_context(label: str) -> tuple[str, str]:
 
 
 def derive_context_map(contexts: list[str], args: argparse.Namespace) -> pl.DataFrame:
-    """cell_type -> (tissue, life_stage, assay). Override map wins; else keyword parser; else default.
+    """cell_type -> (tissue, life_stage, assay).
 
-    assay defaults to args.assay (scATAC) and can be overridden per context by the map's assay
-    column so the ENCODE adult-heart contexts are tagged snATAC.
+    Resolution precedence (highest first):
+      1. explicit --context-map override (per-context TSV)
+      2. baked-in DEFAULT_STUDY_CONTEXT (study prefix; domcke tissue split from filename)
+      3. free-text keyword parser
+      4. "unknown" (tissue/life_stage) / args.assay (assay) — never crashes
     """
     map_tissue: dict[str, str] = {}
     map_life: dict[str, str] = {}
@@ -171,10 +210,11 @@ def derive_context_map(contexts: list[str], args: argparse.Namespace) -> pl.Data
 
     rows = []
     for ct in contexts:
+        d_tissue, d_life, d_assay = _default_study_context(ct)
         kw_tissue, kw_life = parse_context(ct)
-        tissue = map_tissue.get(ct) or kw_tissue
-        life = map_life.get(ct) or kw_life
-        assay = map_assay.get(ct) or args.assay
+        tissue = map_tissue.get(ct) or d_tissue or kw_tissue or "unknown"
+        life = map_life.get(ct) or d_life or kw_life or "unknown"
+        assay = map_assay.get(ct) or d_assay or args.assay
         rows.append((ct, tissue, life, assay))
     return pl.DataFrame(
         rows,
@@ -234,14 +274,58 @@ def _opt_expr(df: pl.DataFrame, col: str | None, dtype=pl.Utf8) -> pl.Expr:
 # ------------------------------------------------------------------------------------------------
 # Product A: open_chromatin
 # ------------------------------------------------------------------------------------------------
+# narrowPeak files are named "<study>.<context>.overlap.peaks.bed.gz"; strip this to get cell_type.
+_PEAKS_SUFFIX = ".overlap.peaks.bed.gz"
+
+
+def load_peaks_dir(args: argparse.Namespace) -> pl.DataFrame:
+    """Read the REAL Synapse peaks layout: per-context ENCODE narrowPeak BEDs read directly.
+
+    Each "<study>.<context>.overlap.peaks.bed.gz" is a headerless 10-col narrowPeak:
+      chrom(1, chr-prefixed) start(2, 0-based) end(3) name(4) score/0-1000(5) strand(6)
+      signalValue(7) pValue(8) qValue(9) summit(10).
+    We keep chrom/start/end, use signalValue (col 7) as `score` (score_type=signal), and derive
+    cell_type = "<study>.<context>" from the filename (study = the "<study>." prefix). Files are
+    found recursively so the 5 study subfolders produced by --download are all picked up.
+    """
+    root = Path(args.peaks_dir)
+    if not root.exists():
+        raise SystemExit(f"--peaks-dir {root} does not exist (run --download first, or fix the path)")
+    files = sorted(root.rglob(args.peaks_glob))
+    if not files:
+        raise SystemExit(f"no files matching '{args.peaks_glob}' under {root}")
+    print(f"  --peaks-dir: {len(files)} narrowPeak files under {root}")
+    frames = []
+    for fp in files:
+        name = fp.name
+        cell_type = name[:-len(_PEAKS_SUFFIX)] if name.endswith(_PEAKS_SUFFIX) else re.sub(r"\.bed(\.gz)?$", "", name)
+        df = pl.read_csv(
+            fp, separator="\t", has_header=False, infer_schema_length=10_000,
+            columns=[0, 1, 2, 6], new_columns=["chrom", "start", "end", "score"],
+        )
+        df = df.with_columns(
+            pl.col("start").cast(pl.Int64),
+            pl.col("end").cast(pl.Int64),
+            pl.col("score").cast(pl.Float64, strict=False),
+            pl.lit(cell_type).alias("cell_type"),
+        )
+        if args.min_score is not None:
+            df = df.filter(pl.col("score") > args.min_score)
+        frames.append(df.select("chrom", "start", "end", "cell_type", "score"))
+    return pl.concat(frames, how="vertical", rechunk=True)
+
+
 def load_peaks(args: argparse.Namespace) -> pl.DataFrame:
     """Read peak calls into long rows: one per (peak, context) with chrom/start/end/cell_type/score.
 
-    Two accepted input shapes (TO-VERIFY which the release ships):
+    Three accepted input shapes:
+      --peaks-dir   DIR of per-context narrowPeak "*.overlap.peaks.bed.gz" (the REAL Synapse layout).
       --peaks       LONG TSV: one row per (peak, context); coords + a context column + optional score.
       --peak-matrix MATRIX TSV (catlas-style): one row per peak, one value column per context;
                     unpivoted here (kept where value > --min-score).
     """
+    if args.peaks_dir:
+        return load_peaks_dir(args)
     if args.peak_matrix:
         df = pl.read_csv(args.peak_matrix, separator="\t", infer_schema_length=10_000)
         if args.peak_id_col:
@@ -281,7 +365,10 @@ def load_peaks(args: argparse.Namespace) -> pl.DataFrame:
 
 
 def build_open_chromatin(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
-    df = long.with_columns(_peak_key().alias("peak_id"))
+    # convention A: chrom + peak_id are NUMERIC (chrX=23, chrY=24, chrM/MT=25). load_peaks yields a
+    # chr-prefixed chrom; normalize it first so peak_id = "<numchrom>-<start>-<end>" (e.g. 23-100-200).
+    df = long.with_columns(_numeric_chrom_expr().alias("chrom"))
+    df = df.with_columns(_peak_key().alias("peak_id"))
     ctx_map = derive_context_map(df["cell_type"].unique().to_list(), args)
     df = df.join(ctx_map, on="cell_type", how="left")
     df = df.with_columns(
@@ -314,12 +401,13 @@ def _load_variant_coords(df: pl.DataFrame, args: argparse.Namespace) -> pl.DataF
     )
 
 
-def _numeric_chrom_expr() -> pl.Expr:
-    """Numeric chromosome token from the chr-prefixed chrom column: strip 'chr', then X=23, Y=24,
-    M/MT=25, else the numeric chromosome as-is. Mirrors CHR_STRING_TO_INT_SQL / chrom_to_int() in
-    genetics-results-db so the `variant` token matches the variant_effect table's chr INT64 encoding.
+def _numeric_chrom_expr(col: str = "chrom") -> pl.Expr:
+    """Numeric chromosome token from a chrom column: strip 'chr', then X=23, Y=24, M/MT=25, else the
+    numeric chromosome as-is. Mirrors CHR_STRING_TO_INT_SQL / chrom_to_int() in genetics-results-db so
+    the output `chrom`/`peak_id`/`variant` tokens match the tables' chr INT64 encoding. Result is the
+    numeric token as a string (kept as string so nulls / any unexpected contig survive untouched).
     """
-    base = pl.col("chrom").cast(pl.Utf8).str.replace("(?i)^chr", "").str.to_uppercase()
+    base = pl.col(col).cast(pl.Utf8).str.replace("(?i)^chr", "").str.to_uppercase()
     return (
         pl.when(base == "X").then(pl.lit("23"))
         .when(base == "Y").then(pl.lit("24"))
@@ -338,9 +426,15 @@ def _variant_string(numeric_chrom: bool) -> pl.Expr:
 
 
 def _finalize_variant_effect(df: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
-    """Add the `variant` column (numeric-chrom by default) and select the 18 canonical columns."""
+    """Add the `variant` column and select the 18 canonical columns.
+
+    convention A: the output `chrom` column is made NUMERIC (chrX=23 etc.), consistent with the
+    numeric-chrom `variant` token, so tabix seqnames match the variant_effect table's chr encoding.
+    """
     variant = _variant_string(numeric_chrom=not args.variant_keep_chr)
     df = df.with_columns(variant.alias("variant"))
+    if not args.variant_keep_chr:
+        df = df.with_columns(_numeric_chrom_expr().alias("chrom"))
     return df.select(VE_COLUMNS)
 
 
@@ -463,21 +557,39 @@ def build_flare(args: argparse.Namespace) -> pl.DataFrame:
 # ------------------------------------------------------------------------------------------------
 # Writers (distinct index modes) + staging
 # ------------------------------------------------------------------------------------------------
-def _shell_quote(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
-
-
 def _write_sorted_bgzip(df: pl.DataFrame, columns: list[str], output_path: str) -> str:
-    """sort -k1,1 -k2,2n -> bgzip; header (first token '#'-prefixed) kept on top. Returns path."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    df.write_csv(body, separator="\t", include_header=False, null_value="")
-    header = "#" + "\t".join(columns)
-    pipeline = (
-        f'( printf "%s\\n" {_shell_quote(header)}; '
-        f'LC_ALL=C sort -k1,1 -k2,2n {_shell_quote(str(body))} ) | bgzip -c > {_shell_quote(output_path)}'
+    """numeric-aware sort -> bgzip; header (first token '#'-prefixed) kept on top. Returns path.
+
+    convention B: every empty/missing cell is written as the literal "NA" (nulls via null_value, and
+    any residual empty strings coerced to null first) so no output cell is ever the empty string.
+
+    Sorting is done IN-MEMORY by (numeric chrom, position) — chrom is the numeric token (chrX=23) so
+    all records of a seqname group contiguously and positions ascend within, exactly as tabix needs.
+    The sorted rows are streamed straight into `bgzip` (no multi-GB uncompressed temp file and no
+    external `sort` disk-spill), which matters for large atlases on tight disks.
+    """
+    df = df.with_columns(
+        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0)
+        .then(None)
+        .otherwise(pl.col(c))
+        .alias(c)
+        for c in df.columns
     )
-    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
+    # columns[1] is the position column (start for open_chromatin, pos for variant_effect).
+    df = df.sort(
+        by=[pl.col("chrom").cast(pl.Int64, strict=False), pl.col(columns[1]).cast(pl.Int64, strict=False)],
+        nulls_last=True,
+    )
+    header = ("#" + "\t".join(columns) + "\n").encode()
+    with open(output_path, "wb") as out_fh:
+        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
+        assert proc.stdin is not None
+        proc.stdin.write(header)
+        df.write_csv(proc.stdin, separator="\t", include_header=False, null_value="NA")
+        proc.stdin.close()
+        rc = proc.wait()
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, "bgzip -c")
     return output_path
 
 
@@ -507,35 +619,43 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 
 
 def synapse_download(args: argparse.Namespace) -> None:
-    """Documented Synapse fetch — OFF by default and INTENTIONALLY not exercised here (no token).
+    """Fetch the Synapse folder for --product RECURSIVELY (peaks has per-study SUBFOLDERS).
 
-    With --download and SYNAPSE_AUTH_TOKEN in the environment this would fetch the folders below.
-    The exact folder for the current --product is the one this script actually consumes; the others
-    are listed for provenance. Enumerate syn73770440's children too (second release entity).
+    Auth: synapseclient reads ~/.synapseConfig by default; a SYNAPSE_AUTH_TOKEN in the environment
+    takes precedence if set. The token is NEVER printed. The peaks folder syn64716764 holds 5 study
+    subfolders of per-context narrowPeak files, so we use synapseutils.syncFromSynapse to walk the
+    whole tree (a flat getChildren() would miss the subfolders).
     """
     folder = {
-        "open_chromatin": "syn64716764",  # peaks
+        "open_chromatin": "syn64716764",  # peaks (5 study subfolders of narrowPeak BEDs)
         "chrombpnet": "syn64713923",      # predictions (ChromBPNet variant scores)
         "flare": "syn64717038",           # FLARE variant scores
     }[args.product]
-    print("=== Synapse download (documented) ===")
-    print(f"  product {args.product} <- Synapse folder {folder}  (project syn64693551; also syn73770440)")
-    print("  requires: pip install synapseclient ; export SYNAPSE_AUTH_TOKEN=<fresh token>")
-    print("  equivalent CLI: synapse get -r " + folder + " --downloadLocation <DATA_DIR>")
+    dest = args.download_dir or "."
+    print("=== Synapse download (recursive) ===")
+    print(f"  product {args.product} <- Synapse folder {folder}  (project syn64693551)")
     if not args.download:
         print("  --download NOT set: skipping actual download (this is the default).")
         return
+
     import os
-    token = os.environ.get("SYNAPSE_AUTH_TOKEN")
-    if not token:
-        raise SystemExit("--download set but SYNAPSE_AUTH_TOKEN is not in the environment.")
-    import synapseclient  # imported lazily so the script runs without the dep when not downloading
+    import time
+
+    import synapseclient   # imported lazily so the script runs without the dep when not downloading
+    import synapseutils
+
+    Path(dest).mkdir(parents=True, exist_ok=True)
     syn = synapseclient.Synapse()
-    syn.login(authToken=token)
-    dest = args.download_dir or "."
-    for child in syn.getChildren(folder):
-        syn.get(child["id"], downloadLocation=dest)
-    print(f"  downloaded folder {folder} -> {dest}")
+    token = os.environ.get("SYNAPSE_AUTH_TOKEN")
+    if token:
+        syn.login(authToken=token)            # token never logged/printed
+    else:
+        syn.login()                           # reads ~/.synapseConfig
+    t0 = time.time()
+    results = synapseutils.syncFromSynapse(syn, folder, path=dest)
+    elapsed = time.time() - t0
+    total_bytes = sum(f.stat().st_size for f in Path(dest).rglob("*") if f.is_file())
+    print(f"  downloaded {len(results)} files ({total_bytes / 1e6:.1f} MB) -> {dest} in {elapsed:.0f}s")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -547,6 +667,8 @@ def parse_args() -> argparse.Namespace:
                    help="which of the three outputs to build")
 
     # Product A: peaks
+    p.add_argument("--peaks-dir", help="[open_chromatin] DIR of per-context narrowPeak '*.overlap.peaks.bed.gz' (REAL Synapse layout; searched recursively)")
+    p.add_argument("--peaks-glob", default="*.overlap.peaks.bed.gz", help="[open_chromatin] glob for --peaks-dir narrowPeak files (default: *.overlap.peaks.bed.gz)")
     p.add_argument("--peaks", help="[open_chromatin] LONG peaks TSV (one row per peak x context)")
     p.add_argument("--peak-matrix", help="[open_chromatin] MATRIX peaks TSV (peak x context value columns)")
     p.add_argument("--peak-id-col", help="[open_chromatin] single interval-id column (e.g. chr1:1000-2000)")
@@ -623,8 +745,8 @@ def run_product(args: argparse.Namespace) -> None:
         synapse_download(args)
 
     if args.product == "open_chromatin":
-        if not (args.peaks or args.peak_matrix):
-            raise SystemExit("--product open_chromatin needs --peaks or --peak-matrix (or use --sample).")
+        if not (args.peaks_dir or args.peaks or args.peak_matrix):
+            raise SystemExit("--product open_chromatin needs --peaks-dir, --peaks or --peak-matrix (or use --sample).")
         print(f"Building {DATASET_OPEN} ...")
         out = build_open_chromatin(load_peaks(args), args)
         assert out.columns == OC_COLUMNS, f"open_chromatin column order mismatch: {out.columns}"
@@ -700,15 +822,21 @@ def _sample_open_chromatin(tmpdir: Path) -> None:
     assert tl["adult_heart_Ventricular_CM"] == ("heart", "adult", "scATAC"), tl
     assert tl["ENCODE_adult_heart_snATAC_CM"] == ("heart", "adult", "snATAC"), tl  # assay from map
     print(f"  context parsing (brain/heart x fetal/adult + ENCODE snATAC): OK")
+    # convention A: chrom + peak_id are NUMERIC (chrX -> 23), no "chr" prefix
+    assert all(not c.startswith("chr") for c in out["chrom"].to_list()), out["chrom"].to_list()
+    pk = {r["chrom"]: r["peak_id"] for r in out.iter_rows(named=True)}
+    assert pk["23"] == "23-900900-901400", pk  # chrX row -> numeric peak_id
+    assert out.filter(pl.col("chrom") == "23").height == 1, "chrX should map to numeric chrom 23"
+    print(f"  numeric chrom + peak_id (chrX->23, peak_id 23-900900-901400): OK")
     with pl.Config(tbl_cols=-1, tbl_width_chars=240, fmt_str_lengths=40):
         print(out.head())
 
     out_path = str(tmpdir / f"{DATASET_OPEN}.sample.tsv.gz")
     write_interval(out, out_path)
     # INTERVAL index: a position STRICTLY INSIDE a peak must be returned (point index would miss it)
-    q = subprocess.run(["tabix", out_path, "chr1:200300-200400"], capture_output=True, text=True, check=True)
+    q = subprocess.run(["tabix", out_path, "1:200300-200400"], capture_output=True, text=True, check=True)
     assert q.stdout.strip(), "INTERVAL overlap query returned nothing — wrong index mode"
-    print(f"  INTERVAL overlap query chr1:200300-200400 (inside chr1:200200-200700): OK")
+    print(f"  INTERVAL overlap query 1:200300-200400 (inside 1:200200-200700): OK")
 
 
 def _sample_chrombpnet(tmpdir: Path) -> None:
@@ -767,7 +895,8 @@ def _sample_chrombpnet(tmpdir: Path) -> None:
     assert out.columns == VE_COLUMNS, out.columns
     # `variant` is canonical numeric-chrom (no "chr" prefix); file's chrom column stays chr-prefixed
     assert set(out["variant"].to_list()) and all(not v.startswith("chr") for v in out["variant"].to_list()), out["variant"].to_list()
-    assert all(c.startswith("chr") for c in out["chrom"].to_list()), out["chrom"].to_list()
+    # convention A: chrom column is numeric too, consistent with the numeric-chrom variant token
+    assert all(not c.startswith("chr") for c in out["chrom"].to_list()), out["chrom"].to_list()
     # sub-threshold (variant,context) rows dropped
     kept = {(r["variant"], r["cell_type"]) for r in out.iter_rows(named=True)}
     assert ("1:1000:A:G", "adult_brain_Astrocyte") not in kept, "sub-threshold row NOT dropped"
@@ -788,11 +917,11 @@ def _sample_chrombpnet(tmpdir: Path) -> None:
 
     out_path = str(tmpdir / f"{DATASET_CHROMBPNET}.sample.tsv.gz")
     write_point(out, out_path)
-    # POINT index: exact-position query
-    q = subprocess.run(["tabix", out_path, "chr1:1000-1000"], capture_output=True, text=True, check=True)
+    # POINT index: exact-position query (numeric seqname)
+    q = subprocess.run(["tabix", out_path, "1:1000-1000"], capture_output=True, text=True, check=True)
     assert q.stdout.strip(), "POINT exact-pos query returned nothing — wrong index mode"
     assert "adult_brain_Astrocyte" not in q.stdout, "dropped row leaked into the file"
-    print(f"  POINT exact-pos query chr1:1000-1000: OK")
+    print(f"  POINT exact-pos query 1:1000-1000: OK")
 
 
 def _sample_flare(tmpdir: Path) -> None:
@@ -824,20 +953,20 @@ def _sample_flare(tmpdir: Path) -> None:
         assert r["cell_type"] is None and r["tissue"] is None and r["life_stage"] is None, r
         assert r["model"] == MODEL_FLARE and r["score_type"] == SCORE_TYPE_FLARE, r
     assert out["quantile_rank"].null_count() == 0, "quantile_rank should be computed globally"
-    # canonical numeric-chrom `variant`: chr1 -> "1:...", chrX -> "23:..."; chrom column stays chr-prefixed
+    # convention A: numeric-chrom `variant` AND numeric `chrom` column: chr1 -> "1", chrX -> "23"
     var_by_chrom = {r["chrom"]: r["variant"] for r in out.iter_rows(named=True)}
-    assert var_by_chrom["chr1"].startswith("1:"), var_by_chrom
-    assert var_by_chrom["chrX"] == "23:100:A:T", var_by_chrom
-    assert all(c.startswith("chr") for c in out["chrom"].to_list()), out["chrom"].to_list()
-    print(f"  pan-context (cell_type/tissue/life_stage empty) + global quantile_rank + numeric-chrom variant (chrX->23): OK")
+    assert var_by_chrom["1"].startswith("1:"), var_by_chrom
+    assert var_by_chrom["23"] == "23:100:A:T", var_by_chrom
+    assert all(not c.startswith("chr") for c in out["chrom"].to_list()), out["chrom"].to_list()
+    print(f"  pan-context (cell_type/tissue/life_stage empty) + global quantile_rank + numeric chrom (chrX->23): OK")
     with pl.Config(tbl_cols=-1, tbl_width_chars=240, fmt_str_lengths=40):
         print(out.head())
 
     out_path = str(tmpdir / f"{DATASET_FLARE}.sample.tsv.gz")
     write_point(out, out_path)
-    q = subprocess.run(["tabix", out_path, "chr1:1500-1500"], capture_output=True, text=True, check=True)
+    q = subprocess.run(["tabix", out_path, "1:1500-1500"], capture_output=True, text=True, check=True)
     assert q.stdout.strip(), "POINT exact-pos query returned nothing — wrong index mode"
-    print(f"  POINT exact-pos query chr1:1500-1500: OK")
+    print(f"  POINT exact-pos query 1:1500-1500: OK")
 
 
 def run_sample() -> None:

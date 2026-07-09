@@ -64,9 +64,10 @@ convention (cf. munge_hpa.py `#dataset`, sumstats `#chr`): it makes the header a
 so `tabix -p bed` skips it while the logical column name stays `chrom`.
 
 Field rules for EpiMap:
-  chrom            chr-prefixed (chr1..chr22, chrX/chrY); REQUIRED by the tabix indexing contract.
+  chrom            NUMERIC, no "chr" prefix (1..22, X->23, Y->24, M/MT->25); REQUIRED by the
+                   tabix indexing contract.
   start,end        ChromHMM segment interval, hg38, BED 0-based half-open (verbatim from source).
-  peak_id          f"{chrom}-{start}-{end}".
+  peak_id          f"{chrom}-{start}-{end}" with the numeric chrom (e.g. "23-100-200").
   dataset          "epimap_open_chromatin"  (drives resource mapping to epimap).
   cell_type        verbatim EpiMap biosample id (e.g. "BSS00001").
   tissue           from --biosample-metadata, else "unknown".
@@ -258,9 +259,16 @@ def biosample_from_path(path: str, override: str | None) -> str:
     return m.group(1) if m else name.split(".")[0]
 
 
-def _chrom_prefix(expr: pl.Expr) -> pl.Expr:
-    e = expr.cast(pl.Utf8)
-    return pl.when(e.str.starts_with("chr")).then(e).otherwise("chr" + e)
+def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
+    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25)."""
+    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
+    up = e.str.to_uppercase()
+    return (
+        pl.when(up == "X").then(pl.lit("23"))
+        .when(up == "Y").then(pl.lit("24"))
+        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
+        .otherwise(e)
+    )
 
 
 def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
@@ -275,7 +283,7 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
         raise ValueError(f"{path}: expected >= {max(4, state_col)} BED columns, got {len(cols)}")
 
     df = df.select(
-        _chrom_prefix(pl.col(cols[0])).alias("chrom"),
+        _numeric_chrom(pl.col(cols[0])).alias("chrom"),
         pl.col(cols[1]).cast(pl.Int64).alias("start"),
         pl.col(cols[2]).cast(pl.Int64).alias("end"),
         pl.col(cols[state_col - 1]).cast(pl.Utf8).alias("_state_raw"),
@@ -296,7 +304,7 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
 def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     parsed = df.select(pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")).unnest("_g")
     return df.with_columns(
-        _chrom_prefix(parsed["1"]).alias("chrom"),
+        _numeric_chrom(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
     )
@@ -305,7 +313,7 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
 def _normalize_link_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
     return df.with_columns(
-        _chrom_prefix(pl.col("chrom")).alias("chrom"),
+        _numeric_chrom(pl.col("chrom")).alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
     )
@@ -420,10 +428,11 @@ def load_all_calls(files: list[str], args: argparse.Namespace) -> pl.DataFrame:
 
 
 def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as empty."""
+    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as "NA"."""
     tmpdir = tempfile.mkdtemp()
     body = Path(tmpdir) / "body.tsv"
-    df.write_csv(body, separator="\t", include_header=False, null_value="")
+    # every empty/missing cell serialized as the literal "NA"
+    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
 
     header = "#" + "\t".join(OUTPUT_COLUMNS)
     pipeline = (
@@ -456,13 +465,15 @@ def _synthetic_inputs(tmpdir: Path) -> tuple[list[str], str, str]:
     "ZNF/Rpts" label forms; metadata tissue + fetal life_stage; a biosample absent from metadata
     (-> unknown/adult); a multi-gene enhancer link (joint pairing).
     """
-    # BSS00001: TssA(incl,name), Quies(excl,name), 9_EnhA1(incl,numbered->EnhA1), ZNF/Rpts(excl,alias)
+    # BSS00001: TssA(incl,name), Quies(excl,name), 9_EnhA1(incl,numbered->EnhA1), ZNF/Rpts(excl,alias),
+    #           plus a chrX TssA(incl) to exercise the numeric chrX -> 23 mapping
     b1 = tmpdir / "BSS00001_18_CALLS_segments.bed"
     b1.write_text(
         "chr1\t778420\t779420\tTssA\t0\t.\t778420\t779420\t255,0,0\n"
         "chr1\t780420\t826620\tQuies\t0\t.\t780420\t826620\t255,255,255\n"
         "chr1\t903820\t904020\t9_EnhA1\t0\t.\t903820\t904020\t255,195,77\n"
         "chr2\t500000\t500200\tZNF/Rpts\t0\t.\t500000\t500200\t102,205,170\n"
+        "chrX\t155000\t155300\tTssA\t0\t.\t155000\t155300\t255,0,0\n"
     )
     # BSS00099: EnhA2(incl,name), 5(excl,numeric->Tx), EnhBiv(incl,name), E18(excl,numeric->Quies)
     b2 = tmpdir / "BSS00099_18_CALLS_segments.bed"
@@ -543,8 +554,16 @@ def run_sample() -> None:
     assert ls["BSS00500"] == ("unknown", "adult"), ls
     print(f"  tissue/life_stage derivation: OK  {ls}")
 
+    # chrom / peak_id are numeric with chrX -> 23
+    chroms = set(out["chrom"].to_list())
+    assert chroms <= {"1", "2", "3", "23"}, chroms
+    assert "23" in chroms, f"chrX should map to 23; got {chroms}"
+    xrow = out.filter(pl.col("chrom") == "23").row(0, named=True)
+    assert xrow["peak_id"] == "23-155000-155300", xrow["peak_id"]
+    print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
+
     # multi-gene enhancer link joined with joint symbol/id pairing
-    linked = out.filter(pl.col("peak_id") == "chr1-903820-904020").row(0, named=True)
+    linked = out.filter(pl.col("peak_id") == "1-903820-904020").row(0, named=True)
     assert linked["target_gene"] == "NOC2L,SAMD11", linked["target_gene"]
     assert linked["target_gene_id"] == "ENSG00000188976,ENSG00000187634", linked["target_gene_id"]
     pairs = dict(zip(linked["target_gene"].split(","), linked["target_gene_id"].split(",")))
@@ -558,10 +577,22 @@ def run_sample() -> None:
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
     write_open_chromatin(out, out_path)
 
-    q = subprocess.run(["tabix", out_path, "chr1:903900-903950"], capture_output=True, text=True, check=True)
-    print("\ntabix overlap query chr1:903900-903950 ->")
+    # empty cells serialize as the literal "NA" (score is presence-based -> NA); 18 columns per row
+    import gzip
+    with gzip.open(out_path, "rt") as fh:
+        body_lines = [ln for ln in fh if not ln.startswith("#")]
+    assert all(len(ln.rstrip("\n").split("\t")) == 18 for ln in body_lines), "not 18 columns"
+    assert any("\tNA\t" in ln for ln in body_lines), "no NA emitted"
+    print(f"  empty cells rendered as NA, 18 columns per row: OK ({len(body_lines)} rows)")
+
+    q = subprocess.run(["tabix", out_path, "1:903900-903950"], capture_output=True, text=True, check=True)
+    print("\ntabix overlap query 1:903900-903950 ->")
     print(q.stdout.rstrip() or "  (no rows)")
     assert q.stdout.strip(), "interval query returned nothing — indexing is wrong"
+    qx = subprocess.run(["tabix", out_path, "23:155100-155200"], capture_output=True, text=True, check=True)
+    print("tabix overlap query 23:155100-155200 (chrX) ->")
+    print(qx.stdout.rstrip() or "  (no rows)")
+    assert qx.stdout.strip(), "chrX (23) interval query returned nothing — indexing is wrong"
     print("\n=== SAMPLE OK (no upload performed) ===")
 
 

@@ -55,9 +55,10 @@ convention (cf. munge_hpa.py `#dataset`, sumstats `#chr`): it makes the header a
 so `tabix -p bed` skips it while the logical column name stays `chrom`.
 
 Field rules for ROSMAP / Xiong 2023 (see task genetics-results-suite-bzl.18):
-  chrom            chr-prefixed hg38 (chr1..chr22, chrX/chrY); REQUIRED by the tabix contract.
+  chrom            NUMERIC hg38, no "chr" prefix (1..22, X->23, Y->24, M/MT->25); REQUIRED by
+                   the tabix contract.
   start,end        peak interval, hg38, BED 0-based half-open (kept verbatim; no liftOver).
-  peak_id          f"{chrom}-{start}-{end}".
+  peak_id          f"{chrom}-{start}-{end}" with the numeric chrom (e.g. "23-100-200").
   dataset          "rosmap_open_chromatin"  (drives resource mapping to rosmap_brain).
   cell_type        verbatim brain cell-type / subtype label (from filename or a column).
   tissue           "brain" (prefrontal cortex; override with --tissue).
@@ -175,28 +176,35 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
+    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25)."""
+    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
+    up = e.str.to_uppercase()
+    return (
+        pl.when(up == "X").then(pl.lit("23"))
+        .when(up == "Y").then(pl.lit("24"))
+        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
+        .otherwise(e)
+    )
+
+
 def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
-    """Parse chrom/start/end from a single id column like chr1:1000-2000."""
+    """Parse chrom/start/end from a single id column like chr1:1000-2000 (chrom -> numeric)."""
     parsed = df.select(
         pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")
     ).unnest("_g")
-    chrom = parsed["1"]
-    chrom = pl.when(chrom.str.starts_with("chr")).then(chrom).otherwise("chr" + chrom)
     return df.with_columns(
-        chrom.alias("chrom"),
+        _numeric_chrom(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
     )
 
 
 def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
-    """Rename explicit coordinate columns to chrom/start/end and enforce chr-prefix + int coords."""
+    """Rename explicit coordinate columns to chrom/start/end and enforce numeric chrom + int coords."""
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
     return df.with_columns(
-        pl.when(pl.col("chrom").cast(pl.Utf8).str.starts_with("chr"))
-        .then(pl.col("chrom").cast(pl.Utf8))
-        .otherwise("chr" + pl.col("chrom").cast(pl.Utf8))
-        .alias("chrom"),
+        _numeric_chrom(pl.col("chrom")).alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
     )
@@ -365,10 +373,11 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
 
 
 def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as empty."""
+    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as "NA"."""
     tmpdir = tempfile.mkdtemp()
     body = Path(tmpdir) / "body.tsv"
-    df.write_csv(body, separator="\t", include_header=False, null_value="")
+    # every empty/missing cell serialized as the literal "NA"
+    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
 
     header = "#" + "\t".join(OUTPUT_COLUMNS)
     # prepend header AFTER sorting the body (header must stay on top, not be sorted)
@@ -470,8 +479,16 @@ def run_sample() -> None:
     cts = sorted(set(out["cell_type"].unique().to_list()))
     print(f"  cell_type labels derived from filename: {cts}")
 
+    # chrom / peak_id are numeric with chrX -> 23
+    chroms = set(out["chrom"].to_list())
+    assert chroms <= {"1", "2", "23"}, chroms
+    assert "23" in chroms, f"chrX should map to 23; got {chroms}"
+    xrow = out.filter(pl.col("chrom") == "23").row(0, named=True)
+    assert xrow["peak_id"] == "23-900900-901400", xrow["peak_id"]
+    print(f"  numeric chrom (chrX -> 23): OK  chroms={sorted(chroms)}  peak_id={xrow['peak_id']}")
+
     # verify joint (positional) gene/id pairing on the multi-gene peak
-    row = out.filter((pl.col("peak_id") == "chr1-200200-200700") & (pl.col("condition") == "AD")).row(0, named=True)
+    row = out.filter((pl.col("peak_id") == "1-200200-200700") & (pl.col("condition") == "AD")).row(0, named=True)
     genes = row["target_gene"].split(",")
     ids = row["target_gene_id"].split(",")
     assert len(genes) == len(ids) == 2, f"expected 2 paired genes, got {genes} / {ids}"
@@ -486,12 +503,25 @@ def run_sample() -> None:
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
     write_open_chromatin(out, out_path)
 
-    q = subprocess.run(["tabix", out_path, "chr1:200300-200400"], capture_output=True, text=True, check=True)
-    print("\ntabix overlap query chr1:200300-200400 ->")
+    # empty cells serialize as the literal "NA" (n_cells/cell_ontology_id/uberon_id and, on the
+    # union peak, target_gene*); every row still has 18 columns
+    import gzip
+    with gzip.open(out_path, "rt") as fh:
+        body_lines = [ln for ln in fh if not ln.startswith("#")]
+    assert all(len(ln.rstrip("\n").split("\t")) == 18 for ln in body_lines), "not 18 columns"
+    assert any("\tNA\t" in ln or ln.rstrip("\n").endswith("\tNA") for ln in body_lines), "no NA emitted"
+    print(f"  empty cells rendered as NA, 18 columns per row: OK ({len(body_lines)} rows)")
+
+    q = subprocess.run(["tabix", out_path, "1:200300-200400"], capture_output=True, text=True, check=True)
+    print("\ntabix overlap query 1:200300-200400 ->")
     print(q.stdout.rstrip() or "  (no rows)")
     assert q.stdout.strip(), "interval query returned nothing — indexing is wrong"
     # peak 200200-200700 must be returned for both AD and control (overlap, not point)
-    assert q.stdout.count("chr1-200200-200700") >= 2, "interval index missed a peak containing pos"
+    assert q.stdout.count("1-200200-200700") >= 2, "interval index missed a peak containing pos"
+    qx = subprocess.run(["tabix", out_path, "23:901000-901100"], capture_output=True, text=True, check=True)
+    print("tabix overlap query 23:901000-901100 (chrX) ->")
+    print(qx.stdout.rstrip() or "  (no rows)")
+    assert qx.stdout.strip(), "chrX (23) interval query returned nothing — indexing is wrong"
     print("\n=== SAMPLE OK (no upload performed) ===")
 
 
