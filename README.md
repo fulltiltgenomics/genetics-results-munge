@@ -11,6 +11,7 @@ Currently, processing of fine-mapping results from FinnGen, Open Targets and eQT
 - [scripts](#scripts)
   - [Open Targets](#open-targets)
   - [eQTL Catalogue](#eqtl-catalogue)
+  - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
 - [outputs](#outputs)
 - [variant annotation](#variant-annotation)
 
@@ -125,6 +126,21 @@ eQTL_Catalogue_R7 \
 data \
 data/finnge_R12_annotated_variants_v1.small.gz
 ```
+
+### caQTL gene-indexed credible sets
+
+The API's `/credible_sets_by_qtl_gene/{gene}` endpoint reads a gene-indexed copy of a QTL credible set file (`*.qtl.tsv.gz`) that carries the trait's gene coordinates in `trait_chr`/`trait_start`/`trait_end`. For eQTL/pQTL the trait is itself a gene (`create_gene_indexed_qtl_file.py`), but the FinnGen caQTL trait is a chromatin peak, so the gene link comes from the Open4Gene peak-to-gene table: each credible set row is joined to the genes its peak is linked to **in the same cell type** and emitted once per linked gene, with `trait` set to the linked gene symbol and `trait_original` keeping the peak id.
+
+Run inside the Docker container built above (needs ~15 GB free disk in the data dir):
+
+```
+docker run -v $(pwd):/munge -it genetics-results-munge /bin/bash
+
+cd /munge
+scripts/create_caqtl_gene_indexed_qtl_file.sh data/caqtl
+```
+
+Inputs (credible sets, Open4Gene results, GENCODE v32 gene coordinates) are downloaded from GCS if not already in the data dir. Gene coordinates MUST come from the GENCODE version configured for the dataset in the API (`gencode_version: 32` for `finngen_caqtl`), because the API filters returned rows by an exact match on the trait start/end positions. Add `--stage` to upload the result and its tabix index to both profile buckets.
 
 ## outputs
 
