@@ -12,6 +12,7 @@ Currently, processing of fine-mapping results from FinnGen, Open Targets and eQT
   - [Open Targets](#open-targets)
   - [eQTL Catalogue](#eqtl-catalogue)
   - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
+  - [gene-indexed peak-to-gene table](#gene-indexed-peak-to-gene-table)
 - [outputs](#outputs)
 - [variant annotation](#variant-annotation)
 
@@ -141,6 +142,19 @@ scripts/create_caqtl_gene_indexed_qtl_file.sh data/caqtl
 ```
 
 Inputs (credible sets, Open4Gene results, GENCODE v32 gene coordinates) are downloaded from GCS if not already in the data dir. Gene coordinates MUST come from the GENCODE version configured for the dataset in the API (`gencode_version: 32` for `finngen_caqtl`), because the API filters returned rows by an exact match on the trait start/end positions. Add `--stage` to upload the result and its tabix index to both profile buckets.
+
+### gene-indexed peak-to-gene table
+
+The Open4Gene peak-to-gene table is tabix-indexed on peak coordinates, which serves the API's `/peak_to_genes/{peak_id}` endpoint but has no inverse. This script writes a second copy with the linked gene's locus appended as three trailing columns and sorted on them, which backs `/gene_to_peaks/{gene}`:
+
+```
+docker run -v $(pwd):/munge -it genetics-results-munge /bin/bash
+
+cd /munge
+scripts/create_gene_indexed_peak_gene_file.sh data/atacseq
+```
+
+The appended columns exist only for the index — the API drops them and re-derives gene coordinates from the GENCODE version the request asks for, so both endpoints return the same columns. Add `--stage` to upload to both profile buckets.
 
 ## outputs
 
