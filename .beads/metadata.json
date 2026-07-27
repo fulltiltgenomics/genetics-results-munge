@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "genetics_results_munge",
+  "project_id": "e2144e52-c3c4-4a66-a5b7-7c401dc61ee3"
+}
