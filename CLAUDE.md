@@ -45,9 +45,11 @@ A doc is stale the moment it *enumerates* something the code no longer matches.
 Counts and lists rot silently — dataset lists, column tables, helper-function lists,
 per-dataset invocation tables — so re-derive them from the code rather than trusting them.
 
-The hook lives in `.git/hooks/pre-commit`, which is **not** version controlled: this repo
-has no `core.hooksPath` and no tracked hook directory, so a fresh clone has no hook until
-someone recreates it. It only needs to run `scripts/check-doc-drift.sh || true` and exit 0.
+The hook lives in `.beads/hooks/pre-commit`, which **is** version controlled, so a fresh
+clone gets it as soon as `core.hooksPath` points at `.beads/hooks` (`bd init` sets that;
+`bd` re-points it on checkout). The doc-drift call sits after the
+`# --- END BEADS INTEGRATION ... ---` marker, never inside the beads-managed fence, which
+beads rewrites. It only needs to run `scripts/check-doc-drift.sh || true`.
 
 
 # Cross-repo documentation
