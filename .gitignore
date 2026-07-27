@@ -2,3 +2,4 @@ data
 *.tsv
 *.tsv.gz
 *.tsv.gz.tbi
+__pycache__/
