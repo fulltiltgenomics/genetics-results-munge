@@ -142,8 +142,9 @@ member if it satisfies any of:
 1. it is the lead (`#variant == locus_id`), **or**
 2. `r2_to_lead > r2_high_ld_thres` (default **0.95**) — the high-LD exception: a variant
    in near-perfect LD with the lead is always kept regardless of its p-value, **or**
-3. `|L − mlog10p| < mlog10p_diff` (default **2**) **and** `r2_to_lead > r2_to_lead_thres`
-   (default **0.6**) — i.e. comparable association strength *and* sufficient LD with the lead.
+3. `|L − mlog10p| < mlog10p_diff` (**2** in every production config; the script's own default
+   is 3) **and** `r2_to_lead > r2_to_lead_thres` (default **0.6**) — i.e. comparable association
+   strength *and* sufficient LD with the lead.
 
 (`build_pseudo_credible_sets`.) Variants with null `mlog10p` or null `r2_to_lead` are
 never kept.
@@ -256,9 +257,10 @@ lead would also be removed.
 Each dataset has an input JSON in [`wdl/`](../wdl/) named
 `create_pseudo_credible_sets.<dataset>.json`. All current datasets share the same core
 flags — `--no-proximity-filter --mlog10p-diff 2 --r2-to-lead-thres 0.6`,
-`r2_high_ld_thres = 0.95`, `filter_hla = true` — and differ only in `--dataset`, the
-input file-of-filenames, the phenotype-name JSON, and (for non-FinnGen inputs) the
-`column_aliases` map. Outputs land under
+`r2_high_ld_thres = 0.95`, `filter_hla = true` — and differ only in the input
+file-of-filenames, the phenotype-name JSON, and (for non-FinnGen inputs) the
+`column_aliases` map. `--dataset` is not in the input JSON: the fofn has two columns per
+line, dataset name and report file path, so one run can mix several datasets. Outputs land under
 `gs://finngen-commons/results_api_data/credible_sets/.../` per the matching
 `*.cromwell_options.*.json`, and are loaded into BigQuery by
 `genetics-results-db/scripts/load_pseudo.sh`.

@@ -2,7 +2,7 @@
 
 This repository contains a WDL pipeline and scripts to harmonize and process human genetics GWAS and QTL results into a unified TSV format. The output files can be used directly or via APIs (see [genetics-results-api](https://github.com/fulltiltgenomics/genetics-results-api)).
 
-Currently, processing of fine-mapping results from FinnGen, Open Targets and eQTL Catalogue has been implemented.
+Fine-mapping results from FinnGen, Open Targets and eQTL Catalogue are processed into credible set files. The repository also holds the munging of the other result types served alongside them: colocalization results, Genebass gene burden and exome variant results, pseudo credible sets derived from external summary statistics, and open chromatin, variant effect and MPRA datasets (see [other datasets](#other-datasets)).
 
 ## Table of Contents
 
@@ -13,7 +13,9 @@ Currently, processing of fine-mapping results from FinnGen, Open Targets and eQT
   - [eQTL Catalogue](#eqtl-catalogue)
   - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
   - [gene-indexed peak-to-gene table](#gene-indexed-peak-to-gene-table)
+  - [other datasets](#other-datasets)
 - [outputs](#outputs)
+  - [pseudo credible sets](#pseudo-credible-sets)
 - [variant annotation](#variant-annotation)
 
 ## Docker image
@@ -28,7 +30,7 @@ docker build --network host -t genetics-results-munge .
 
 ## WDL pipeline
 
-The [WDL](https://github.com/openwdl/wdl) munging pipeline [wdl/munge_finngen_finemapping_results.wdl](wdl/munge_finngen_finemapping_results.wdl) is used to process SuSiE fine-mapping results from the [FinnGen fine-mapping pipeline](https://github.com/FINNGEN/finemapping-pipeline). See [FinnGen documentation](https://docs.finngen.fi/finngen-data-specifics/green-library-data-aggregate-data/core-analysis-results-files/finemapping-results-format) for details on fine-mapping results format. The munging pipeline is run per resource: e.g. FinnGen core GWAS and lab value GWAS are processed in separate runs of the pipeline. JSON inputs to the pipeline (FinnGen core GWAS, lab value GWAS, drug purchase GWAS, Olink pQTLs, snRNA-seq eQTLs) are included in [wdl/](/wdl).
+The [WDL](https://github.com/openwdl/wdl) munging pipeline [wdl/munge_finngen_finemapping_results.wdl](wdl/munge_finngen_finemapping_results.wdl) is used to process SuSiE fine-mapping results from the [FinnGen fine-mapping pipeline](https://github.com/FINNGEN/finemapping-pipeline). See [FinnGen documentation](https://docs.finngen.fi/finngen-data-specifics/green-library-data-aggregate-data/core-analysis-results-files/finemapping-results-format) for details on fine-mapping results format. The munging pipeline is run per resource: e.g. FinnGen core GWAS and lab value GWAS are processed in separate runs of the pipeline. JSON inputs to the pipeline (FinnGen core GWAS, Kanta lab value GWAS, drug purchase GWAS, Olink and SomaScan pQTLs, UKB-PPP pQTLs, snRNA-seq eQTLs, ATAC-seq caQTLs) are included in [wdl/](/wdl).
 
 [Cromwell](https://cromwell.readthedocs.io/en/latest/) can be used to run the WDL pipeline.
 
@@ -108,6 +110,8 @@ scripts/download_eqtl_catalogue_data_and_trait_metadata.sh
 gcloud storage cp gs://finngen-public-data-r12/annotations/finnge_R12_annotated_variants_v1.gz data/
 ```
 
+The datasets to munge are listed in [metadata/eqtl_catalogue_files.tsv](metadata/eqtl_catalogue_files.tsv) (headerless: dataset id, path to its credible set file), and their study, tissue and quantification metadata is read from [metadata/eqtl_catalogue_studies.tsv](metadata/eqtl_catalogue_studies.tsv). The committed file list is the R8 pilot (82 datasets, credible sets as parquet) with the paths of the machine it was run on, so edit them to point to where you downloaded the files. `download_eqtl_catalogue_data_and_trait_metadata.sh` fetches the R7 credible sets from the EBI FTP site (`.tsv.gz`, also accepted) and the phenotype metadata files that the gene name mapping needs.
+
 Run the Docker container you built above, mounting the current directory in it:
 
 ```
@@ -123,7 +127,7 @@ zcat data/finnge_R12_annotated_variants_v1.gz | cut -f1,1000,1001 | bgzip \
 > data/finnge_R12_annotated_variants_v1.small.gz
 
 scripts/create_eqtl_catalogue_files.sh \
-eQTL_Catalogue_R7 \
+eQTL_Catalogue_R8 \
 data \
 data/finnge_R12_annotated_variants_v1.small.gz
 ```
@@ -156,9 +160,24 @@ scripts/create_gene_indexed_peak_gene_file.sh data/atacseq
 
 The appended columns exist only for the index — the API drops them and re-derives gene coordinates from the GENCODE version the request asks for, so both endpoints return the same columns. Add `--stage` to upload to both profile buckets.
 
+### other datasets
+
+Credible sets are not the only result type munged here. The scripts below write their own schemas, not the credible set columns described in [outputs](#outputs), and each one documents its source files, format assumptions and command line flags in its header comment:
+
+- colocalization (`scripts/coloc/`): FinnGen colocalization credible set and QC files. [scripts/coloc/R14_UPDATE.md](scripts/coloc/R14_UPDATE.md) is the runbook, including where the eQTL Catalogue metadata for trait gene name mapping comes from.
+- gene burden and exome variant results (`scripts/genebass/`): Genebass results read from a Hail MatrixTable. Hail is not in `requirements.txt` and not in the Docker image, so the export step runs on Dataproc; the shell wrappers do the bgzip/tabix, per-trait split and `mlog10p > 4` filtering.
+- open chromatin: `munge_calderon.{py,sh}` (Calderon 2019 immune ATAC-seq, hg19 and therefore the only one of these needing a liftOver to hg38), `munge_catlas.{py,sh}` (Zhang 2021 body-wide snATAC), `munge_epimap.{py,sh}` (EpiMap ChromHMM 18-state calls, active states only), `munge_li_brain.{py,sh}` (Li 2023 brain snATAC), `munge_rosmap.{py,sh}` (Xiong 2023 ROSMAP AD brain snATAC) and `munge_marderstein.{py,sh} --product open_chromatin` (Marderstein 2026 scATAC peaks).
+- variant effect: `munge_marderstein.{py,sh}` with `--product chrombpnet` or `--product flare`. Its `--download` path reads Synapse and needs `SYNAPSE_AUTH_TOKEN` in the environment.
+- MPRA: `munge_mpra.{py,sh}` reshapes the Siraj 2026 per-variant MPRA annotation from one row per variant to one row per variant and cell line.
+- expression: `munge_gtex.py` (GTEx v10 median TPM, written both wide and one row per gene and tissue) and `munge_hpa.py` (HPA immunohistochemistry).
+- gene-indexed QTL credible sets: `create_gene_indexed_qtl_file.py` for datasets whose QTL trait is a gene (the caQTL and peak-to-gene variants have their own sections above).
+- gene and trait metadata helpers: `gencode_to_gene_pos_tsv.py` (GENCODE GFF3 to a gene position TSV), `create_gene_name_mapping_across_gencode_versions.py` and `kanta_metadata_to_json.py`.
+
+The open chromatin, variant effect and MPRA wrappers write locally by default and only upload to the two profile buckets when given `--stage`. The expression, gene mapping and gene-indexed QTL scripts have their input paths hardcoded at the top of the script.
+
 ## outputs
 
-Both the WDL pipeline and the scripts give output text files: 1) an uncompressed file for each trait or study, and 2) a bgzip-compressed tabixed file including all traits or studies.
+Both the WDL pipeline and the credible set scripts give output text files: 1) an uncompressed file for each trait or study, and 2) a bgzip-compressed tabixed file including all traits or studies. They also write per-trait credible set statistics (`*.stats.json` plus an aggregate `credible_set_stats.tsv`, see [scripts/credible_set_stats.py](scripts/credible_set_stats.py)). With `create_qtl_file = true` the WDL pipeline additionally writes a gene-indexed copy of the merged file (`*.qtl.tsv.gz`, indexed on the trait's gene locus) for the API's QTL gene lookups.
 
 Columns in all output files:
 
@@ -179,6 +198,9 @@ pip                 posterior inclusion probability
 cs_id               credible set id
 cs_size             credible set size
 cs_min_r2           minimum LD r2 between variants in the credible set
+aaf                 alternative allele frequency, joined from the variant annotation file
+                    (the fine-mapping results only have MAF, so the WDL pipeline leaves MAF
+                    here when run without a variant annotation file)
 most_severe         most severe variant consequence (VEP)
 gene_most_severe    gene of most severe consequence
 ```

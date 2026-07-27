@@ -41,6 +41,9 @@ QUALITY CODING RULES
 1. Project structure:
    - `scripts/` - Munging scripts (one per dataset)
    - `scripts/sumstat_utils.py` - Shared utilities for sumstat munging
+   - `scripts/coloc/`, `scripts/genebass/` - Munging of colocalization and Genebass results
+   - `wdl/` - WDL pipelines and their per-dataset input and Cromwell option JSONs
+   - `metadata/` - Dataset and study metadata read by the scripts
    - `docs/` - Project documentation
 2. Code should be self-descriptive
    - Only add comments for tricky or complex parts of the code (explaining WHY something is done)
@@ -101,7 +104,9 @@ QUALITY CODING RULES
 
 # Exome / Gene Burden Output Formats
 
-See MEMORY.md for column definitions of gene burden and variant result formats.
+Column definitions live with the scripts that write them: gene burden results in the final
+`select()` of `scripts/genebass/convert_genebass_gene_results.py`, exome variant results in the
+header comment of `scripts/genebass/convert_genebass_variant_results.sh`.
 
 
 # API Integration
