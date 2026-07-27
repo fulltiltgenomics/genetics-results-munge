@@ -26,6 +26,38 @@ QUALITY CODING RULES
 5. Per-script details (source files, format assumptions, command line flags) belong in the script's own header comment, not in the README — the README points at them.
 
 
+# Documentation ownership
+
+Changing a path on the left makes the doc on the right wrong until it is updated in
+the same commit. `scripts/check-doc-drift.sh` warns (never blocks) on commits that
+violate this; it runs from the `pre-commit` hook.
+
+| changed path | doc to update | what to check |
+|---|---|---|
+| `scripts/munge_*.py`, `scripts/munge_*.sh` | `README.md` | the per-script dataset list under "other datasets", `--stage` and input/output flags |
+| `scripts/create_*.py`, `scripts/create_*.sh` | `README.md` | output products, the per-script run instructions and their arguments |
+| `scripts/sumstat_utils.py` | `CLAUDE.md` | shared helper list, required sumstat columns, tabix and GCS output rules |
+| `scripts/coloc/*.py`, `scripts/coloc/*.sh` | `scripts/coloc/R14_UPDATE.md` | input layout, metadata files, the invocation runbook |
+| `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` | WDL pipeline inputs, the Cromwell examples, output columns |
+| `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` | thresholds, script defaults vs production flags, output columns, per-dataset table |
+
+A doc is stale the moment it *enumerates* something the code no longer matches.
+Counts and lists rot silently — dataset lists, column tables, helper-function lists,
+per-dataset invocation tables — so re-derive them from the code rather than trusting them.
+
+The hook lives in `.git/hooks/pre-commit`, which is **not** version controlled: this repo
+has no `core.hooksPath` and no tracked hook directory, so a fresh clone has no hook until
+someone recreates it. It only needs to run `scripts/check-doc-drift.sh || true` and exit 0.
+
+
+# Cross-repo documentation
+
+`genetics-results-suite` is the spec of record for the suite as a whole; this repo
+documents only its own munging. Changing a munge output that feeds a BigQuery table
+means `genetics-results-db` (loaders, schemas) and that repo's docs may need updating
+too — check them in the same session rather than assuming they follow.
+
+
 # Software Development Behavior Guidelines
 
 1. Don't guess and do things which you are not certain about. Ask the user instead.
