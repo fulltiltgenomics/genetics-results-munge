@@ -19,12 +19,11 @@ QUALITY CODING RULES
 
 # Project Specifications
 
-1. Project documentation is maintained in files in `docs/` folder.
-2. `docs/project-spec.md` is an overview of project purpose, structure and logic.
+1. `README.md` is the overview of project purpose, structure and logic. Reading it should often be your first step in understanding a task.
+2. Longer-form documentation lives in the `docs/` folder. Currently that is `docs/pseudo-credible-sets.md`, which defines how pseudo credible sets are derived from external summary statistics.
 3. Create other files under `docs/` if necessary.
-4. Maintain `docs/project-spec.md` and any other generated files to be up to date with the project.
-5. Reread `docs/project-spec.md` often and whenever you need to refresh your context with what the project is about and implementation logic.
-6. This should often be your first step in understanding a task.
+4. Maintain `README.md` and everything under `docs/` to be up to date with the project.
+5. Per-script details (source files, format assumptions, command line flags) belong in the script's own header comment, not in the README — the README points at them.
 
 
 # Software Development Behavior Guidelines
@@ -58,7 +57,7 @@ QUALITY CODING RULES
 - bgzipped TSV (`.munged.tsv.gz`) with tabix index (`.tsv.gz.tbi`)
 - tabix indexed with `-s1 -b2 -e2` (chr in col 1, pos in col 2)
 - always produce a filtered companion file `.mlog10p_gt4.tsv.gz` (mlog10p > 4) with its own tabix index
-- use `write_sumstat_output()` from `sumstat_utils.py` for the write+filter+upload pattern
+- use `write_sumstat_output()` from `sumstat_utils.py` for the write+filter+upload pattern. `munge_ibd.py` is the exception: it streams chromosome by chromosome into two long-lived bgzip pipes instead of holding a whole DataFrame, so it indexes and uploads itself
 
 ## Required columns (all sumstat files must have these)
 - `#chr` — chromosome as integer, **X chromosome is always 23**
@@ -92,14 +91,17 @@ QUALITY CODING RULES
 - `upload_to_gcs()` — upload file + .tbi to GCS
 - `write_bgzip()` — bgzip + tabix a DataFrame
 - `write_sumstat_output()` — full + filtered write with GCS support
+- `write_exome_output()` — the same for exome results, with the tabix columns and the mlog10p column name given by the caller (gene burden files are indexed on the gene locus, `-s5 -b6 -e6`)
 - `read_gnomad_filtered()` — read filtered gnomAD TSV (plain or gzipped)
 - `build_rsid_set()` — extract rsid set from DataFrame
 - `stream_gnomad_by_rsid()` — stream gnomAD keeping rsid matches
 
 ## gnomAD allele alignment
-- PGC/BIP: join on rsid, classify A1/A2 vs ref/alt orientation, flip beta and AFs when A1 is ref
-- GP2: join on chr:pos:ref:alt (both build 38), flip SNPs where effect_allele is ref
-- IBD: join on chr:pos for AF-AF plot only (no allele flipping in output)
+- PGC/BIP: join on rsid, classify A1/A2 vs ref/alt orientation, flip beta and AFs when A1 is ref, drop mismatches, and take chr/pos from gnomAD (build 38)
+- GP2: join on chr:pos:ref:alt (both build 38), flip beta and AF for SNPs where effect_allele is ref; never flip indels, whose representation may differ
+- IBD: gnomAD is streamed by (chr, pos) and joined on chr:pos:ref:alt in both orientations, for the AF-AF plot only — the output is never flipped
+- COVID: ALT is already the effect allele, so the chr:pos:ref:alt join only adds rsid and the `most_severe` / `gene_most_severe` annotation
+- `--gnomad-filtered` on every one of these skips the streaming pass and reads a previously saved filtered gnomAD TSV instead; that file is what the drivers reuse across phenotypes of the same study
 
 
 # Exome / Gene Burden Output Formats
@@ -107,6 +109,17 @@ QUALITY CODING RULES
 Column definitions live with the scripts that write them: gene burden results in the final
 `select()` of `scripts/genebass/convert_genebass_gene_results.py`, exome variant results in the
 header comment of `scripts/genebass/convert_genebass_variant_results.sh`.
+
+The non-Genebass exome munges (`munge_schema*.py`, `munge_bipex.py`, `munge_ibd_exome.py`,
+`munge_ibd_supp_*.py`) reproduce those two layouts in their own `build_output()` and write them
+with `write_exome_output()`, filling columns the source does not provide with NA. Gene burden
+files are tabix indexed on the gene locus (`-s5 -b6 -e6`), variant files on the variant position
+(`-s2 -b3 -e3`).
+
+`munge_als.py` and `munge_asmqtl.py` are variant-level but not in that layout — ALS follows
+`scripts/genebass/cleanup_genebass_variant_results.py` with `most_severe`/`gene_most_severe`
+added, and ASM-QTL has its own methylation-target columns. Check their `select()` before
+assuming a shared schema.
 
 
 # API Integration
