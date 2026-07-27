@@ -103,9 +103,6 @@ def compute_gene_stats(df: pl.DataFrame) -> pl.DataFrame:
         # se = |beta| / |z| where z = qnorm(p/2)
         pvals = df["pvalue"].to_numpy()
         betas = df["beta_raw"].to_numpy()
-        z = np.abs(np.where(pvals > 0, -np.sqrt(2) * np.abs(np.log(pvals / 2)), np.nan))
-
-        # more precise: use scipy norm.ppf
         from scipy.stats import norm
         z = np.abs(norm.ppf(pvals / 2))
         z[z == 0] = np.nan
