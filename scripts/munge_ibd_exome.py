@@ -3,7 +3,7 @@
 
 Input files contain results for IBD, UC, and CD in a 'group' column.
 Outputs separate files per disease and per result type (gene/variant).
-Gene annotations file: gencode v43 (GRCh38).
+Gene annotations file: gencode v45 (GRCh38).
 """
 
 import argparse
