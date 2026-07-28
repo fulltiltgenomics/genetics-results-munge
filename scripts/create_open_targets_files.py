@@ -1,174 +1,193 @@
+"""
+Convert an Open Targets credible set release to the credible set TSV format used by the rest of
+this repository.
+
+Input
+  <data_dir>/credible_set/*.parquet   credible set parquet files of an Open Targets release
+  <variant_annotation_file>           FinnGen annotated variants, needs the columns
+                                      #variant (chr:pos:ref:alt, X as 23), AF, most_severe,
+                                      gene_most_severe
+
+Output
+  <data_dir>/<dataset>_cs_95.tsv      unsorted, with a header; the shell driver sorts, bgzips
+                                      and tabix indexes it
+
+Only non-FinnGen GWAS credible sets fine-mapped with SuSiE are kept, and of those only the
+variants flagged as belonging to the 95 % credible set. The 99 % credible sets are not written
+because the release does not consistently distinguish them from the 95 % ones.
+
+Each parquet file is converted on its own so that only one file's worth of exploded loci is held
+at a time; the annotation is read once and reduced to the variants actually present in the
+credible sets before the single join.
+"""
+
+import glob
 import os
 import sys
+
 import numpy as np
-import pyarrow.parquet as pq
 import polars as pl
 
+# variant ids spell the X chromosome out, everything downstream uses 23
+CHR_MAP = {"X": "23"}
 
-def convert_pq_to_tsv(
-    dataset: str, parquet_path: str, anno: pl.DataFrame
-) -> dict[str, list[tuple[str, float]]]:
-    """
-    Convert Open Targets credible set parquet file to 95 % credible set tsv files.
-    """
-    table = pq.read_table(parquet_path)
-    df = table.to_pandas()
+PARQUET_COLUMNS = [
+    "studyLocusId",
+    "studyId",
+    "studyType",
+    "finemappingMethod",
+    "purityMinR2",
+    "variantId",
+    "pValueMantissa",
+    "pValueExponent",
+    "locus",
+]
 
-    cs_95_outfile = open(parquet_path.replace(".parquet", "_cs_95_noanno.tsv"), "wt")
-    cs_95_outfile.write(
-        "dataset\tdata_type\ttrait\ttrait_original\tcell_type\tchr\tpos\tref\talt\tmlog10p\tbeta\tse\tpip\tcs_id\tcs_size\tcs_min_r2\taaf\n"
+OUTPUT_COLUMNS = [
+    "dataset",
+    "data_type",
+    "trait",
+    "trait_original",
+    "cell_type",
+    "chr",
+    "pos",
+    "ref",
+    "alt",
+    "mlog10p",
+    "beta",
+    "se",
+    "pip",
+    "cs_id",
+    "cs_size",
+    "cs_min_r2",
+    "aaf",
+    "most_severe",
+    "gene_most_severe",
+]
+
+
+def _sci(col: str) -> pl.Expr:
+    """Format a float column as %.3e in one numpy call rather than per row, keeping nulls null."""
+    formatted = pl.col(col).fill_null(0.0).map_batches(
+        lambda s: pl.Series(np.char.mod("%.3e", s.to_numpy())), return_dtype=pl.String
     )
-    # skipping 99 % credible sets as the data doesn't seem to differentiate between 95 % and 99 % credible sets
-    # cs_99_outfile = open(parquet_path.replace(".parquet", "_cs_99_noanno.tsv"), "wt")
-    # cs_99_outfile.write(
-    #     "dataset\tdata_type\ttrait\ttrait_original\tcell_type\tchr\tpos\tref\talt\tmlog10p\tbeta\tse\tpip\tcs_id\tcs_size\tcs_min_r2\n"
-    # )
+    return pl.when(pl.col(col).is_null()).then(None).otherwise(formatted).alias(col)
 
-    for _, row in df.iterrows():
-        study_id = row["studyId"]
-        data_type = row["studyType"].upper()
-        method = row["finemappingMethod"]
-        if (
-            data_type != "GWAS"
-            or "FINNGEN" in study_id
-            or not "susie" in method.lower()
-        ):
-            continue
-        cs_id = row["studyLocusId"]
-        if row["locus"] is not None:
-            variants_95 = []
-            variants_99 = []
-            for variant in row["locus"]:
-                variant_id = variant.get("variantId")
-                cpra = variant_id.split("_")
-                # make sure no alternate contigs or other non-chromosomes
-                cpra[0] = str(int(cpra[0].replace("X", "23")))
-                beta = (
-                    f"{variant.get('beta'):.3e}"
-                    if variant.get("beta") is not None
-                    else "NA"
-                )
-                se = (
-                    f"{variant.get('standardError'):.3e}"
-                    if variant.get("standardError") is not None
-                    else "NA"
-                )
-                pip = (
-                    round(variant.get("posteriorProbability"), 4)
-                    if variant.get("posteriorProbability") is not None
-                    else "NA"
-                )
-                cs_min_r2 = (
-                    round(row["purityMinR2"], 4)
-                    if not np.isnan(row["purityMinR2"])
-                    else "NA"
-                )
-                mlog10p = "NA"
-                af = "NA"  # not available in the data currently
-                mantissa = variant.get("pValueMantissa")
-                exponent = variant.get("pValueExponent")
-                if mantissa is not None and exponent is not None:
-                    mlog10p = round(-np.log10(mantissa) - exponent, 4)
-                elif variant_id == row["variantId"]:
-                    mantissa = row["pValueMantissa"]
-                    exponent = row["pValueExponent"]
-                    if mantissa is not None and exponent is not None:
-                        mlog10p = round(-np.log10(mantissa) - exponent, 4)
-                our_variant = [
-                    dataset,
-                    data_type,
-                    study_id,
-                    study_id,
-                    "NA",
-                    cpra[0],
-                    cpra[1],
-                    cpra[2],
-                    cpra[3],
-                    str(mlog10p),
-                    str(beta),
-                    str(se),
-                    str(pip),
-                    str(cs_id),
-                ]
-                if variant.get("is95CredibleSet"):
-                    variants_95.append(our_variant)
-                if variant.get("is99CredibleSet"):
-                    variants_99.append(our_variant)
-            cs_size_95 = len(variants_95)
-            cs_size_99 = len(variants_99)
-            for v in variants_95:
-                cs_95_outfile.write(
-                    "\t".join(v + [str(cs_size_95), str(cs_min_r2), str(af)]) + "\n"
-                )
-            # for v in variants_99:
-            #     cs_99_outfile.write(
-            #         "\t".join(v + [str(cs_size_99), str(cs_min_r2), str(af)]) + "\n"
-            #     )
-    cs_95_outfile.close()
-    # cs_99_outfile.close()
 
-    # read file and join annotations
-    df = pl.read_csv(
-        parquet_path.replace(".parquet", "_cs_95_noanno.tsv"),
-        separator="\t",
-        null_values=["NA"],
-    ).with_columns(
-        pl.concat_str(
-            [
-                pl.col("chr"),
-                pl.col("pos").cast(pl.Utf8),
-                pl.col("ref"),
-                pl.col("alt"),
-            ],
-            separator=":",
-        ).alias("variant_id"),
-        pl.col("beta")
-        .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
-        .alias("beta"),
-        pl.col("se")
-        .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
-        .alias("se"),
-        pl.col("pip").round(4),
-        pl.col("cs_min_r2").round(4),
-    )
+def _mlog10p(mantissa: pl.Expr, exponent: pl.Expr) -> pl.Expr:
+    return (-mantissa.cast(pl.Float64).log10() - exponent).round(4)
+
+
+def convert_pq_to_df(parquet_path: str) -> pl.DataFrame:
+    """Read one credible set parquet file into one row per 95 % credible set variant."""
     df = (
-        df.drop(
-            [
-                col
-                for col in df.columns
-                if col.endswith("most_severe") or col.startswith("aaf")
-            ]
+        pl.read_parquet(parquet_path, columns=PARQUET_COLUMNS)
+        .filter(
+            (pl.col("studyType") == "gwas")
+            & ~pl.col("studyId").str.contains("FINNGEN", literal=True)
+            & pl.col("finemappingMethod").str.to_lowercase().str.contains("susie", literal=True)
+            & pl.col("locus").is_not_null()
         )
-        .join(anno, on="variant_id", how="left")
-        .drop("variant_id")
+        .rename(
+            {
+                "variantId": "lead_variant_id",
+                "pValueMantissa": "cs_p_mantissa",
+                "pValueExponent": "cs_p_exponent",
+            }
+        )
+        # the row index identifies the credible set a locus variant came from, which is what
+        # cs_size counts over; studyLocusId is not relied on to be unique
+        .with_row_index("_cs_row")
+        .explode("locus")
+        .unnest("locus")
+        .filter(pl.col("is95CredibleSet"))
+        .rename({"standardError": "se"})
     )
-    df.write_csv(
-        parquet_path.replace(".parquet", "_cs_95.tsv"),
-        separator="\t",
-        null_value="NA",
+
+    df = df.with_columns(pl.col("variantId").str.split("_").alias("_cpra"))
+    return df.with_columns(
+        pl.col("studyId").alias("trait"),
+        pl.col("_cpra").list.get(0).replace(CHR_MAP).cast(pl.Int32, strict=False).alias("chr"),
+        pl.col("_cpra").list.get(1).cast(pl.Int64, strict=False).alias("pos"),
+        pl.col("_cpra").list.get(2).alias("ref"),
+        pl.col("_cpra").list.get(3).alias("alt"),
+        # only the lead variant falls back to the credible set level p-value
+        pl.when(pl.col("pValueMantissa").is_not_null() & pl.col("pValueExponent").is_not_null())
+        .then(_mlog10p(pl.col("pValueMantissa"), pl.col("pValueExponent")))
+        .when(pl.col("variantId") == pl.col("lead_variant_id"))
+        .then(_mlog10p(pl.col("cs_p_mantissa"), pl.col("cs_p_exponent")))
+        .alias("mlog10p"),
+        _sci("beta"),
+        _sci("se"),
+        pl.col("posteriorProbability").round(4).alias("pip"),
+        pl.col("studyLocusId").alias("cs_id"),
+        pl.len().over("_cs_row").cast(pl.Int32).alias("cs_size"),
+        pl.col("purityMinR2").round(4).alias("cs_min_r2"),
+    ).select(
+        "trait",
+        "chr",
+        "pos",
+        "ref",
+        "alt",
+        "mlog10p",
+        "beta",
+        "se",
+        "pip",
+        "cs_id",
+        "cs_size",
+        "cs_min_r2",
+        pl.concat_str("chr", "pos", "ref", "alt", separator=":").alias("variant_id"),
     )
+
+
+def read_annotation(annotation_path: str, variant_ids: pl.DataFrame) -> pl.DataFrame:
+    """Read the variant annotation, keeping only the variants present in the credible sets."""
+    anno = (
+        pl.scan_csv(annotation_path, separator="\t", null_values=["NA"])
+        .rename({"#variant": "variant_id"})
+        .select("variant_id", "AF", "most_severe", "gene_most_severe")
+        .join(variant_ids.lazy(), on="variant_id", how="semi")
+        .collect()
+    )
+    return anno.with_columns(_sci("AF").alias("aaf")).drop("AF")
+
+
+def main(dataset: str, data_dir: str, annotation_path: str) -> None:
+    files = sorted(glob.glob(os.path.join(data_dir, "credible_set", "*.parquet")))
+    if not files:
+        sys.exit(f"no parquet files under {data_dir}/credible_set")
+
+    frames = []
+    for i, path in enumerate(files, 1):
+        frames.append(convert_pq_to_df(path))
+        print(f"[{i}/{len(files)}] {os.path.basename(path)}: {frames[-1].height} rows", flush=True)
+
+    cs = pl.concat(frames)
+    del frames
+    print(
+        f"{cs.height} credible set variants, "
+        f"{cs['trait'].n_unique()} studies, "
+        f"{cs['cs_id'].n_unique()} credible sets"
+    )
+
+    variant_ids = cs.select("variant_id").unique()
+    anno = read_annotation(annotation_path, variant_ids)
+    print(f"{anno.height} of {variant_ids.height} variants found in the annotation")
+
+    output_path = os.path.join(data_dir, f"{dataset}_cs_95.tsv")
+    cs.join(anno, on="variant_id", how="left").with_columns(
+        pl.lit(dataset).alias("dataset"),
+        pl.lit("GWAS").alias("data_type"),
+        pl.col("trait").alias("trait_original"),
+        pl.lit(None, dtype=pl.String).alias("cell_type"),
+    ).select(OUTPUT_COLUMNS).write_csv(output_path, separator="\t", null_value="NA")
+    print(f"wrote {output_path}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print(
-            "Usage: python create_open_targets_files.py <dataset_name> <data_dir> <variant_annotation_file>"
+        sys.exit(
+            "usage: python create_open_targets_files.py "
+            "<dataset_name> <data_dir> <variant_annotation_file>"
         )
-        sys.exit(1)
-    dataset = sys.argv[1]
-    data_dir = sys.argv[2]
-    variant_annotation_file = sys.argv[3]
-    anno = (
-        pl.scan_csv(variant_annotation_file, separator="\t", null_values=["NA"])
-        .rename({"#variant": "variant_id"})
-        .with_columns(
-            pl.col("AF")
-            .map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8)
-            .alias("aaf"),
-        )
-        .select("variant_id", "aaf", "most_severe", "gene_most_severe")
-        .collect()
-    )
-    files = [f for f in os.listdir(data_dir) if f.endswith(".parquet")]
-    for file in files:
-        convert_pq_to_tsv(dataset, f"{data_dir}/{file}", anno)
+    main(sys.argv[1], sys.argv[2], sys.argv[3])

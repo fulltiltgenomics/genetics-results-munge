@@ -68,15 +68,15 @@ To run the scripts, make sure you have git, Docker and Google Cloud SDK installe
 
 ### Open Targets
 
-Get Open Targets data files (requester pays bucket - see [Open Targets website](https://platform.opentargets.org/downloads/credible_set/access) for other download options) and publicly available FinnGen variant annotations:
+Get Open Targets data files (requester pays bucket - see [Open Targets website](https://platform.opentargets.org/downloads/credible_set/access) for other download options) and publicly available FinnGen variant annotations. The credible set and study parquet files go in their own subdirectories of the data directory:
 
 ```
 # replace [your_google_project_name] with your project name
 BILLING_PROJECT=[your_google_project_name]
-mkdir -p data/study_metadata
-gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/25.12/output/credible_set/*.parquet data/
-gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/25.12/output/study/*.parquet data/study_metadata/
-gcloud storage cp gs://finngen-public-data-r12/annotations/finnge_R12_annotated_variants_v1.gz data/
+mkdir -p data/credible_set data/study_metadata
+gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/26.06/output/credible_set/*.parquet data/credible_set/
+gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/26.06/output/study/*.parquet data/study_metadata/
+gcloud storage cp gs://finngen-public-data-r13/annotations/finngen_R13_annotated_variants_v0.gz data/
 ```
 
 Run the Docker container you built, mounting the current directory (genetics-results-munge, root of this repository) in it:
@@ -85,21 +85,25 @@ Run the Docker container you built, mounting the current directory (genetics-res
 docker run -v $(pwd):/munge -it genetics-results-munge /bin/bash
 ```
 
-Inside the container, select only necessary columns from the variant annotation file to reduce memory use and run the script (this may take some half an hour and it's good to have 16GB of RAM):
+Inside the container, cut the annotation down to the four columns the script reads — `#variant`, `AF`, `most_severe` and `gene_most_severe` — and run the script. The field numbers differ between FinnGen releases, so look them up first:
 
 ```
 cd /munge
 
-zcat data/finnge_R12_annotated_variants_v1.gz | cut -f1,1000,1001 | bgzip \
-> data/finnge_R12_annotated_variants_v1.small.gz
+zcat data/finngen_R13_annotated_variants_v0.gz | head -1 | tr '\t' '\n' \
+| grep -n -x -E '#variant|AF|most_severe|gene_most_severe'
+
+# for R13 those are fields 1, 293, 1009 and 1010
+zcat data/finngen_R13_annotated_variants_v0.gz | cut -f1,293,1009,1010 | bgzip \
+> data/finngen_R13_annotated_variants_v0.small.gz
 
 scripts/create_open_targets_files.sh \
-Open_Targets_25.12 \
+Open_Targets_26.06 \
 data \
-data/finnge_R12_annotated_variants_v1.small.gz
+data/finngen_R13_annotated_variants_v0.small.gz
 ```
 
-Output files are written under `data`. Only non-FinnGen GWAS traits fine-mapped with SuSiE are included in the output files.
+Output files are written under `data`. Only non-FinnGen GWAS traits fine-mapped with SuSiE are included in the output files. The 26.06 release needs about 10 GB of RAM and takes roughly 15 minutes; the FinnGen R14 annotation used for the released files is not public, so the public R13 annotation above gives slightly lower `aaf` / `most_severe` coverage.
 
 ### eQTL Catalogue
 
@@ -214,7 +218,7 @@ For GWAS results, the `trait` and `trait_original` columns are the same and cont
 
 For eQTL Catalogue, the `trait_original` column contains the QTL trait name and quantification method separated by `|`, e.g. `ENSG00000272211|ge`. Similarly, for eQTL Catalogue, the `cell_type` column contains the name of the cell or tissue and condition separated by `|`, e.g. `plasmacytoid_dendritic_cell|naive`. See [eQTL Catalogue metadata](https://github.com/eQTL-Catalogue/eQTL-Catalogue-resources/blob/master/data_tables/dataset_metadata.tsv) for metadata on the studies in eQTL Catalogue.
 
-For Open Targets, only the lead variant in each credible set has an `mlog10p` value. Also, no Open Targets variants have an `se` value.
+For Open Targets, `mlog10p` is set for about half of the variants: the release carries a per-variant p-value for some studies, and for the rest only the lead variant gets one, from the credible set level p-value. Every credible set has at least one variant with `mlog10p`. No Open Targets variants have an `se` value.
 
 There are no spaces in the output files and missing values are represented with `NA`.
 
