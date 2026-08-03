@@ -11,6 +11,7 @@ Fine-mapping results from FinnGen, Open Targets and eQTL Catalogue are processed
 - [scripts](#scripts)
   - [Open Targets](#open-targets)
   - [eQTL Catalogue](#eqtl-catalogue)
+  - [PGC schizophrenia fine-mapping](#pgc-schizophrenia-fine-mapping)
   - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
   - [gene-indexed peak-to-gene table](#gene-indexed-peak-to-gene-table)
   - [other datasets](#other-datasets)
@@ -135,6 +136,31 @@ eQTL_Catalogue_R8 \
 data \
 data/finnge_R12_annotated_variants_v1.small.gz
 ```
+
+### PGC schizophrenia fine-mapping
+
+`munge_pgc_scz_finemap.{py,sh}` converts the published FINEMAP 95 % credible sets of
+[Trubetskoy et al. 2022](https://www.nature.com/articles/s41586-022-04434-5) (supplementary table
+ST11a) into the credible set format. These are genuine fine-mapping results and are served
+alongside the PGC schizophrenia [pseudo credible sets](#pseudo-credible-sets) under the same
+resource, as dataset `PGC_SCZ_2022`.
+
+ST11a is on GRCh37 and has no ref/alt alleles, so the GRCh38 locus, alleles and allele frequency
+come from the munged wave 3 summary statistics matched on rsid, and the consequence annotation
+from the FinnGen variant annotation:
+
+```
+scripts/munge_pgc_scz_finemap.sh \
+ST11a_95_perc_Credible_Sets.tsv \
+data/daner_PGC_SCZ_w3_90_0418b.munged.tsv.gz \
+data/R14_annotated_variants_v0.small.gz \
+data/pgc_scz_finemap
+```
+
+The output has `NA` in `cs_min_r2` throughout and in `aaf` on chromosome X, and its credible sets
+can hold several independent signals because FINEMAP was run with more than one causal variant
+allowed per locus. See [docs/pgc-scz-finemapping.md](docs/pgc-scz-finemapping.md) for the full
+column mapping, the caveats and what is dropped.
 
 ### caQTL gene-indexed credible sets
 
