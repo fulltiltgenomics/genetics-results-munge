@@ -70,6 +70,8 @@ def write_exome_output(
     tabix_args: list[str],
     mlog10p_col: str = "mlog10p",
     mlog10p_threshold: float = 4,
+    per_trait_dir: str | None = None,
+    trait_col: str = "trait_original",
 ) -> None:
     """Write full + mlog10p-filtered exome result files, uploading to GCS if needed.
 
@@ -79,6 +81,11 @@ def write_exome_output(
         tabix_args: tabix -s/-b/-e args, e.g. ["-s2", "-b3", "-e3"] for variants
         mlog10p_col: column name to filter on
         mlog10p_threshold: threshold for filtered file
+        per_trait_dir: if given, also write one unfiltered `<trait>.tsv.gz` per
+            distinct trait there, so the API can serve the dataset by trait the
+            same way it serves genebass (see split_burden_per_trait.py, which
+            does this for files too large to hold in a DataFrame)
+        trait_col: column holding the trait key that names the per-trait files
     """
     is_gcs = output_path.startswith("gs://")
     filtered_suffix = f".mlog10p_gt{int(mlog10p_threshold)}.tsv.gz"
@@ -102,6 +109,28 @@ def write_exome_output(
     if is_gcs:
         upload_to_gcs(local_full, output_path)
         upload_to_gcs(local_filt, filtered_gcs)
+
+    if per_trait_dir:
+        _write_per_trait(df, per_trait_dir, tabix_args, trait_col)
+
+
+def _write_per_trait(
+    df: pl.DataFrame, per_trait_dir: str, tabix_args: list[str], trait_col: str
+) -> None:
+    """Write one unfiltered `<trait>.tsv.gz` (+ .tbi) per distinct trait."""
+    is_gcs = per_trait_dir.startswith("gs://")
+    local_dir = Path(tempfile.mkdtemp()) if is_gcs else Path(per_trait_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    for (trait,), part in df.partition_by(trait_col, as_dict=True).items():
+        # the trait becomes a file name and, in the API, a path component
+        if "/" in trait or trait in (".", ".."):
+            raise ValueError(f"trait {trait!r} is not safe to use as a file name")
+        local_path = str(local_dir / f"{trait}.tsv.gz")
+        _write_bgzip_tabix(part, local_path, tabix_args)
+        print(f"  wrote {part.height} rows for trait {trait}")
+        if is_gcs:
+            upload_to_gcs(local_path, f"{per_trait_dir.rstrip('/')}/{trait}.tsv.gz")
 
 
 def _write_bgzip_tabix(df: pl.DataFrame, local_path: str, tabix_args: list[str]) -> None:

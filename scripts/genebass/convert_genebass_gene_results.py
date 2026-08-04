@@ -3,6 +3,13 @@
 Convert Hail MatrixTable gene burden results to TSV format.
 Filters by p-value threshold.
 Joins and uses gene positions from gencode.
+
+Output is NOT sorted: the unfiltered export is one row per gene x annotation x
+phenotype (343M rows for the 2022 release), and ordering that in Hail is a full
+shuffle of ~65 GB. convert_genebass_gene_results.sh sorts downstream instead,
+where the work is per trait (~76k rows) or on the significant-hits subset.
+Give --output a .bgz extension to have Hail block-gzip the export directly, so
+the plain TSV never lands on disk.
 """
 
 import hail as hl
@@ -120,6 +127,16 @@ def main():
         )
         mt = mt.filter_cols(~hl.literal(blacklist).contains(mt._trait_key))
 
+    # use gene positions from gencode as the positions in genebass data are something else than regular gene start and end.
+    # joined on the MT rows (~76k) rather than on the flattened entries (~343M), which would shuffle the whole export
+    print("Joining with gencode data for gene positions...")
+    gencode_row = gencode_ht[mt.gene_symbol]
+    mt = mt.annotate_rows(
+        gene_chr=hl.int32(gencode_row.gencode_chr),
+        gene_start_pos=hl.int32(gencode_row.gencode_start),
+        gene_end_pos=hl.int32(gencode_row.gencode_end),
+    )
+
     print("Flattening MatrixTable to entries table...")
     entries = mt.entries()
 
@@ -170,18 +187,6 @@ def main():
         beta=entries.BETA_Burden,
         se=entries.SE_Burden,
     )
-
-    # use gene positions from gencode as the positions in genebass data are something else than regular gene start and end
-    print("Joining with gencode data for gene positions...")
-    entries = entries.annotate(
-        gencode_data=gencode_ht[entries.gene_symbol]
-    )
-    entries = entries.annotate(
-        gene_chr=hl.int32(entries.gencode_data.gencode_chr),
-        gene_start_pos=hl.int32(entries.gencode_data.gencode_start),
-        gene_end_pos=hl.int32(entries.gencode_data.gencode_end),
-    )
-    entries = entries.drop("gencode_data")
 
     print(f"Filtering by burden p-value <= {args.pval_threshold}...")
     entries = entries.filter(
@@ -251,14 +256,6 @@ def main():
         trait_original=entries.trait_original,
     )
 
-    # sort the results for stable output ordering
-    entries = entries.order_by(
-        entries.gene_chr,
-        entries.gene_start_pos,
-        entries.gene_end_pos,
-        entries.trait,
-    )
-
     # convert missing values and empty strings to "NA" strings for export
     entries = entries.select(
         dataset=hl.literal("genebass"),
@@ -324,8 +321,9 @@ def main():
     print(f"Exporting to {args.output}...")
     entries.export(args.output)
 
-    n_results = entries.count()
-    print(f"\nDone! Exported {n_results} results to {args.output}")
+    # no count() here: it would re-run the whole pipeline for a number the
+    # downstream split already reports
+    print(f"\nDone! Exported to {args.output}")
     print(f"Filtered by p-value <= {args.pval_threshold}")
 
 

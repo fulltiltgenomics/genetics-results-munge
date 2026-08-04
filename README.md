@@ -15,6 +15,7 @@ Fine-mapping results from FinnGen, Open Targets and eQTL Catalogue are processed
   - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
   - [gene-indexed peak-to-gene table](#gene-indexed-peak-to-gene-table)
   - [other datasets](#other-datasets)
+  - [per-trait burden files](#per-trait-burden-files)
 - [outputs](#outputs)
   - [pseudo credible sets](#pseudo-credible-sets)
 - [variant annotation](#variant-annotation)
@@ -195,9 +196,9 @@ The appended columns exist only for the index — the API drops them and re-deri
 Credible sets are not the only result type munged here. The scripts below write their own schemas, not the credible set columns described in [outputs](#outputs), and each one documents its source files, format assumptions and command line flags in its header comment:
 
 - colocalization (`scripts/coloc/`): FinnGen colocalization credible set and QC files. [scripts/coloc/R14_UPDATE.md](scripts/coloc/R14_UPDATE.md) is the runbook, including where the eQTL Catalogue metadata for trait gene name mapping comes from.
-- gene burden and exome variant results (`scripts/genebass/`): Genebass results read from a Hail MatrixTable. Hail is not in `requirements.txt` and not in the Docker image, so the export step runs on Dataproc; the shell wrappers do the bgzip/tabix, per-trait split and `mlog10p > 4` filtering.
+- gene burden and exome variant results (`scripts/genebass/`): Genebass results read from a Hail MatrixTable. Hail is not in `requirements.txt` and not in the Docker image, so the export step runs on Dataproc or on a machine with Hail installed; the shell wrappers do the bgzip/tabix, per-trait split and `mlog10p > 4` filtering. See [per-trait burden files](#per-trait-burden-files) for what the gene burden run produces and why there is no combined unfiltered file.
 - external GWAS summary statistics: `munge_pgc.py` (PGC schizophrenia wave 3 daner file), `munge_bip2024.py` (BIP 2024 multi-ancestry, per-ancestry HRC frequencies kept), `munge_gp2.py` (GP2 Parkinson's, already build 38), `munge_ibd.py` (IBD/CD/UC meta-analysis, one input file per chromosome) and `munge_covid.py` (COVID-19 HGI freeze 7). All of them harmonize to the sumstat schema described in [CLAUDE.md](CLAUDE.md) via `scripts/sumstat_utils.py` and most also draw an AF-AF plot against gnomAD with `--gnomad-af-plot`. `filter_gnomad_by_rsid.py` is a standalone helper that pre-filters gnomAD by the rsids of a daner file so a rerun can skip the streaming step.
-- non-Genebass exome results: `munge_schema.py` / `munge_schema_variants.py` (SCHEMA), `munge_schema2.py` / `munge_schema2_variants.py` (SCHEMA2 — allele counts only, so log-odds and p-values are derived), `munge_bipex.py` (BipEx2 gene burden), `munge_ibd_exome.py` (IBD/CD/UC gene burden and variant results from one input each) and `munge_ibd_supp_burden.py` / `munge_ibd_supp_variants.py` (the 2026 IBD supplementary tables, whose case and control counts are passed on the command line). These reproduce the Genebass gene burden and exome variant column layouts. `munge_als.py` munges the ALS exome supplementary table into a variant file with its own slightly different column set.
+- non-Genebass exome results: `munge_schema.py` / `munge_schema_variants.py` (SCHEMA), `munge_schema2.py` / `munge_schema2_variants.py` (SCHEMA2 — allele counts only, so log-odds and p-values are derived), `munge_bipex.py` (BipEx2 gene burden), `munge_ibd_exome.py` (IBD/CD/UC gene burden and variant results from one input each) and `munge_ibd_supp_burden.py` / `munge_ibd_supp_variants.py` (the 2026 IBD supplementary tables, whose case and control counts are passed on the command line). These reproduce the Genebass gene burden and exome variant column layouts. `munge_als.py` munges the ALS exome supplementary table into a variant file with its own slightly different column set. The gene burden scripts take `--per-trait-dir` to also emit the [per-trait burden files](#per-trait-burden-files).
 - allele-specific methylation QTLs: `normalize_asmqtl.py` left-aligns and trims the indel alleles with `bcftools norm` into a mapping TSV, which `munge_asmqtl.py` then applies while munging either of the two supplementary tables (CpG or MDS methylation QTLs, auto-detected from the header). `munge_asmqtl.sh` runs both steps for both tables.
 - open chromatin: `munge_calderon.{py,sh}` (Calderon 2019 immune ATAC-seq, hg19 and therefore the only one of these needing a liftOver to hg38), `munge_catlas.{py,sh}` (Zhang 2021 body-wide snATAC), `munge_epimap.{py,sh}` (EpiMap ChromHMM 18-state calls, active states only), `munge_li_brain.{py,sh}` (Li 2023 brain snATAC), `munge_rosmap.{py,sh}` (Xiong 2023 ROSMAP AD brain snATAC) and `munge_marderstein.{py,sh} --product open_chromatin` (Marderstein 2026 scATAC peaks). `build_li_brain_inputs.py` folds the 44 per-cell-type bed files and the gene-cCRE correlation bedpe into the two files `munge_li_brain.py` expects.
 - variant effect: `munge_marderstein.{py,sh}` with `--product chrombpnet` or `--product flare`. Its `--download` path reads Synapse and needs `SYNAPSE_AUTH_TOKEN` in the environment.
@@ -209,6 +210,33 @@ Credible sets are not the only result type munged here. The scripts below write 
 The open chromatin, variant effect and MPRA wrappers write locally by default and only upload to the two profile buckets when given `--stage`. The expression, gene mapping and gene-indexed QTL scripts have their input paths hardcoded at the top of the script.
 
 The sumstat and exome scripts read their input from `--input` (`--input-dir` for the per-chromosome IBD meta-analysis, `--gene-input`/`--variant-input` for the IBD exome) and write next to it unless given an `--output` or `--output-dir`, which may be a `gs://` path — then the file and its tabix index are uploaded there. [run_sumstats.sh](run_sumstats.sh) and [scripts/run_exome.sh](scripts/run_exome.sh) record the invocations for the datasets they cover; their input paths are absolute paths on the machine the munging was run on, so edit them to point at your own copies.
+
+### per-trait burden files
+
+Gene burden results are served two ways, and the munging produces a file for each:
+
+| file | contents | consumer |
+|---|---|---|
+| `<dataset>_gene_results.munged.tsv.gz` (Genebass: `gene_burden_results.mlog10p_gt4.tsv.gz`) | every trait of the dataset, tabixed on the gene locus (`-s5 -b6 -e6`) | the API's `/gene_based/{gene}` |
+| `gene_burden_per_trait/<trait_original>.tsv.gz` | one trait, unfiltered, same tabix index | the API's `/gene_based_results_by_phenotype/{resource}/{trait}` and the BigQuery `gene_burden_results` load |
+
+`trait_original` names the per-trait file, so the IBD burden files are
+`inflammatory_bowel_disease` / `ulcerative_colitis` / `crohns_disease`, not the
+`IBD`/`UC`/`CD` codes the IBD exome *variant* files use.
+
+Genebass is the one dataset with no combined **unfiltered** file. Its unfiltered
+export is one row per gene x annotation x phenotype — 75,767 x 4,501 = ~343M rows —
+so `convert_genebass_gene_results.py` exports it unsorted (sorting it in Hail is a
+~65 GB shuffle) straight to `.tsv.bgz`, and the two products are built from there:
+the `mlog10p_burden > 4` file is small enough to sort with `sort`, and
+[scripts/split_burden_per_trait.py](scripts/split_burden_per_trait.py) streams the
+export into one gzip temp file per trait and then sorts each one on its own
+(~76k rows). The other burden datasets are single-trait and small, so
+`write_exome_output()` writes their per-trait copy directly when given
+`--per-trait-dir`.
+
+`split_burden_per_trait.py` also works on any other combined result file — pass
+`--trait-col 19 --tabix-args "-s2 -b3 -e3"` for the exome variant layout.
 
 ## outputs
 

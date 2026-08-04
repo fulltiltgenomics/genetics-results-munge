@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gencode", default="/mnt/disks/data/gencode.v39.annotation.genes.tsv",
                         help="Path to gencode annotation genes TSV")
     parser.add_argument("--output-dir", help="Output directory (default: same as input)")
+    parser.add_argument("--per-trait-dir", help="If given, also write one unfiltered <trait>.tsv.gz there (local or gs://)")
     return parser.parse_args()
 
 
@@ -174,7 +175,8 @@ def main():
 
     print("Writing results...")
     write_exome_output(out, f"{output_dir}/SCHEMA2_gene_results.munged.tsv.gz",
-                       tabix_args=["-s5", "-b6", "-e6"], mlog10p_col="mlog10p_burden")
+                       tabix_args=["-s5", "-b6", "-e6"], mlog10p_col="mlog10p_burden",
+                       per_trait_dir=args.per_trait_dir)
 
     print("Done.")
 

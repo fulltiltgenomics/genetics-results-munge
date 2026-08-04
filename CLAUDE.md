@@ -125,7 +125,7 @@ too — check them in the same session rather than assuming they follow.
 - `upload_to_gcs()` — upload file + .tbi to GCS
 - `write_bgzip()` — bgzip + tabix a DataFrame
 - `write_sumstat_output()` — full + filtered write with GCS support
-- `write_exome_output()` — the same for exome results, with the tabix columns and the mlog10p column name given by the caller (gene burden files are indexed on the gene locus, `-s5 -b6 -e6`)
+- `write_exome_output()` — the same for exome results, with the tabix columns and the mlog10p column name given by the caller (gene burden files are indexed on the gene locus, `-s5 -b6 -e6`). Given `per_trait_dir`, it also writes one unfiltered `<trait_original>.tsv.gz` + `.tbi` per distinct trait there
 - `read_gnomad_filtered()` — read filtered gnomAD TSV (plain or gzipped)
 - `build_rsid_set()` — extract rsid set from DataFrame
 - `stream_gnomad_by_rsid()` — stream gnomAD keeping rsid matches
@@ -149,6 +149,15 @@ The non-Genebass exome munges (`munge_schema*.py`, `munge_bipex.py`, `munge_ibd_
 with `write_exome_output()`, filling columns the source does not provide with NA. Gene burden
 files are tabix indexed on the gene locus (`-s5 -b6 -e6`), variant files on the variant position
 (`-s2 -b3 -e3`).
+
+Every gene burden dataset also ships an unfiltered `gene_burden_per_trait/<trait_original>.tsv.gz`
+with the same tabix index — that is what the API serves by trait and what BigQuery is loaded
+from, so a gene's null result in a given trait is retrievable. `write_exome_output(per_trait_dir=…)`
+writes them for the datasets small enough to hold in a DataFrame; genebass goes through
+`scripts/split_burden_per_trait.py` instead. Genebass is also the one dataset with no combined
+UNFILTERED file: at ~343M rows there is nothing to gain from one, so its cross-trait file
+(`gene_burden_results.mlog10p_gt4.tsv.gz`) keeps the `mlog10p_burden > 4` cut. See the README
+for the full layout.
 
 `munge_als.py` and `munge_asmqtl.py` are variant-level but not in that layout — ALS follows
 `scripts/genebass/cleanup_genebass_variant_results.py` with `most_severe`/`gene_most_severe`

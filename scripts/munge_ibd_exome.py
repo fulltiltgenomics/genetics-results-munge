@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gencode", default="/mnt/disks/data/gencode.v45.annotation.genes.tsv",
                         help="Path to gencode annotation genes TSV (default: v45)")
     parser.add_argument("--output-dir", help="Output directory (default: same as input)")
+    parser.add_argument("--per-trait-dir", help="If given, also write one unfiltered <trait>.tsv.gz per gene burden trait there (local or gs://)")
     parser.add_argument("--max-memory-gb", type=int, default=24, help="Max virtual memory in GB (default: 24)")
     return parser.parse_args()
 
@@ -168,7 +169,8 @@ def build_gene_output(df: pl.DataFrame, gencode: pl.DataFrame, group: str) -> pl
     return out
 
 
-def process_gene_results(gene_path: str, gencode: pl.DataFrame, output_dir: str) -> None:
+def process_gene_results(gene_path: str, gencode: pl.DataFrame, output_dir: str,
+                         per_trait_dir: str | None = None) -> None:
     """Process gene burden results for all disease groups."""
     print(f"Reading gene results from {gene_path}...")
     gene_df = read_gene_results(gene_path)
@@ -185,7 +187,8 @@ def process_gene_results(gene_path: str, gencode: pl.DataFrame, output_dir: str)
         print(f"  {out.height} total output rows")
 
         write_exome_output(out, f"{output_dir}/IBD_exome_{group}_gene_results.munged.tsv.gz",
-                           tabix_args=["-s5", "-b6", "-e6"], mlog10p_col="mlog10p_burden")
+                           tabix_args=["-s5", "-b6", "-e6"], mlog10p_col="mlog10p_burden",
+                           per_trait_dir=per_trait_dir)
 
 
 def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir: str) -> None:
@@ -331,7 +334,7 @@ def main():
     print(f"  {gencode.height} genes")
 
     if args.gene_input:
-        process_gene_results(args.gene_input, gencode, output_dir)
+        process_gene_results(args.gene_input, gencode, output_dir, args.per_trait_dir)
 
     if args.variant_input:
         process_variant_results(args.variant_input, gencode, output_dir)
