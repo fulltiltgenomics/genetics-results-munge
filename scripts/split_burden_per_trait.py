@@ -94,7 +94,7 @@ def split_by_trait(input_path: str, tmp_dir: Path, trait_idx: int) -> tuple[dict
             handle.write(line)
             n_rows += 1
             if n_rows % 20_000_000 == 0:
-                print(f"  {n_rows:,} rows into {len(handles):,} traits")
+                print(f"  {n_rows:,} rows into {len(handles):,} traits", flush=True)
         if proc.wait() != 0:
             raise RuntimeError(f"gzip -cd failed on {input_path}")
 
@@ -154,11 +154,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        print(f"Splitting {args.input} by column {args.trait_col}...")
+        print(f"Splitting {args.input} by column {args.trait_col}...", flush=True)
         paths, n_rows, header = split_by_trait(args.input, tmp_root, trait_idx)
-        print(f"  {n_rows:,} rows in {len(paths):,} traits")
+        print(f"  {n_rows:,} rows in {len(paths):,} traits", flush=True)
 
-        print(f"Sorting, bgzipping and indexing {len(paths):,} per-trait files...")
+        print(f"Sorting, bgzipping and indexing {len(paths):,} per-trait files...", flush=True)
         total_written = total_dropped = 0
         for i, (trait, part) in enumerate(sorted(paths.items()), start=1):
             out_path = out_dir / f"{trait}{args.suffix}"
@@ -167,7 +167,7 @@ def main() -> None:
             total_dropped += dropped
             part.unlink()
             if i % 500 == 0:
-                print(f"  {i:,}/{len(paths):,} traits")
+                print(f"  {i:,}/{len(paths):,} traits", flush=True)
 
         print(f"Done! {total_written:,} rows in {len(paths):,} per-trait files")
         if total_dropped:
@@ -177,7 +177,7 @@ def main() -> None:
             # one rsync rather than two gcloud invocations per trait; it does not
             # delete anything at the destination unless asked to
             dest = args.output_dir.rstrip("/")
-            print(f"Uploading {len(paths) * 2:,} files to {dest}/...")
+            print(f"Uploading {len(paths) * 2:,} files to {dest}/...", flush=True)
             subprocess.run(["gcloud", "storage", "rsync", str(out_dir), dest], check=True)
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
