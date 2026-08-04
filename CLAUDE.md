@@ -150,6 +150,15 @@ with `write_exome_output()`, filling columns the source does not provide with NA
 files are tabix indexed on the gene locus (`-s5 -b6 -e6`), variant files on the variant position
 (`-s2 -b3 -e3`).
 
+Gene burden files are indexed on a POINT (`-b6 -e6` are both `gene_start_pos`), not an
+interval, so the API only finds a gene when the file's coordinates come from exactly the
+`gencode_version` configured for that dataset in `gene_based_results.py` — any other version
+silently returns nothing. Match the version you pass to `--gencode` with that config, and if
+it is a version the API does not already carry in `genes.py`'s `gencode_versions`, add it
+there and regenerate the cross-version name mapping with
+`create_gene_name_mapping_across_gencode_versions.py`. Current mapping: genebass v35,
+SCHEMA2/BipEx2 v39, IBD exome v45.
+
 Every gene burden dataset also ships an unfiltered `gene_burden_per_trait/<trait_original>.tsv.gz`
 with the same tabix index — that is what the API serves by trait and what BigQuery is loaded
 from, so a gene's null result in a given trait is retrievable. `write_exome_output(per_trait_dir=…)`

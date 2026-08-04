@@ -205,7 +205,7 @@ Credible sets are not the only result type munged here. The scripts below write 
 - MPRA: `munge_mpra.{py,sh}` reshapes the Siraj 2026 per-variant MPRA annotation from one row per variant to one row per variant and cell line.
 - expression: `munge_gtex.py` (GTEx v10 median TPM, written both wide and one row per gene and tissue) and `munge_hpa.py` (HPA immunohistochemistry).
 - gene-indexed QTL credible sets: `create_gene_indexed_qtl_file.py` for datasets whose QTL trait is a gene (the caQTL and peak-to-gene variants have their own sections above).
-- gene and trait metadata helpers: `gencode_to_gene_pos_tsv.py` (GENCODE GFF3 to a gene position TSV), `create_gene_name_mapping_across_gencode_versions.py` and `kanta_metadata_to_json.py`.
+- gene and trait metadata helpers: `gencode_to_gene_pos_tsv.py` (GENCODE GFF3 to a gene position TSV, given a release URL), `create_gene_name_mapping_across_gencode_versions.py` (the cross-version `ensg -> name` table the API reads; its version list must match `gencode_versions` in the API's `genes.py`, and the output file name carries those versions) and `kanta_metadata_to_json.py`.
 
 The open chromatin, variant effect and MPRA wrappers write locally by default and only upload to the two profile buckets when given `--stage`. The expression, gene mapping and gene-indexed QTL scripts have their input paths hardcoded at the top of the script.
 
@@ -223,6 +223,12 @@ Gene burden results are served two ways, and the munging produces a file for eac
 `trait_original` names the per-trait file, so the IBD burden files are
 `inflammatory_bowel_disease` / `ulcerative_colitis` / `crohns_disease`, not the
 `IBD`/`UC`/`CD` codes the IBD exome *variant* files use.
+
+Both files are indexed on a POINT — `-s5 -b6 -e6` takes begin and end from
+`gene_start_pos` — so a gene lookup in the API only hits when the coordinates in the
+file come from exactly the GENCODE version configured for that dataset. Pass
+`--gencode` the version the API declares (genebass v35, SCHEMA2/BipEx2 v39, IBD
+exome v45); a mismatch returns nothing rather than erroring.
 
 Genebass is the one dataset with no combined **unfiltered** file. Its unfiltered
 export is one row per gene x annotation x phenotype — 75,767 x 4,501 = ~343M rows —
