@@ -84,7 +84,15 @@ placeholder `32500000` (the pipeline gives the secondary DRB loci one synthetic 
 so they cannot be separated positionally — only by the `gene` column.
 
 **`pval` underflows to 0** for the strongest signals (coeliac `DQB1*02:01` is mlogp 1596).
-`mlogp` is the field to rank and threshold on, everywhere.
+The -log10 p-value is the field to rank and threshold on, everywhere.
+
+**Both consumers rename these columns; neither file does.** The names above are FinnGen's
+native spelling and are what is written and loaded. Downstream, results-api's `column_mapping`
+and the BigQuery `hla_associations_v` view both expose the suite's house spelling instead —
+`mlogp`→`mlog10p`, `sebeta`→`se`, `af_alt`→`af`, `af_alt_cases`→`af_cases`,
+`af_alt_controls`→`af_controls` — so a query written against the served surface uses those
+names, and a query written against the `hla_associations` *table* uses the ones above. Values
+are identical; only the spelling differs (`genetics-results-suite-5wm`).
 
 ## Running it
 
