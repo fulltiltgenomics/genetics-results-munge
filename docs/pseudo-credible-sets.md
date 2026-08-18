@@ -43,7 +43,11 @@ The naming suffix `mlog10p_2.r2_0.6` records the two main step-2 thresholds
 ## Step 1 — LD clumping in autoreporting
 
 Step 1 runs the FinnGen autoreporting tool (`~/autoreporting`). The example input used
-for the external-sumstats pseudo-CS case is [`wdl/autoreporting_external.json`](../wdl/autoreporting_external.json).
+for the external-sumstats pseudo-CS case is [`wdl/autoreporting_external.json`](../wdl/autoreporting_external.json);
+[`wdl/autoreporting_aih.json`](../wdl/autoreporting_aih.json) is the same input with the AIH
+file-of-filenames and phenotype info, and with `extra_columns` cut down to the columns
+`munge_aih.py` actually writes (`se af rsid n`) — an extra column that is missing from the
+sumstat is only warned about, not fatal, but listing only real ones keeps the report honest.
 Relevant settings from that input:
 
 | autoreporting setting | value | meaning |
@@ -269,3 +273,4 @@ line, dataset name and report file path, so one run can mix several datasets. Ou
 |---|---|
 | `FinnGen_R13`, `FinnGen_R13_UKBB(_labs)`, `FinnGen_R13_MVP_UKBB(_labs)` | FinnGen and meta-analysis pseudo CS; phenotype names from `finngen_r13_pheno_202509.json` |
 | `COVID19_HGI` / `PGC` / `GP2` (external) | bundled external file (`ext`); inputs use `column_aliases` to map munged-sumstat column names to the canonical report columns |
+| `AIH` | the three autoimmune hypothyroidism meta-analysis phenotypes (`AIH`, `AITT1`, `AITT2`) munged by `scripts/munge_aih.py`; run separately from the `ext` bundle because its sumstats carry a different column set, but with the same `column_aliases` — autoreporting names the report columns after the input columns, which are the same `#chr`/`mlog10p`/`se`/`af` |

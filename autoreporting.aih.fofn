@@ -1,0 +1,3 @@
+AIH	gs://fg-cromwell-4/autoreporting/<AUTOREPORTING_RUN_ID>/call-report/shard-0/AIH.report.out
+AIH	gs://fg-cromwell-4/autoreporting/<AUTOREPORTING_RUN_ID>/call-report/shard-1/AITT1.report.out
+AIH	gs://fg-cromwell-4/autoreporting/<AUTOREPORTING_RUN_ID>/call-report/shard-2/AITT2.report.out

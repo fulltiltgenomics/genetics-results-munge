@@ -28,3 +28,14 @@ python3 scripts/munge_gp2.py \
   --input /mnt/disks/data/Parkinsons/GP2_euro_ancestry_meta_analysis_2024/GP2_ALL_EUR_ALL_DATASET_HG38_12162024.txt.gz \
   --gnomad-filtered /mnt/disks/data/Parkinsons/GP2_euro_ancestry_meta_analysis_2024/GP2_ALL_EUR_ALL_DATASET_HG38_12162024.txt.gnomad_filtered.tsv \
   --output ${BUCKET}/GP2/GP2_ALL_EUR_ALL_DATASET_HG38_12162024.txt.munged.tsv.gz
+
+# AIH autoimmune hypothyroidism meta-analysis (3 phenotypes, one file each).
+# gnomAD is streamed once for the union of the three files' positions, then reused.
+AIH_INPUT="/mnt/disks/data/aih_meta.txt.gz /mnt/disks/data/aitt1_meta.txt.gz /mnt/disks/data/aitt2_meta.txt.gz"
+python3 scripts/munge_aih.py --input ${AIH_INPUT} --gnomad-filter-only --jobs 4
+python3 scripts/munge_aih.py \
+  --input ${AIH_INPUT} \
+  --gnomad-filtered /mnt/disks/data/ai_meta.gnomad_filtered.tsv.gz \
+  --gnomad-af-plot \
+  --plot-dir /mnt/disks/data \
+  --output-dir ${BUCKET}/AIH
