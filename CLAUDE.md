@@ -1,188 +1,118 @@
-====
+# genetics-results-munge
+
+Turns external genetics results (GWAS sumstats, exome/burden results, QTLs, open
+chromatin, colocalisation) into bgzipped, tabix-indexed TSVs that the results API
+serves and BigQuery loads.
 
 
-QUALITY CODING RULES
+# Read the code first, this file second
+
+The nearest existing script is the specification. Before writing or changing a munge,
+read one that handles the same *shape* of input and follow it — its flags, its function
+split, its output columns:
+
+| input shape | read |
+|---|---|
+| GWAS sumstats aligned against gnomAD | `scripts/munge_aih.py` |
+| exome variant / gene burden results | `scripts/munge_ibd_exome.py` |
+| peak / open-chromatin BED-like tables | `scripts/munge_catlas.py` |
+| FinnGen-format fine-mapping at scale | `wdl/munge_finngen_finemapping_results.wdl` |
+
+Where the facts live: `README.md` says what exists and how to run it; `docs/` holds the
+long-form derivations; each script's **header docstring** holds its source files, format
+assumptions and flags; each script's final `select()` **is** its column definition.
+Don't restate any of that here — this file carries only what reading the code can't
+tell you, which is mostly the things that fail *silently*.
 
 
-# Code changes
+# Before munging a new input
 
-1. If you find errors or suggestions in code which are not DIRECTLY related to user's current request, never change it without asking first.
-2. Before suggesting changes to files, always assume user might have changed the file since your last read and consider reading the file again.
+Read the actual bytes of the file. Source papers and READMEs are routinely wrong about
+their own delivery. Establish these, then write what you found into the script's header
+docstring (see `munge_aih.py` for the shape):
 
+1. genome build — output is always GRCh38; lift over if it isn't (`munge_calderon.py`)
+2. which allele the effect size refers to, and whether it is the reference allele
+3. whether p underflows to 0, and whether beta/se are there to recover it from
+4. chromosome coding, duplicate rows, indel representation, missing-value token
+5. for anything carrying gene names: the gencode version, determined by match rate
+   against `/mnt/disks/data/gencode.v*.annotation.genes.tsv` — never assumed
 
-# Security
-
-1. Never commit sensitive files (.env, credentials, API keys)
-2. Use environment variables for API keys and credentials
-3. Keep API keys and credentials out of logs and output
-
-
-# Project Specifications
-
-1. `README.md` is the overview of project purpose, structure and logic. Reading it should often be your first step in understanding a task.
-2. Longer-form documentation lives in the `docs/` folder. Currently that is `docs/pseudo-credible-sets.md`, which defines how pseudo credible sets are derived from external summary statistics.
-3. Create other files under `docs/` if necessary.
-4. Maintain `README.md` and everything under `docs/` to be up to date with the project.
-5. Per-script details (source files, format assumptions, command line flags) belong in the script's own header comment, not in the README — the README points at them.
+If any of these stays ambiguous, ask. A wrong guess here produces a file that loads,
+indexes and queries fine while being wrong.
 
 
-# Documentation ownership
+# Invariants
 
-Changing a path on the left makes the doc on the right wrong until it is updated in
-the same commit. `scripts/check-doc-drift.sh` warns (never blocks) on commits that
-violate this; it runs from the `pre-commit` hook.
+Break one of these and nothing errors — the data is just quietly wrong or unfindable.
 
-| changed path | doc to update | what to check |
-|---|---|---|
-| `scripts/munge_*.py`, `scripts/munge_*.sh` | `README.md` | the per-script dataset list under "other datasets", `--stage` and input/output flags |
-| `scripts/create_*.py`, `scripts/create_*.sh` | `README.md` | output products, the per-script run instructions and their arguments |
-| `scripts/sumstat_utils.py` | `CLAUDE.md` | shared helper list, required sumstat columns, tabix and GCS output rules |
-| `scripts/coloc/*.py`, `scripts/coloc/*.sh` | `scripts/coloc/R14_UPDATE.md` | input layout, metadata files, the invocation runbook |
-| `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` | WDL pipeline inputs, the Cromwell examples, output columns |
-| `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` | thresholds, script defaults vs production flags, output columns, per-dataset table |
+**Statistics**
+- `mlog10p` only, never a raw p-value; rounded to 4 decimals
+- when p underflows to 0, recompute from beta/se with `scipy.special.log_ndtr`
+- `beta` and `se` formatted `:.3e`
 
-A doc is stale the moment it *enumerates* something the code no longer matches.
-Counts and lists rot silently — dataset lists, column tables, helper-function lists,
-per-dataset invocation tables — so re-derive them from the code rather than trusting them.
+**Coordinates**
+- GRCh38, `#chr` as an integer, **X is 23** (exome munges also map Y→24, MT→26)
+- rows whose chr is null after the cast are malformed — drop them
 
-The hook lives in `.beads/hooks/pre-commit`, which **is** version controlled, so a fresh
-clone gets it as soon as `core.hooksPath` points at `.beads/hooks` (`bd init` sets that;
-`bd` re-points it on checkout). The doc-drift call sits after the
-`# --- END BEADS INTEGRATION ... ---` marker, never inside the beads-managed fence, which
-beads rewrites. It only needs to run `scripts/check-doc-drift.sh || true`.
+**Alleles**
+- `ref`/`alt` follow gnomAD, and `beta`/`af` are flipped when the source's effect allele
+  turned out to be the reference. Each script's docstring states how it resolved this
+  and what it dropped; indel representation is where this goes wrong, so state the
+  decision explicitly rather than reusing another script's.
 
+**Names** — `INFO` uppercase; `neff` lowercase; `n_cases`/`n_controls`,
+`af_cases`/`af_controls`, `rsid`. The API maps these by exact string.
 
-# Cross-repo documentation
-
-`genetics-results-suite` is the spec of record for the suite as a whole; this repo
-documents only its own munging. Changing a munge output that feeds a BigQuery table
-means `genetics-results-db` (loaders, schemas) and that repo's docs may need updating
-too — check them in the same session rather than assuming they follow.
+**Gene burden tabix is a point index** (`-s5 -b6 -e6`, both on `gene_start_pos`), so the
+API finds a gene only if the file's coordinates come from exactly the `gencode_version`
+configured for that dataset in the API's `gene_based_results.py`. Any other version
+returns nothing, with no error. A new version also needs adding to `genes.py`'s
+`gencode_versions` plus a regenerated mapping from
+`create_gene_name_mapping_across_gencode_versions.py`.
 
 
-# Software Development Behavior Guidelines
+# Output contract
 
-1. Don't guess and do things which you are not certain about. Ask the user instead.
-2. Don't add or modify code unrelated to the specific request and context at the moment.
-3. In interactive mode: only use git when asked, stage changes and propose a commit message for user review. In autonomous/orchestrator mode (e.g. ralph wiggum): commit after each completed task with a descriptive message.
-4. **Always** prior to finishing a task and considering it completed, revise all the changes and update Project Specification files.
-5. When trying to fix any bug or error **ALWAYS** think carefully and analyze in detail what happened and WHY? Explain and confirm with user.
-
-
-# Code Conventions
-
-1. Project structure:
-   - `scripts/` - Munging scripts (one per dataset)
-   - `scripts/sumstat_utils.py` - Shared utilities for sumstat munging
-   - `scripts/coloc/`, `scripts/genebass/` - Munging of colocalization and Genebass results
-   - `wdl/` - WDL pipelines and their per-dataset input and Cromwell option JSONs
-   - `metadata/` - Dataset and study metadata read by the scripts
-   - `docs/` - Project documentation
-2. Code should be self-descriptive
-   - Only add comments for tricky or complex parts of the code (explaining WHY something is done)
-   - NO redundant and trivial comments that simply restate what the code does
-3. Private fields and methods should be prefixed with underscore
-4. Git commit messages should be concise and descriptive
+- bgzipped TSV + tabix index, plus a `mlog10p > 4` filtered companion with its own index
+- write it with `write_sumstat_output()` / `write_exome_output()` from
+  `scripts/sumstat_utils.py`; only write your own bgzip pipe when the data can't fit a
+  DataFrame (`munge_ibd.py`, `scripts/split_burden_per_trait.py`)
+- gene burden datasets also ship unfiltered per-trait files, so that a gene's *null*
+  result in a trait is still retrievable
+- `--output` accepts `gs://`; staging to GCS is opt-in (`--stage`), never the default
+- verify before staging: row counts at each filter step, a tabix query that returns a
+  known variant, and the AF-vs-gnomAD plot (`--gnomad-af-plot`) where alleles were
+  aligned. The peak munges take `--sample` for an end-to-end run on synthetic input.
 
 
-# Sumstat Munging Rules
+# What changing an output touches
 
-## Output format
-- bgzipped TSV (`.munged.tsv.gz`) with tabix index (`.tsv.gz.tbi`)
-- tabix indexed with `-s1 -b2 -e2` (chr in col 1, pos in col 2)
-- always produce a filtered companion file `.mlog10p_gt4.tsv.gz` (mlog10p > 4) with its own tabix index
-- use `write_sumstat_output()` from `sumstat_utils.py` for the write+filter+upload pattern. `munge_ibd.py` is the exception: it streams chromosome by chromosome into two long-lived bgzip pipes instead of holding a whole DataFrame, so it indexes and uploads itself
+- **API** — column mappings live in `genetics-results-api/app/config/profiles/{finngen,daly}/summary_stats.py`.
+  Both need updating for a new dataset or a renamed column.
+- **BigQuery** — loaders and schemas live in `genetics-results-db`; check it in the same
+  session rather than assuming it follows. `genetics-results-suite` is the spec of
+  record for the suite as a whole.
+- **Docs in this repo** — a doc is stale the moment it *enumerates* something the code
+  no longer matches, so re-derive lists from the code instead of trusting them:
 
-## Required columns (all sumstat files must have these)
-- `#chr` — chromosome as integer, **X chromosome is always 23**
-- `pos` — genomic position, GRCh38
-- `ref` — reference allele
-- `alt` — alternative (effect) allele
-- `beta` — effect size (log-OR for binary traits), formatted as `:.3e`
-- `se` — standard error, formatted as `:.3e`
-- `mlog10p` — **always use -log10(p)**, never raw p-values. Round to 4 decimals. When p underflows to 0, compute from beta/se using `log_ndtr`
-- `af` — allele frequency (from gnomAD or study)
+| changed | update |
+|---|---|
+| `scripts/munge_*`, `scripts/create_*` | `README.md` — dataset list, run instructions, flags |
+| `scripts/sumstat_utils.py` | `CLAUDE.md` — the output contract above |
+| `scripts/coloc/*` | `scripts/coloc/R14_UPDATE.md` |
+| `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` |
+| `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` |
 
-## Column naming conventions
-- `INFO` — imputation quality, always **uppercase**
-- `neff` — effective sample size, always **lowercase**
-- `n_cases` / `n_controls` — case/control counts (not `nca`/`nco`, not `Nca`/`Nco`)
-- `af_cases` / `af_controls` — allele frequencies in cases/controls
-- `rsid` — dbSNP rs identifier
-
-## Chromosome handling
-- read chr as string from input, map `X` → `23`, cast to Int32
-- drop rows where chr is null after casting (malformed lines)
-- IBD script iterates per-chromosome files and uses `CHR_MAP = {"X": 23}`
-
-## GCS output
-- all scripts accept `gs://` paths in `--output`
-- write locally to temp dir, tabix-index, then upload both `.tsv.gz` and `.tsv.gz.tbi` via `gcloud storage cp`
-- use `upload_to_gcs()` from `sumstat_utils.py`
-
-## Shared code (`scripts/sumstat_utils.py`)
-- gnomAD constants: `GNOMAD_DEFAULT`, `GNOMAD_AF_COLS`, `GNOMAD_KEEP_COLS`
-- `upload_to_gcs()` — upload file + .tbi to GCS
-- `write_bgzip()` — bgzip + tabix a DataFrame
-- `write_sumstat_output()` — full + filtered write with GCS support
-- `write_exome_output()` — the same for exome results, with the tabix columns and the mlog10p column name given by the caller (gene burden files are indexed on the gene locus, `-s5 -b6 -e6`). Given `per_trait_dir`, it also writes one unfiltered `<trait_original>.tsv.gz` + `.tbi` per distinct trait there
-- `read_gnomad_filtered()` — read filtered gnomAD TSV (plain or gzipped)
-- `build_rsid_set()` — extract rsid set from DataFrame
-- `stream_gnomad_by_rsid()` — stream gnomAD keeping rsid matches
-
-## gnomAD allele alignment
-- PGC/BIP: join on rsid, classify A1/A2 vs ref/alt orientation, flip beta and AFs when A1 is ref, drop mismatches, and take chr/pos from gnomAD (build 38)
-- GP2: join on chr:pos:ref:alt (both build 38), flip beta and AF for SNPs where effect_allele is ref; never flip indels, whose representation may differ
-- IBD: gnomAD is streamed by (chr, pos) and joined on chr:pos:ref:alt in both orientations, for the AF-AF plot only — the output is never flipped
-- COVID: ALT is already the effect allele, so the chr:pos:ref:alt join only adds rsid and the `most_severe` / `gene_most_severe` annotation
-- `--gnomad-filtered` on every one of these skips the streaming pass and reads a previously saved filtered gnomAD TSV instead; that file is what the drivers reuse across phenotypes of the same study
+`scripts/check-doc-drift.sh` warns (never blocks) on commits that skip this; it runs
+from `.beads/hooks/pre-commit`, outside the beads-managed fence that beads rewrites.
 
 
-# Exome / Gene Burden Output Formats
+# Working agreements
 
-Column definitions live with the scripts that write them: gene burden results in the final
-`select()` of `scripts/genebass/convert_genebass_gene_results.py`, exome variant results in the
-header comment of `scripts/genebass/convert_genebass_variant_results.sh`.
-
-The non-Genebass exome munges (`munge_schema*.py`, `munge_bipex.py`, `munge_ibd_exome.py`,
-`munge_ibd_supp_*.py`) reproduce those two layouts in their own `build_output()` and write them
-with `write_exome_output()`, filling columns the source does not provide with NA. Gene burden
-files are tabix indexed on the gene locus (`-s5 -b6 -e6`), variant files on the variant position
-(`-s2 -b3 -e3`).
-
-Gene burden files are indexed on a POINT (`-b6 -e6` are both `gene_start_pos`), not an
-interval, so the API only finds a gene when the file's coordinates come from exactly the
-`gencode_version` configured for that dataset in `gene_based_results.py` — any other version
-silently returns nothing. Match the version you pass to `--gencode` with that config, and if
-it is a version the API does not already carry in `genes.py`'s `gencode_versions`, add it
-there and regenerate the cross-version name mapping with
-`create_gene_name_mapping_across_gencode_versions.py`. Current mapping: genebass v35,
-SCHEMA2/BipEx2 v39, IBD exome v45.
-
-Every gene burden dataset also ships an unfiltered `gene_burden_per_trait/<trait_original>.tsv.gz`
-with the same tabix index — that is what the API serves by trait and what BigQuery is loaded
-from, so a gene's null result in a given trait is retrievable. `write_exome_output(per_trait_dir=…)`
-writes them for the datasets small enough to hold in a DataFrame; genebass goes through
-`scripts/split_burden_per_trait.py` instead. Genebass is also the one dataset with no combined
-UNFILTERED file: at ~343M rows there is nothing to gain from one, so its cross-trait file
-(`gene_burden_results.mlog10p_gt4.tsv.gz`) keeps the `mlog10p_burden > 4` cut. See the README
-for the full layout.
-
-`munge_als.py` and `munge_asmqtl.py` are variant-level but not in that layout — ALS follows
-`scripts/genebass/cleanup_genebass_variant_results.py` with `most_severe`/`gene_most_severe`
-added, and ASM-QTL has its own methylation-target columns. Check their `select()` before
-assuming a shared schema.
-
-
-# API Integration
-
-Sumstat column mappings are defined in:
-- `genetics-results-api/app/config/profiles/finngen/summary_stats.py`
-- `genetics-results-api/app/config/profiles/daly/summary_stats.py`
-
-The API maps file columns to internal names (e.g. `INFO` → `info`, `neff` → `n_eff`). Update both profile files when adding new sumstat datasets or changing column names.
-
-
-====
-
-**Don't forget any of the 'QUALITY CODING RULES' above!!!**
+- Don't guess. Ask rather than infer an assumption about the data.
+- Don't change code unrelated to the request; flag it instead.
+- Re-read a file before editing it — it may have changed since you last read it.
+- Interactive mode: stage changes and propose a commit message, don't commit.
+  Autonomous mode (ralph wiggum): commit each completed task.
+- When fixing a bug, explain what happened and *why* before changing anything.
