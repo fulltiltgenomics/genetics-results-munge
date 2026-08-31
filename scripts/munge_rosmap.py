@@ -96,6 +96,8 @@ from pathlib import Path
 
 import polars as pl
 
+from peak_utils import filter_canonical, numeric_chrom_expr, upload_to_gcs, write_open_chromatin
+
 DATASET = "rosmap_open_chromatin"
 RESOURCE = "rosmap_brain"
 VERSION = "2023"
@@ -176,36 +178,13 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
-    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25)."""
-    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
-    up = e.str.to_uppercase()
-    return (
-        pl.when(up == "X").then(pl.lit("23"))
-        .when(up == "Y").then(pl.lit("24"))
-        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
-        .otherwise(e)
-    )
-
-
-# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
-# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
-# (alt/random/scaffold/unplaced/Un_*) must be DROPPED here or they break the BigQuery chr load.
-CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
-
-
-def _drop_noncanonical(df: pl.DataFrame) -> pl.DataFrame:
-    """Keep only rows whose (already numeric) chrom is a canonical primary chromosome."""
-    return df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
-
-
 def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     """Parse chrom/start/end from a single id column like chr1:1000-2000 (chrom -> numeric)."""
     parsed = df.select(
         pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")
     ).unnest("_g")
-    return _drop_noncanonical(df.with_columns(
-        _numeric_chrom(parsed["1"]).alias("chrom"),
+    return filter_canonical(df.with_columns(
+        numeric_chrom_expr(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
     ))
@@ -214,8 +193,8 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
 def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     """Rename explicit coordinate columns to chrom/start/end and enforce numeric chrom + int coords."""
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return _drop_noncanonical(df.with_columns(
-        _numeric_chrom(pl.col("chrom")).alias("chrom"),
+    return filter_canonical(df.with_columns(
+        numeric_chrom_expr().alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
     ))
@@ -395,38 +374,6 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     return df.select(OUTPUT_COLUMNS)
 
 
-def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as "NA"."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    # every empty/missing cell serialized as the literal "NA"
-    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-
-    header = "#" + "\t".join(OUTPUT_COLUMNS)
-    # prepend header AFTER sorting the body (header must stay on top, not be sorted)
-    pipeline = (
-        f'( printf "%s\\n" {shell_quote(header)}; '
-        f'LC_ALL=C sort -k1,1 -k2,2n {shell_quote(str(body))} ) | bgzip -c > {shell_quote(output_path)}'
-    )
-    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
-    print(f"  wrote {df.height} rows -> {output_path}")
-    print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
-
-
-def shell_quote(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
-
-
-def upload_to_gcs(local_path: str, gcs_path: str) -> None:
-    subprocess.run(["gcloud", "storage", "cp", local_path, gcs_path], check=True)
-    print(f"  uploaded {gcs_path}")
-    tbi = local_path + ".tbi"
-    if Path(tbi).exists():
-        subprocess.run(["gcloud", "storage", "cp", tbi, gcs_path + ".tbi"], check=True)
-        print(f"  uploaded {gcs_path}.tbi")
-
-
 def _synthetic_inputs(tmpdir: Path) -> tuple[str, str]:
     """Write tiny synthetic per-cell-type/condition BEDs + a multi-gene peak->gene links file.
 
@@ -541,7 +488,7 @@ def run_sample() -> None:
         print(out.sort("chrom", "start", "cell_type", "condition").head(10))
 
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
-    write_open_chromatin(out, out_path)
+    write_open_chromatin(out, out_path, OUTPUT_COLUMNS)
 
     # empty cells serialize as the literal "NA" (n_cells/cell_ontology_id/uberon_id and, on the
     # union peak, target_gene*); every row still has 18 columns
@@ -584,7 +531,8 @@ def main() -> None:
     out = build_output(long, args)
     assert out.columns == OUTPUT_COLUMNS, f"column order mismatch: {out.columns}"
 
-    write_open_chromatin(out, output_path)
+    write_open_chromatin(out, output_path, OUTPUT_COLUMNS)
+
 
     if args.stage:
         print("Staging to GCS (both buckets) ...")

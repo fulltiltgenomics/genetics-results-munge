@@ -52,8 +52,16 @@ Break one of these and nothing errors — the data is just quietly wrong or unfi
 - `beta` and `se` formatted `:.3e`
 
 **Coordinates**
-- GRCh38, `#chr` as an integer, **X is 23** (exome munges also map Y→24, MT→26)
+- GRCh38, `#chr` as an integer, **X is 23** (exome munges also map Y→24, MT→26; the peak
+  family maps Y→24 and M/MT→25). `peak_utils.numeric_chrom_expr()` is where the peak family
+  *applies* that mapping — a script's own docstring may restate it for whoever reads that
+  script, but a second implementation of it is the bug the module exists to prevent
+- the `chr` prefix is stripped **case-insensitively**, matching the BigQuery side, so every
+  case variant of it names the same chromosome. A case-sensitive strip silently reclassifies
+  an unbounded class of seqnames as scaffolds and drops them
 - rows whose chr is null after the cast are malformed — drop them
+- a non-canonical hg38 contig (alt/random/scaffold/Un) indexes fine and then fails the
+  BigQuery chr INT64 load, so it is dropped after the numeric mapping, never before
 
 **Alleles**
 - `ref`/`alt` follow gnomAD, and `beta`/`af` are flipped when the source's effect allele
@@ -74,10 +82,35 @@ returns nothing, with no error. A new version also needs adding to `genes.py`'s
 
 # Output contract
 
-- bgzipped TSV + tabix index, plus a `mlog10p > 4` filtered companion with its own index
-- write it with `write_sumstat_output()` / `write_exome_output()` from
-  `scripts/sumstat_utils.py`; only write your own bgzip pipe when the data can't fit a
-  DataFrame (`munge_ibd.py`, `scripts/split_burden_per_trait.py`)
+Two shared modules own the write, one per family. A munge's own file should not build the
+output itself: no bgzip pipe, no tabix *indexing* call, no chromosome mapping. Those are the
+parts that got copied across the family and then had to be corrected across it. Running
+`tabix` to *query* a finished file is a different thing and stays in the script — it is how
+`--sample` proves the index answers the query the API will make.
+
+- sumstats and exome/burden: `write_sumstat_output()` / `write_exome_output()` from
+  `scripts/sumstat_utils.py`. bgzipped TSV + tabix index, plus a `mlog10p > 4` filtered
+  companion with its own index. Write your own bgzip pipe only where the output's shape
+  genuinely differs — rows that never fit one DataFrame, or a product that is a directory of
+  files rather than one file — and say which in that script's docstring. Several already do;
+  `grep -l '"bgzip"' scripts/*.py` is the live list, not a line here
+- peak / open-chromatin / variant-effect tables: `scripts/peak_utils.py` — the numeric
+  chromosome expression, the canonical-contig filter, and the sort → bgzip → tabix write. A
+  peak munge that stages re-exports `sumstat_utils.upload_to_gcs` rather than restating it,
+  because that half really is identical. Staging itself is not universal here: some of these
+  leave the upload to their `.sh` wrapper and have no `--stage` at all, so read the script's
+  own flags instead of assuming
+- **the index mode is a per-product choice and it fails silently.** Interval products
+  (`open_chromatin`) take `INTERVAL_INDEX`; point products (`variant_effect`, MPRA) take
+  `POINT_INDEX`. Point-indexing an interval file leaves the API's variant-overlap lookup
+  returning nothing for peaks whose interval merely *contains* the position, with no error
+- pick the writer by which resource you actually have, not by taste. The on-disk-sort path
+  bounds RAM and pays for it in disk: a full uncompressed body, plus sort's own spill once it
+  merges externally. The in-memory path bounds disk to the compressed output alone and pays
+  for it by holding the whole frame. Every writer's docstring states which side it is on and
+  what that costs — read those, not a list here; the list is what went stale first
+- what stays in the script: `load_*`, the transform, and the final `select()`. Those encode
+  one paper's facts and are the reason the nearest script reads as its dataset's spec
 - gene burden datasets also ship unfiltered per-trait files, so that a gene's *null*
   result in a trait is still retrievable
 - `--output` accepts `gs://`; staging to GCS is opt-in (`--stage`), never the default
@@ -99,7 +132,8 @@ returns nothing, with no error. A new version also needs adding to `genes.py`'s
 | changed | update |
 |---|---|
 | `scripts/munge_*`, `scripts/create_*` | `README.md` — dataset list, run instructions, flags |
-| `scripts/sumstat_utils.py` | `CLAUDE.md` — the output contract above |
+| `scripts/sumstat_utils.py`, `scripts/peak_utils.py` | `CLAUDE.md` — the output contract above |
+| `scripts/peak_utils.py` | `README.md` — the open-chromatin entry names it as the family's shared writer |
 | `scripts/coloc/*` | `scripts/coloc/R14_UPDATE.md` |
 | `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` |
 | `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` |

@@ -113,6 +113,14 @@ from pathlib import Path
 
 import polars as pl
 
+from peak_utils import (
+    external_sort_bgzip_index,
+    filter_canonical,
+    numeric_chrom_expr,
+    upload_to_gcs,
+    write_open_chromatin,
+)
+
 DATASET = "catlas_open_chromatin"
 RESOURCE = "catlas"
 VERSION = "2021"
@@ -133,29 +141,6 @@ GCS_DALY = f"gs://daly-genetics-results/open_chromatin/{RESOURCE}/{DATASET}.tsv.
 # "chr1:1000-2000", "chr1-1000-2000", "chr1_1000_2000"; the "chr" prefix is optional and
 # gets stripped in _coords_from_id so ids like "1:1000-2000" are not dropped.
 _ID_RE = re.compile(r"^(?:chr)?([^:_\-]+)[:_\-](\d+)[_\-](\d+)$")
-
-
-def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
-    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25)."""
-    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
-    up = e.str.to_uppercase()
-    return (
-        pl.when(up == "X").then(pl.lit("23"))
-        .when(up == "Y").then(pl.lit("24"))
-        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
-        .otherwise(e)
-    )
-
-
-# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
-# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
-# (alt/random/scaffold/unplaced/Un_*) must be DROPPED here or they break the BigQuery chr load.
-CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
-
-
-def _drop_noncanonical(df: pl.DataFrame) -> pl.DataFrame:
-    """Keep only rows whose (already numeric) chrom is a canonical primary chromosome."""
-    return df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
 
 
 # best-effort keyword -> harmonized tissue for the fallback path when no explicit
@@ -278,8 +263,8 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     parsed = df.select(
         pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")
     ).unnest("_g")
-    return _drop_noncanonical(df.with_columns(
-        _numeric_chrom(parsed["1"]).alias("chrom"),
+    return filter_canonical(df.with_columns(
+        numeric_chrom_expr(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
     ))
@@ -288,8 +273,8 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
 def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     """Rename explicit coordinate columns to chrom/start/end and enforce numeric chrom + int coords."""
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return _drop_noncanonical(df.with_columns(
-        _numeric_chrom(pl.col("chrom")).alias("chrom"),
+    return filter_canonical(df.with_columns(
+        numeric_chrom_expr().alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
     ))
@@ -374,9 +359,8 @@ def build_matrix_batched(args: argparse.Namespace, output_path: str) -> int:
             total_rows += out.height
             print(f"    cols {start}-{start + len(batch) - 1}: +{out.height} rows (cum {total_rows})")
 
-    _sort_index_bgzip(body, output_path, tmp_root)
+    external_sort_bgzip_index(body, output_path, OUTPUT_COLUMNS, sort_tmp=tmp_root)
     print(f"  wrote {total_rows} rows -> {output_path}")
-    print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
     return total_rows
 
 
@@ -521,44 +505,6 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     return df.select(OUTPUT_COLUMNS)
 
 
-def _sort_index_bgzip(body: Path, output_path: str, sort_tmp: Path | None = None) -> None:
-    """External LC_ALL=C sort -k1,1 -k2,2n of an on-disk body TSV, prepend the header, bgzip, and
-    tabix -p bed (interval index). sort_tmp keeps the sort's scratch off a tiny root disk when set."""
-    header = "#" + "\t".join(OUTPUT_COLUMNS)
-    tflag = f"-T {shell_quote(str(sort_tmp))} " if sort_tmp is not None else ""
-    # prepend header AFTER sorting the body (header must stay on top, not be sorted)
-    pipeline = (
-        f'( printf "%s\\n" {shell_quote(header)}; '
-        f'LC_ALL=C sort {tflag}-k1,1 -k2,2n {shell_quote(str(body))} ) | bgzip -c > {shell_quote(output_path)}'
-    )
-    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
-
-
-def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index), missing values as "NA"."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    # write body without header; every empty/missing cell serialized as the literal "NA"
-    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-    _sort_index_bgzip(body, output_path)
-    print(f"  wrote {df.height} rows -> {output_path}")
-    print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
-
-
-def shell_quote(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
-
-
-def upload_to_gcs(local_path: str, gcs_path: str) -> None:
-    subprocess.run(["gcloud", "storage", "cp", local_path, gcs_path], check=True)
-    print(f"  uploaded {gcs_path}")
-    tbi = local_path + ".tbi"
-    if Path(tbi).exists():
-        subprocess.run(["gcloud", "storage", "cp", tbi, gcs_path + ".tbi"], check=True)
-        print(f"  uploaded {gcs_path}.tbi")
-
-
 def _synthetic_inputs(tmpdir: Path) -> tuple[str, str, str, str]:
     """Write a tiny synthetic matrix + tissue map + gene links + metadata mimicking the layouts.
 
@@ -685,7 +631,7 @@ def run_sample() -> None:
         print(out.head())
 
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
-    write_open_chromatin(out, out_path)
+    write_open_chromatin(out, out_path, OUTPUT_COLUMNS)
 
     # empty cells serialize as the literal "NA"; every row still has 18 columns
     import gzip

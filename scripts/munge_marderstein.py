@@ -52,8 +52,10 @@ INDEXING CONTRACT (from the epic design — the results-api overlap/point engine
     Point-indexing would make the API's variant-overlap fast path SILENTLY MISS peaks whose
     interval contains pos.
   - variant_effect (Product B, chrombpnet + flare): POINT-indexed  `tabix -s1 -b2 -e2`.
-  All files: numeric-aware `sort -k1,1n -k2,2n` before bgzip (numeric seqnames group per tabix);
-  exact canonical column order. The API prepends `resource` itself; it is NOT written into the file.
+  All files: rows grouped by seqname and ascending by position before bgzip, which is all tabix
+  requires — the external path sorts the seqname lexicographically (`sort -k1,1 -k2,2n`), the
+  in-memory path numerically; exact canonical column order. The API prepends `resource` itself; it
+  is NOT written into the file.
 
 DATA ACCESS (download is OFF by default):
   synapseclient authenticates from ~/.synapseConfig (a SYNAPSE_AUTH_TOKEN env var, if set, wins).
@@ -73,12 +75,22 @@ import io
 import itertools
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import polars as pl
+
+from peak_utils import (
+    INTERVAL_INDEX,
+    POINT_INDEX,
+    append_body,
+    external_sort_bgzip_index,
+    filter_canonical,
+    numeric_chrom_expr,
+    upload_to_gcs,
+    write_bgzip_index,
+)
 
 RESOURCE = "marderstein"
 VERSION = "2026"
@@ -388,9 +400,9 @@ def load_peaks(args: argparse.Namespace) -> pl.DataFrame:
 def build_open_chromatin(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     # convention A: chrom + peak_id are NUMERIC (chrX=23, chrY=24, chrM/MT=25). load_peaks yields a
     # chr-prefixed chrom; normalize it first so peak_id = "<numchrom>-<start>-<end>" (e.g. 23-100-200).
-    df = long.with_columns(_numeric_chrom_expr().alias("chrom"))
+    df = long.with_columns(numeric_chrom_expr().alias("chrom"))
     # drop non-canonical hg38 contigs (alt/random/scaffold/Un) so the INT64 chr load never sees them
-    df = df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
+    df = filter_canonical(df)
     df = df.with_columns(_peak_key().alias("peak_id"))
     ctx_map = derive_context_map(df["cell_type"].unique().to_list(), args)
     df = df.join(ctx_map, on="cell_type", how="left")
@@ -424,33 +436,11 @@ def _load_variant_coords(df: pl.DataFrame, args: argparse.Namespace) -> pl.DataF
     )
 
 
-def _numeric_chrom_expr(col: str = "chrom") -> pl.Expr:
-    """Numeric chromosome token from a chrom column: strip 'chr', then X=23, Y=24, M/MT=25, else the
-    numeric chromosome as-is. Mirrors CHR_STRING_TO_INT_SQL / chrom_to_int() in genetics-results-db so
-    the output `chrom`/`peak_id`/`variant` tokens match the tables' chr INT64 encoding. Result is the
-    numeric token as a string (kept as string so nulls / any unexpected contig survive untouched).
-    """
-    base = pl.col(col).cast(pl.Utf8).str.replace("(?i)^chr", "").str.to_uppercase()
-    return (
-        pl.when(base == "X").then(pl.lit("23"))
-        .when(base == "Y").then(pl.lit("24"))
-        .when(base == "M").then(pl.lit("25"))
-        .when(base == "MT").then(pl.lit("25"))
-        .otherwise(base)
-    )
-
-
-# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
-# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
-# (alt/random/scaffold/unplaced/Un_*) must be DROPPED from BOTH products or they break the chr load.
-CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
-
-
 def _variant_string(numeric_chrom: bool) -> pl.Expr:
     # variant = "chr:pos:ref:alt". Canonical platform convention (default): numeric chromosome with
     # X=23/Y=24/M/MT=25 and NO "chr" prefix (e.g. "1:1000:A:G", "23:100:A:G"), matching the
     # variant_effect table's chr INT64 encoding. The file's `chrom` column stays chr-prefixed.
-    chrom = _numeric_chrom_expr() if numeric_chrom else pl.col("chrom").cast(pl.Utf8)
+    chrom = numeric_chrom_expr() if numeric_chrom else pl.col("chrom").cast(pl.Utf8)
     return pl.format("{}:{}:{}:{}", chrom, pl.col("pos"), pl.col("ref"), pl.col("alt"))
 
 
@@ -462,11 +452,11 @@ def _finalize_variant_effect(df: pl.DataFrame, args: argparse.Namespace) -> pl.D
     """
     # drop non-canonical hg38 contigs (alt/random/scaffold/Un) regardless of --variant-keep-chr:
     # filter on the numeric mapping so the platform's INT64 chr load never sees a scaffold/alt name
-    df = df.filter(_numeric_chrom_expr().is_in(CANONICAL_CHROMS))
+    df = filter_canonical(df, numeric_chrom_expr())
     variant = _variant_string(numeric_chrom=not args.variant_keep_chr)
     df = df.with_columns(variant.alias("variant"))
     if not args.variant_keep_chr:
-        df = df.with_columns(_numeric_chrom_expr().alias("chrom"))
+        df = df.with_columns(numeric_chrom_expr().alias("chrom"))
     return df.select(VE_COLUMNS)
 
 
@@ -720,15 +710,6 @@ def _reshape_wide_batch(
     return _finalize_variant_effect(long, args), total_pairs
 
 
-def _append_ve_batch(df: pl.DataFrame, temp_fh) -> None:
-    """Append 18-col rows to the temp (no header; empty cells coerced to null -> written as "NA")."""
-    df = df.select(VE_COLUMNS).with_columns(
-        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0).then(None).otherwise(pl.col(c)).alias(c)
-        for c in VE_COLUMNS
-    )
-    df.write_csv(temp_fh, separator="\t", include_header=False, null_value="NA")
-
-
 def _iter_chrombpnet_inputs(args: argparse.Namespace):
     """Yield (path, delete_after) for each wide input, ONE AT A TIME.
 
@@ -772,7 +753,7 @@ def run_chrombpnet_streaming(args: argparse.Namespace, output_path: str) -> None
                 f_total += pairs
                 f_kept += out.height
                 if out.height:
-                    _append_ve_batch(out, temp_fh)
+                    append_body(out, VE_COLUMNS, temp_fh)
             kept += f_kept
             total += f_total
             print(f"    kept {f_kept}/{f_total} (variant,context) pairs")
@@ -781,35 +762,9 @@ def run_chrombpnet_streaming(args: argparse.Namespace, output_path: str) -> None
                 print(f"    deleted raw input {path}")
     print(f"  chrombpnet thresholding TOTAL: kept {kept}/{total} (variant,context) pairs "
           f"(mlog10p >= {args.mlog10p_thresh})")
-    _finalize_point_external_sort(temp_path, VE_COLUMNS, output_path, tmpdir)
-    os.remove(temp_path)
-
-
-def _finalize_point_external_sort(temp_path: str, columns: list[str], output_path: str, tmpdir: str) -> None:
-    """External `LC_ALL=C sort -k1,1 -k2,2n` (numeric pos, seqnames grouped) -> bgzip -> POINT index.
-
-    Sorting on disk (not in RAM) keeps the finalize step memory-bounded regardless of the temp size.
-    """
-    sorted_path = temp_path + ".sorted"
-    env = {**os.environ, "LC_ALL": "C"}
-    with open(sorted_path, "wb") as out:
-        subprocess.run(["sort", "-T", tmpdir, "-k1,1", "-k2,2n", temp_path],
-                       env=env, stdout=out, check=True)
-    header = ("#" + "\t".join(columns) + "\n").encode()
-    with open(output_path, "wb") as out_fh:
-        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
-        assert proc.stdin is not None
-        proc.stdin.write(header)
-        with open(sorted_path, "rb") as sf:
-            shutil.copyfileobj(sf, proc.stdin, length=1 << 20)
-        proc.stdin.close()
-        rc = proc.wait()
-    if rc != 0:
-        raise subprocess.CalledProcessError(rc, "bgzip -c")
-    os.remove(sorted_path)
-    subprocess.run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", output_path], check=True)
+    external_sort_bgzip_index(temp_path, output_path, VE_COLUMNS, POINT_INDEX, sort_tmp=tmpdir)
     print(f"  wrote {output_path}")
-    print(f"  indexed {output_path}.tbi (POINT: tabix -s1 -b2 -e2)")
+    os.remove(temp_path)
 
 
 def build_flare(args: argparse.Namespace) -> pl.DataFrame:
@@ -852,67 +807,20 @@ def build_flare(args: argparse.Namespace) -> pl.DataFrame:
 
 
 # ------------------------------------------------------------------------------------------------
-# Writers (distinct index modes) + staging
+# Writers (distinct index modes)
 # ------------------------------------------------------------------------------------------------
-def _write_sorted_bgzip(df: pl.DataFrame, columns: list[str], output_path: str) -> str:
-    """numeric-aware sort -> bgzip; header (first token '#'-prefixed) kept on top. Returns path.
-
-    convention B: every empty/missing cell is written as the literal "NA" (nulls via null_value, and
-    any residual empty strings coerced to null first) so no output cell is ever the empty string.
-
-    Sorting is done IN-MEMORY by (numeric chrom, position) — chrom is the numeric token (chrX=23) so
-    all records of a seqname group contiguously and positions ascend within, exactly as tabix needs.
-    The sorted rows are streamed straight into `bgzip` (no multi-GB uncompressed temp file and no
-    external `sort` disk-spill), which matters for large atlases on tight disks.
-    """
-    df = df.with_columns(
-        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0)
-        .then(None)
-        .otherwise(pl.col(c))
-        .alias(c)
-        for c in df.columns
-    )
-    # columns[1] is the position column (start for open_chromatin, pos for variant_effect).
-    df = df.sort(
-        by=[pl.col("chrom").cast(pl.Int64, strict=False), pl.col(columns[1]).cast(pl.Int64, strict=False)],
-        nulls_last=True,
-    )
-    header = ("#" + "\t".join(columns) + "\n").encode()
-    with open(output_path, "wb") as out_fh:
-        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
-        assert proc.stdin is not None
-        proc.stdin.write(header)
-        df.write_csv(proc.stdin, separator="\t", include_header=False, null_value="NA")
-        proc.stdin.close()
-        rc = proc.wait()
-    if rc != 0:
-        raise subprocess.CalledProcessError(rc, "bgzip -c")
-    return output_path
-
-
+# the two output shapes differ ONLY in their column set and index mode, and both take the same
+# in-memory sort -> bgzip path. Keeping them as two named writers is deliberate: point-indexing the
+# intervals would make the API's variant-overlap fast path silently miss peaks whose interval
+# contains pos.
 def write_interval(df: pl.DataFrame, output_path: str) -> None:
     """open_chromatin: INTERVAL index (tabix -p bed / -s1 -b2 -e3)."""
-    _write_sorted_bgzip(df, OC_COLUMNS, output_path)
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
-    print(f"  wrote {df.height} rows -> {output_path}")
-    print(f"  indexed {output_path}.tbi (INTERVAL: tabix -p bed / -s1 -b2 -e3)")
+    write_bgzip_index(df, output_path, OC_COLUMNS, INTERVAL_INDEX)
 
 
 def write_point(df: pl.DataFrame, output_path: str) -> None:
     """variant_effect: POINT index (tabix -s1 -b2 -e2)."""
-    _write_sorted_bgzip(df, VE_COLUMNS, output_path)
-    subprocess.run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", output_path], check=True)
-    print(f"  wrote {df.height} rows -> {output_path}")
-    print(f"  indexed {output_path}.tbi (POINT: tabix -s1 -b2 -e2)")
-
-
-def upload_to_gcs(local_path: str, gcs_path: str) -> None:
-    subprocess.run(["gcloud", "storage", "cp", local_path, gcs_path], check=True)
-    print(f"  uploaded {gcs_path}")
-    tbi = local_path + ".tbi"
-    if Path(tbi).exists():
-        subprocess.run(["gcloud", "storage", "cp", tbi, gcs_path + ".tbi"], check=True)
-        print(f"  uploaded {gcs_path}.tbi")
+    write_bgzip_index(df, output_path, VE_COLUMNS, POINT_INDEX)
 
 
 def _synapse_login():

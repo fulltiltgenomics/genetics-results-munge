@@ -119,6 +119,14 @@ from pathlib import Path
 
 import polars as pl
 
+from peak_utils import (
+    filter_canonical,
+    numeric_chrom_expr,
+    upload_to_gcs,
+    write_open_chromatin,
+    write_open_chromatin_lazy,
+)
+
 DATASET = "calderon_open_chromatin"
 RESOURCE = "calderon_immune"
 VERSION = "2019"
@@ -232,29 +240,6 @@ def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col:
 
 def _peak_key() -> pl.Expr:
     return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
-
-
-def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
-    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25).
-
-    Applied only at the FINAL (hg38) write: the coord helpers keep chr-prefixed names because
-    the liftOver chain (hg19ToHg38) is keyed on chr-prefixed seqnames.
-    """
-    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
-    up = e.str.to_uppercase()
-    return (
-        pl.when(up == "X").then(pl.lit("23"))
-        .when(up == "Y").then(pl.lit("24"))
-        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
-        .otherwise(e)
-    )
-
-
-# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
-# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
-# (alt/random/scaffold/unplaced/Un_*) must be DROPPED or they break the BigQuery chr load. liftOver
-# can emit alt/random contigs from an hg19 primary locus, so this is applied AFTER liftOver.
-CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +373,7 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
         df = _normalize_coords(df, args.links_chrom_col, args.links_start_col, args.links_end_col)
 
     # links are already hg38; convert to numeric chrom so the key matches the final hg38 peak_key
-    df = df.with_columns(_numeric_chrom(pl.col("chrom")).alias("chrom"))
+    df = df.with_columns(numeric_chrom_expr().alias("chrom"))
     df = df.with_columns(_peak_key().alias("_key"))
     gene = pl.col(args.links_gene_col).cast(pl.Utf8) if args.links_gene_col in df.columns else pl.lit(None, dtype=pl.Utf8)
     geneid = pl.col(args.links_geneid_col).cast(pl.Utf8) if args.links_geneid_col in df.columns else pl.lit(None, dtype=pl.Utf8)
@@ -476,11 +461,12 @@ def build_output(long_hg38: pl.LazyFrame, args: argparse.Namespace) -> pl.LazyFr
     so the full atlas is never materialized in RAM (the count-matrix melt/aggregate already happened
     on disk); the caller streams the result to CSV via sink.
     """
-    # convert the final hg38 chrom to numeric (X->23, ...) AFTER liftOver, then build peak_id/keys
-    df = long_hg38.with_columns(_numeric_chrom(pl.col("chrom")).alias("chrom"))
-    # liftOver can map an hg19 primary locus onto an hg38 alt/random contig; drop those non-canonical
-    # seqnames so the platform's INT64 chr load never sees a scaffold/alt/Un name
-    df = df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
+    # the coord helpers above keep chr-prefixed seqnames because the liftOver chain (hg19ToHg38) is
+    # keyed on them; the numeric conversion therefore happens only here, at the final hg38 write
+    df = long_hg38.with_columns(numeric_chrom_expr().alias("chrom"))
+    # liftOver can map an hg19 primary locus onto an hg38 alt/random contig, so the canonical filter
+    # has to run AFTER it rather than at ingest
+    df = filter_canonical(df)
     df = df.with_columns(_peak_key().alias("peak_id"))
 
     if args.links:
@@ -503,54 +489,6 @@ def build_output(long_hg38: pl.LazyFrame, args: argparse.Namespace) -> pl.LazyFr
         pl.lit(VERSION).alias("version"),
     )
     return df.select(OUTPUT_COLUMNS)
-
-
-def _sort_index_bgzip(body: Path, output_path: str) -> None:
-    """external LC_ALL=C sort -k1,1 -k2,2n -> bgzip -> tabix -p bed (interval index) of a body TSV.
-
-    The on-disk sort keeps memory bounded and absorbs liftOver's coordinate reordering before bgzip."""
-    header = "#" + "\t".join(OUTPUT_COLUMNS)
-    pipeline = (
-        f'( printf "%s\\n" {shell_quote(header)}; '
-        f'LC_ALL=C sort -k1,1 -k2,2n {shell_quote(str(body))} ) | bgzip -c > {shell_quote(output_path)}'
-    )
-    subprocess.run(pipeline, shell=True, check=True, executable="/bin/bash")
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
-    print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
-
-
-def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """In-memory writer (used by --sample): serialize the small frame then sort/index/bgzip."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    # every empty/missing cell serialized as the literal "NA"
-    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-    _sort_index_bgzip(body, output_path)
-    print(f"  wrote {df.height} rows -> {output_path}")
-
-
-def write_open_chromatin_lazy(lf: pl.LazyFrame, output_path: str) -> None:
-    """Streaming writer (real run): sink the lazy atlas to an on-disk body TSV without materializing
-    it in RAM, then sort/index/bgzip. Keeps the final write memory-bounded like the melt/aggregate."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    lf.sink_csv(body, separator="\t", include_header=False, null_value="NA",
-                maintain_order=False, engine="streaming")
-    _sort_index_bgzip(body, output_path)
-    print(f"  streamed atlas -> {output_path}")
-
-
-def shell_quote(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
-
-
-def upload_to_gcs(local_path: str, gcs_path: str) -> None:
-    subprocess.run(["gcloud", "storage", "cp", local_path, gcs_path], check=True)
-    print(f"  uploaded {gcs_path}")
-    tbi = local_path + ".tbi"
-    if Path(tbi).exists():
-        subprocess.run(["gcloud", "storage", "cp", tbi, gcs_path + ".tbi"], check=True)
-        print(f"  uploaded {gcs_path}.tbi")
 
 
 def transform(args: argparse.Namespace, work_dir: Path) -> pl.LazyFrame:
@@ -650,7 +588,10 @@ def run_sample() -> None:
 
     # non-canonical contigs (alt/random/scaffold/Un that liftOver can emit) are DROPPED (Fix A)
     # AFTER the numeric-chrom conversion; the "chrUn" synthetic peak must not survive while chrX does
-    assert not any("Un" in str(p) for p in out["peak_id"].to_list()), "non-canonical contig leaked"
+    # case-insensitive on purpose: peak_id carries whatever the numeric-chrom step left, and that
+    # step upper-cases, so a "chrUn" leak arrives as "UN-..." — matching "Un" would check nothing.
+    # a kept peak_id is digits and dashes only, so no canonical row can match either spelling.
+    assert not any("un" in str(p).lower() for p in out["peak_id"].to_list()), "non-canonical contig leaked"
     assert chroms == {"1", "2", "23"}, f"expected canonical chroms only; got {chroms}"
     print("  non-canonical contig (chrUn) dropped: OK")
 
@@ -669,7 +610,7 @@ def run_sample() -> None:
         print(out.sort("chrom", "start").head(10))
 
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
-    write_open_chromatin(out, out_path)
+    write_open_chromatin(out, out_path, OUTPUT_COLUMNS)
 
     # empty cells serialize as the literal "NA" (n_cells/cell_ontology_id/uberon_id/target_gene*);
     # every row still has 18 columns
@@ -716,7 +657,7 @@ def main() -> None:
     print(f"Reading counts {args.counts} (chunk-size={args.chunk_size} peaks/batch) ...")
     work_dir = Path(tempfile.mkdtemp())
     out = transform(args, work_dir)
-    write_open_chromatin_lazy(out, output_path)
+    write_open_chromatin_lazy(out, output_path, OUTPUT_COLUMNS)
 
     if args.stage:
         print("Staging to GCS (both buckets) ...")

@@ -102,12 +102,20 @@ Local validation without the full dataset or any upload:
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import polars as pl
+
+from peak_utils import (
+    append_body,
+    external_sort_bgzip_index,
+    filter_canonical,
+    numeric_chrom_expr,
+    upload_to_gcs,
+    write_open_chromatin,
+)
 
 DATASET = "epimap_open_chromatin"
 RESOURCE = "epimap"
@@ -265,29 +273,6 @@ def biosample_from_path(path: str, override: str | None) -> str:
     return m.group(1) if m else name.split(".")[0]
 
 
-def _numeric_chrom(expr: pl.Expr) -> pl.Expr:
-    """Strip any 'chr' prefix and map to a numeric-string chrom (X=23, Y=24, M/MT=25)."""
-    e = expr.cast(pl.Utf8).str.replace(r"^chr", "")
-    up = e.str.to_uppercase()
-    return (
-        pl.when(up == "X").then(pl.lit("23"))
-        .when(up == "Y").then(pl.lit("24"))
-        .when(up.is_in(["M", "MT"])).then(pl.lit("25"))
-        .otherwise(e)
-    )
-
-
-# canonical primary-assembly chromosomes as numeric strings (1..22, X=23, Y=24, M/MT=25). the
-# platform is primary-assembly only and loads chrom as INT64, so non-canonical hg38 contigs
-# (alt/random/scaffold/unplaced/Un_*) must be DROPPED here or they break the BigQuery chr load.
-CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))
-
-
-def _drop_noncanonical(df: pl.DataFrame) -> pl.DataFrame:
-    """Keep only rows whose (already numeric) chrom is a canonical primary chromosome."""
-    return df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
-
-
 def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
     """Read one biosample's ChromHMM CALLS BED, filter to included states, return long rows.
 
@@ -300,7 +285,7 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
         raise ValueError(f"{path}: expected >= {max(4, state_col)} BED columns, got {len(cols)}")
 
     df = df.select(
-        _numeric_chrom(pl.col(cols[0])).alias("chrom"),
+        numeric_chrom_expr(cols[0]).alias("chrom"),
         pl.col(cols[1]).cast(pl.Int64).alias("start"),
         pl.col(cols[2]).cast(pl.Int64).alias("end"),
         pl.col(cols[state_col - 1]).cast(pl.Utf8).alias("_state_raw"),
@@ -311,7 +296,7 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
     df = df.with_columns(pl.col("_state_raw").replace_strict(mapping, default=None).alias("state"))
     df = df.filter(pl.col("state").is_in(list(INCLUDED_STATES)))
 
-    return _drop_noncanonical(df.select(
+    return filter_canonical(df.select(
         "chrom", "start", "end",
         pl.lit(biosample).alias("cell_type"),
         pl.col("state"),
@@ -320,8 +305,8 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
 
 def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
     parsed = df.select(pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")).unnest("_g")
-    return _drop_noncanonical(df.with_columns(
-        _numeric_chrom(parsed["1"]).alias("chrom"),
+    return filter_canonical(df.with_columns(
+        numeric_chrom_expr(parsed["1"]).alias("chrom"),
         parsed["2"].cast(pl.Int64).alias("start"),
         parsed["3"].cast(pl.Int64).alias("end"),
     ))
@@ -329,8 +314,8 @@ def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
 
 def _normalize_link_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
     df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return _drop_noncanonical(df.with_columns(
-        _numeric_chrom(pl.col("chrom")).alias("chrom"),
+    return filter_canonical(df.with_columns(
+        numeric_chrom_expr().alias("chrom"),
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
     ))
@@ -470,50 +455,6 @@ def load_all_calls(files: list[str], args: argparse.Namespace) -> pl.DataFrame:
     return pl.concat(frames) if frames else pl.DataFrame()
 
 
-def write_open_chromatin(df: pl.DataFrame, output_path: str) -> None:
-    """In-memory writer (used by --sample): serialize the small frame then sort/index/bgzip."""
-    tmpdir = tempfile.mkdtemp()
-    body = Path(tmpdir) / "body.tsv"
-    # every empty/missing cell serialized as the literal "NA"
-    df.write_csv(body, separator="\t", include_header=False, null_value="NA")
-    _finalize_interval_external_sort(str(body), OUTPUT_COLUMNS, output_path, tmpdir)
-    print(f"  wrote {df.height} rows -> {output_path}")
-
-
-def _append_rows(df: pl.DataFrame, temp_fh) -> None:
-    """Append 18-col rows to the on-disk temp (no header; empty cells coerced to null -> "NA")."""
-    df = df.select(OUTPUT_COLUMNS).with_columns(
-        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0).then(None).otherwise(pl.col(c)).alias(c)
-        for c in OUTPUT_COLUMNS
-    )
-    df.write_csv(temp_fh, separator="\t", include_header=False, null_value="NA")
-
-
-def _finalize_interval_external_sort(temp_path: str, columns: list[str], output_path: str, tmpdir: str) -> None:
-    """External `LC_ALL=C sort -k1,1 -k2,2n` -> bgzip -> tabix -p bed (INTERVAL: -s1 -b2 -e3).
-
-    Sorting on disk (not in RAM) keeps the finalize step memory-bounded regardless of the temp size."""
-    sorted_path = temp_path + ".sorted"
-    env = {**os.environ, "LC_ALL": "C"}
-    with open(sorted_path, "wb") as out:
-        subprocess.run(["sort", "-T", tmpdir, "-k1,1", "-k2,2n", temp_path],
-                       env=env, stdout=out, check=True)
-    header = ("#" + "\t".join(columns) + "\n").encode()
-    with open(output_path, "wb") as out_fh:
-        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
-        assert proc.stdin is not None
-        proc.stdin.write(header)
-        with open(sorted_path, "rb") as sf:
-            shutil.copyfileobj(sf, proc.stdin, length=1 << 20)
-        proc.stdin.close()
-        rc = proc.wait()
-    if rc != 0:
-        raise subprocess.CalledProcessError(rc, "bgzip -c")
-    os.remove(sorted_path)
-    subprocess.run(["tabix", "-f", "-p", "bed", output_path], check=True)
-    print(f"  indexed {output_path}.tbi (tabix -p bed / -s1 -b2 -e3)")
-
-
 def run_streaming(files: list[str], args: argparse.Namespace, output_path: str) -> None:
     """Full build processing ONE CALLS file at a time, appending 18-col rows to an on-disk temp.
 
@@ -534,27 +475,14 @@ def run_streaming(files: list[str], args: argparse.Namespace, output_path: str) 
             bs = biosample_from_path(path, args.cell_type if len(files) == 1 else None)
             long = load_calls(path, bs, args.state_col)
             if long.height:
-                _append_rows(build_output_rows(long, bs, biomap, links, args), temp_fh)
+                append_body(build_output_rows(long, bs, biomap, links, args), OUTPUT_COLUMNS, temp_fh)
             total_rows += long.height
             biosamples.add(bs)
             if i % 50 == 0 or i == len(files):
                 print(f"  [{i}/{len(files)}] {bs}: {long.height} segments (cumulative {total_rows} rows)")
     print(f"  {total_rows} accessible/active segments across {len(biosamples)} biosamples")
-    _finalize_interval_external_sort(temp_path, OUTPUT_COLUMNS, output_path, tmpdir)
+    external_sort_bgzip_index(temp_path, output_path, OUTPUT_COLUMNS, sort_tmp=tmpdir)
     os.remove(temp_path)
-
-
-def shell_quote(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
-
-
-def upload_to_gcs(local_path: str, gcs_path: str) -> None:
-    subprocess.run(["gcloud", "storage", "cp", local_path, gcs_path], check=True)
-    print(f"  uploaded {gcs_path}")
-    tbi = local_path + ".tbi"
-    if Path(tbi).exists():
-        subprocess.run(["gcloud", "storage", "cp", tbi, gcs_path + ".tbi"], check=True)
-        print(f"  uploaded {gcs_path}.tbi")
 
 
 def _synthetic_inputs(tmpdir: Path) -> tuple[list[str], str, str]:
@@ -691,7 +619,7 @@ def run_sample() -> None:
         print(out.head(10))
 
     out_path = str(tmpdir / f"{DATASET}.sample.tsv.gz")
-    write_open_chromatin(out, out_path)
+    write_open_chromatin(out, out_path, OUTPUT_COLUMNS)
 
     # empty cells serialize as the literal "NA" (score is presence-based -> NA); 18 columns per row
     import gzip

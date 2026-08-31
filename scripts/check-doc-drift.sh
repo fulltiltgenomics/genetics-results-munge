@@ -37,8 +37,11 @@ check '^scripts/munge_[^/]*\.(py|sh)$' "$DOC_README" \
 check '^scripts/create_[^/]*\.(py|sh)$' "$DOC_README" \
     'scripts/create_*.{py,sh} -> README.md (output products, the per-script run instructions and their arguments)'
 
-check '^scripts/sumstat_utils\.py$' '^CLAUDE\.md$' \
-    'scripts/sumstat_utils.py -> CLAUDE.md (shared helper list, required sumstat columns, tabix and GCS output rules)'
+check '^scripts/(sumstat|peak)_utils\.py$' '^CLAUDE\.md$' \
+    'scripts/{sumstat,peak}_utils.py -> CLAUDE.md (shared helper list, required columns, index mode, tabix and GCS output rules)'
+
+check '^scripts/peak_utils\.py$' "$DOC_README" \
+    'scripts/peak_utils.py -> README.md (the open-chromatin dataset entry names it as the peak family shared writer)'
 
 check '^scripts/coloc/[^/]*\.(py|sh)$' '^scripts/coloc/R14_UPDATE\.md$' \
     'scripts/coloc/ -> scripts/coloc/R14_UPDATE.md (input layout, metadata files, the invocation runbook)'

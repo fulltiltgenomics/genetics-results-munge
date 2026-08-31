@@ -45,6 +45,8 @@ from pathlib import Path
 
 import polars as pl
 
+from peak_utils import CANONICAL_CHROMS, POINT_INDEX, filter_canonical, numeric_chrom_expr, write_bgzip_index
+
 RESOURCE = "siraj_mpra"
 DATASET = "siraj_mpra"
 
@@ -91,25 +93,6 @@ LINE_SOURCE = {
     "mean_RNA_alt": "mean_RNA_alt",
 }
 
-CANONICAL_CHROMS = frozenset(str(c) for c in range(1, 26))  # 1..22, X=23, Y=24, M/MT=25
-
-
-def _numeric_chrom(col: str) -> pl.Expr:
-    """Numeric chromosome token from a chr-prefixed seqname: strip 'chr', X=23, Y=24, M/MT=25, else
-    the numeric contig. Kept as a string so nulls / non-canonical contigs survive to the drop filter.
-    Mirrors CHR_STRING_TO_INT_SQL in genetics-results-db so the tabix seqnames match the chr INT64
-    encoding.
-    """
-    base = pl.col(col).cast(pl.Utf8).str.replace("(?i)^chr", "").str.to_uppercase()
-    return (
-        pl.when(base == "X").then(pl.lit("23"))
-        .when(base == "Y").then(pl.lit("24"))
-        .when(base == "M").then(pl.lit("25"))
-        .when(base == "MT").then(pl.lit("25"))
-        .otherwise(base)
-    )
-
-
 def _block(df: pl.DataFrame, cell_line: str, source: dict[str, str], prefix: str | None) -> pl.DataFrame:
     """One cell_line's slice as OUT_COLUMNS rows.
 
@@ -136,8 +119,8 @@ def _block(df: pl.DataFrame, cell_line: str, source: dict[str, str], prefix: str
 def build_long(df: pl.DataFrame) -> pl.DataFrame:
     """WIDE per-variant -> LONG per variant x cell_line, canonical column order, non-canonical dropped."""
     df = df.rename({"#chrom": "chrom"})
-    df = df.with_columns(_numeric_chrom("chrom").alias("chrom"))
-    df = df.filter(pl.col("chrom").is_in(CANONICAL_CHROMS))
+    df = df.with_columns(numeric_chrom_expr().alias("chrom"))
+    df = filter_canonical(df)
     df = df.with_columns(
         pl.format("{}:{}:{}:{}", pl.col("chrom"), pl.col("pos"), pl.col("ref"), pl.col("alt")).alias("variant")
     )
@@ -158,28 +141,8 @@ def read_wide(path: str) -> pl.DataFrame:
 
 
 def write_point(df: pl.DataFrame, output_path: str) -> None:
-    """Numeric-sort is already applied; bgzip with a '#'-prefixed header then POINT-index (-s1 -b2 -e2).
-
-    Every empty/missing cell is written as the literal "NA" (residual empty strings coerced to null
-    first) so no output cell is ever the empty string.
-    """
-    df = df.select(OUT_COLUMNS).with_columns(
-        pl.when(pl.col(c).cast(pl.Utf8).str.len_chars() == 0).then(None).otherwise(pl.col(c)).alias(c)
-        for c in OUT_COLUMNS
-    )
-    header = ("#" + "\t".join(OUT_COLUMNS) + "\n").encode()
-    with open(output_path, "wb") as out_fh:
-        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out_fh)
-        assert proc.stdin is not None
-        proc.stdin.write(header)
-        df.write_csv(proc.stdin, separator="\t", include_header=False, null_value="NA")
-        proc.stdin.close()
-        rc = proc.wait()
-    if rc != 0:
-        raise subprocess.CalledProcessError(rc, "bgzip -c")
-    subprocess.run(["tabix", "-f", "-s", "1", "-b", "2", "-e", "2", output_path], check=True)
-    print(f"  wrote {df.height} rows -> {output_path}")
-    print(f"  indexed {output_path}.tbi (POINT: tabix -s1 -b2 -e2)")
+    """build_long already emits rows in (numeric chrom, pos) order, so the writer must not re-sort."""
+    write_bgzip_index(df, output_path, OUT_COLUMNS, POINT_INDEX, sort=False)
 
 
 def run(args: argparse.Namespace) -> None:
