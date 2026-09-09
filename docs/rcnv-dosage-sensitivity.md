@@ -407,11 +407,39 @@ more than the tolerance. The tolerance is **±10% of the interval's own GRCh37 l
 windows measurement's 180-220 kb around a fixed 200 kb window, expressed as a fraction,
 because segments run from 200 kb to 10.3 Mb and credible intervals are smaller still.
 
-The segment span and every credible interval go through one `liftOver` call. That script's
-second, endpoint-only pass is not repeated here: it never rescues an interval, it exists to
-attribute a measurement's failure to one end, and liftOver's own reason string is enough for
-a 163-row table. The four filters decide the dropped set, so both products drop the same
-intervals for the same reasons.
+The segment span and every credible interval go through one such `liftOver` call. What that
+call rejects gets a second chance from its **boundary windows**, and two things have to hold
+before a boundary is borrowed. Every `Start`, `End` and credible-interval endpoint is a
+multiple of the 10 kb step, which the run asserts over all of them; a supplement that moved
+one off the step fails the run. And the 200 kb window that starts (or ends) on the boundary
+has to be **a member of the published window set**, which the run reads out of one of the
+sliding-window BEDs and checks per borrowed window. Sitting on the grid does not imply
+membership: 200 kb windows on a 10 kb step fit the hg19 autosome lengths 287,673 times
+against the 267,237 windows the paper published, so ~7% of on-grid positions are not windows
+— and a boundary whose window was never published is left unlifted with
+that as its reason. The two windows are lifted by the same `lift_intervals`, same chain, same
+four filters, and the composed interval is kept only when both windows lift, to the interval's
+own chromosome, leaving start < end. Because membership is checked rather than inferred, a
+segment's GRCh38 boundary is the coordinate `rcnv_window_associations_v` carries for the
+window sitting on it, so a segment and the windows beneath it cannot disagree about where a
+boundary is.
+
+That check makes the unpacked sliding-window BEDs a second input to `--product segments`:
+`--download` fetches the same Zenodo tar `--product windows` uses, and `--window-dir`
+overrides where it is looked for.
+
+**Why the window and not the endpoint.** Lifting the two 1 bp endpoints instead is the obvious
+cheaper move, and it is wrong on both counts a boundary fails here: an endpoint that abuts an
+assembly gap has no base to map at all, and a lone base inside a segmental duplication maps
+into the paralogous copy — 15q11.2-q13.3's start comes out 470 kb from where the window
+beneath it lands and 100 kb from the GRCh38 coordinate this same table already gives the
+15q11.2 DEL segment for the identical GRCh37 base. A 200 kb window has enough unique sequence
+for minMatch 0.95 to anchor it in the region it came from.
+
+**No length filter on the composed interval.** The ±10% tolerance is about an interval's
+*interior* transferring intact, which is not what a composed interval claims. `22q11.21` DEL
+comes out at 0.865 of its GRCh37 length because GRCh38 resolved the LCR22 duplications
+differently; that contraction is the answer, not an error to reject.
 
 The binary and the chain are not vendored; `--download` fetches them into `--cache-dir`
 (`--liftover-bin` / `--chain` override):
@@ -426,43 +454,48 @@ the GRCh38 column and keeps its GRCh37 coordinates; nothing is dropped. Inside `
 `NA` holds the failed interval's place, so the GRCh38 list stays element-for-element aligned
 with `credints_grch37` and both still carry `n_credints` entries.
 
-Reference run: **153 of 163 segment spans and 214 of 225 credible intervals lifted.** The
-10 segments left with NULL GRCh38 coordinates:
+Reference run: **157 of 163 segment spans and 216 of 225 credible intervals carry GRCh38
+coordinates.** 153 spans and 214 intervals lift whole; four spans and two credible intervals
+are composed from their boundary windows:
 
-| segment | GRCh37 | liftOver verdict | credible intervals also lost |
+| interval | GRCh37 | GRCh38 from boundary windows |
+|---|---|---|
+| `merged_DUP_segment_1p36.32-p36.33` | 1:1,690,000-5,380,000 | 1:1,758,561-5,319,940 |
+| `merged_DUP_segment_1p36.32-p36.33` credible interval 2 | 1:2,420,000-3,360,000 | 1:2,488,561-3,443,436 |
+| `merged_DUP_segment_1q21.1-q21.2` | 1:145,290,000-147,820,000 | 1:145,945,087-148,347,872 |
+| `merged_DUP_segment_15q11.2-q13.3` | 15:22,740,000-32,530,000 | 15:22,933,067-32,237,799 |
+| `merged_DEL_segment_22q11.21` | 22:18,820,000-21,540,000 | 22:18,832,487-21,185,711 |
+| `merged_DEL_segment_22q11.21` credible interval 1 | 22:18,820,000-21,540,000 | 22:18,832,487-21,185,711 |
+
+Those counts are a property of the `hg19ToHg38` chain, the `liftOver` build and the ±10%
+filter — not of the table. A chain refresh, a different binary or a widened tolerance moves
+them, so the run prints its own split on stderr and nothing asserts these numbers.
+
+The six segments still left with NULL GRCh38 coordinates:
+
+| segment | GRCh37 | why the boundary windows fail | credible intervals also lost |
 |---|---|---|---|
-| `merged_DUP_segment_1p36.32-p36.33` | 1:1,690,000-5,380,000 | Partially deleted in new | 1 of 5 |
-| `merged_DUP_segment_1p11.2-p12` | 1:119,360,000-120,990,000 | Split in new | 1 of 1 |
-| `merged_DUP_segment_1q21.1-q21.2` | 1:145,290,000-147,820,000 | Split in new | 0 of 2 |
-| `merged_DUP_segment_8q24.3` | 8:145,540,000-146,360,000 | Split in new | 1 of 2 |
-| `merged_DUP_segment_10q26.3` | 10:135,260,000-135,530,000 | lifted 340,926 bp vs 270,000 bp | 1 of 1 |
-| `merged_DEL_segment_13q34` | 13:114,490,000-115,160,000 | Partially deleted in new | 1 of 1 |
-| `merged_DUP_segment_15q11.2-q13.3` | 15:22,740,000-32,530,000 | Split in new | 0 of 4 |
-| `merged_DEL_segment_17p13.3` | 17:130,000-1,900,000 | Split in new | 1 of 2 |
-| `merged_DUP_segment_22q11.21` | 22:18,560,000-21,540,000 | Split in new | 1 of 1 |
-| `merged_DEL_segment_22q11.21` | 22:18,820,000-21,540,000 | Split in new | 1 of 1 |
+| `merged_DUP_segment_1p11.2-p12` | 1:119,360,000-120,990,000 | end window Split in new | 1 of 1 |
+| `merged_DUP_segment_8q24.3` | 8:145,540,000-146,360,000 | end window Partially deleted in new | 1 of 2 |
+| `merged_DUP_segment_10q26.3` | 10:135,260,000-135,530,000 | end window lifts 270,926 bp vs 200,000 bp | 1 of 1 |
+| `merged_DEL_segment_13q34` | 13:114,490,000-115,160,000 | both windows Partially deleted in new | 1 of 1 |
+| `merged_DEL_segment_17p13.3` | 17:130,000-1,900,000 | start window Partially deleted in new | 1 of 2 |
+| `merged_DUP_segment_22q11.21` | 22:18,560,000-21,540,000 | start window lifts 695,253 bp vs 200,000 bp | 1 of 1 |
 
-Three further segments lifted themselves but lost one credible interval each:
+Three further segments lift their own span but lose one credible interval each:
 `merged_DEL_segment_1q43-q44` (1 of 2), `merged_DEL_segment_9q34.3` (1 of 3),
 `merged_DUP_segment_16p13.3_A` (1 of 2).
 
-**6.1% of segments fail, against 1.8% of the sliding windows, and that is not a regression in
-the chain.** The ten failed spans — 1p36.32-p36.33 DUP, 1p11.2-p12, 1q21.1-q21.2, 8q24.3,
-10q26.3, 13q34, 15q11.2-q13.3, 17p13.3, 22q11.21 DEL, 22q11.21 DUP — are each a recurrent
-genomic disorder *because* they are flanked by segmental duplications, which is exactly the
-sequence hg19 and hg38 rearranged; "Split in new" is liftOver saying the interval no longer
-has one image. Three further segments lift their span but lose a credible interval — a
-credible-interval-only failure — 16p13.3_A, 9q34.3 and 1q43-q44. The failure rate is higher
-here than for the windows because these intervals are 10-50x longer and are, by construction,
-the rearranged ones. A measurement recorded during this task and **not** acted on: lifting
-the two endpoints independently and rebuilding the span would recover 4 of the 10 segments
-(1p36.32-p36.33 DUP, 15q11.2-q13.3, 17p13.3 DEL, 22q11.21 DUP) and 3 of the 11 credible
-intervals. Of the remaining 6 segments, 2 are rejected by the ±10% filter
-(`merged_DEL_segment_22q11.21` at -13.5%, `merged_DUP_segment_1q21.1-q21.2` at -13.1%), which
-is the tolerance doing its job rather than a case to widen it, and 4 have an endpoint where
-liftOver reports "Deleted in new" (1p11.2-p12, 8q24.3, 10q26.3, 13q34). Changing the
-procedure is a decision for the epic, not for this munge: it would make this product drop a
-different set of intervals than the sliding-window product does from the same chain.
+**Segments fail more often than sliding windows do, and that is not a regression in the
+chain.** A segment is a recurrent genomic disorder *because* segmental duplications flank it,
+which is exactly the sequence hg19 and hg38 rearranged, and these intervals are 10-50x longer
+than a window; "Split in new" is liftOver saying the interval no longer has one image. The
+boundary-window pass is there for precisely the intervals whose span did *not* survive: a
+200 kb window often transfers intact where the megabase span around it does not, which is how
+the `1p36.32-p36.33`, `1q21.1-q21.2` and `15q11.2-q13.3` DUP spans and the `22q11.21` DEL span
+come back. It leaves the six above, where the 200 kb window on one end is itself deleted,
+split, or lifts to a length the shared filter rejects — `22q11.21` DUP among them, so that
+locus is recovered for DEL and not for DUP.
 
 ## Sliding windows (`--product windows`)
 

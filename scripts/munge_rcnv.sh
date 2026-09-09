@@ -23,6 +23,8 @@
 # from the daly mapping_files bucket (the HGNC set falls back to genenames.org if that bucket
 # is not readable), and the UCSC liftOver binary and hg19ToHg38 chain for `segments` and
 # `windows`. The windows product needs neither mapping input -- a window carries no symbol.
+# `segments` needs the sliding-window tar as well as mmc3.xlsx: its boundary fallback borrows
+# coordinates from published windows and checks each one is in that set.
 # mmc3.xlsx has no URL -- Elsevier and PMC answer a script with a bot-check page -- so place
 # it in CACHE_DIR by hand before running PRODUCT=segments.
 #
