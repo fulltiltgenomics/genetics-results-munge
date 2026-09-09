@@ -542,7 +542,9 @@ measurement:
 - 378 adjacent same-chromosome pairs (0.144% of 262,335) come out **reordered** -- the later
   GRCh37 window starts at or before its predecessor in GRCh38 -- and a further 218 (0.083%)
   overlap by more than one 10 kb step away from their GRCh37 overlap. A "next window" query
-  answered by GRCh38 ordering disagrees with GRCh37 ordering for those 758 windows.
+  answered by GRCh38 ordering disagrees with GRCh37 ordering across those 596 pairs (378 + 218),
+  which touch 758 distinct windows -- each pair contributes two windows, and some windows
+  recur across pairs, so the window count is less than double the pair count.
 - The 4,880 dropped windows are not spread evenly: chr9 loses 7.685% of its windows (the
   pericentromeric block), chr21 4.358%, chr22 3.616%, chr1 3.242%. A region query over a lost
   block returns **nothing**, not fewer rows.
