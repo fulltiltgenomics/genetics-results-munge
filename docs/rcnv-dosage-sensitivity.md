@@ -129,10 +129,10 @@ from the ones above.)
 **Most of the unresolved are clone-based placeholder names** — `RP11-*`, `AC0*.1`,
 `AL*.1`, `CTD-*`, `CTA-*`, `Z98049.1`. None ever had an approved HGNC symbol, so there is
 nothing to update them to; they were never findable by name and remain so, but their ENSG is
-exact. The rest are 39 cDNA-era identifiers (`FLJ*`, `FKSG*`, `DKFZP*`, `HUG1`)
-and — this is the `C*orf*`/`KIAA*` class the epic expected — 14 `C*orf*` and 3 `KIAA*`
-symbols. Those 17 are unresolved *by choice*, not for want of an HGNC record: see the merge
-guard below.
+exact. The rest are cDNA-era identifiers (`FLJ*`, `FKSG*`, `DKFZP*`, `HUG1`) plus the
+`C*orf*` and `KIAA*` symbols, and those last two classes are unresolved *by choice*, not for
+want of an HGNC record: see the merge guard below. The script prints the whole unresolved list
+on every run, so count a class off that (`grep -c`) rather than off a number here.
 
 **HGNC records a merge as a `prev_symbol`, and following it blindly corrupts the join key.**
 `C2orf48`, `C16orf47` and `C17orf47` are listed as previous symbols of `RRM2`, `ZFHX3` and

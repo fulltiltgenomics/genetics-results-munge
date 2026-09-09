@@ -9,6 +9,12 @@ lift cleanly*.
 This document is that measurement. **Every number below is pasted from
 `scripts/rcnv_liftover_windows.py`'s stdout, not typed** — re-run the script to reproduce it.
 
+The measurement is not just a record: `scripts/munge_rcnv.py --product windows` performs the
+same lift over the same window set and asserts it reproduces the lifted/dropped split below
+exactly, so a chain or binary that lifts differently stops the munge rather than quietly
+shipping a different window set. See `docs/rcnv-dosage-sensitivity.md` for what that product
+then does with the lifted windows.
+
 ## DECISION
 
 **1.826% of the 267,237 windows fail to lift cleanly, below the ~2% trigger, so the sliding-window
