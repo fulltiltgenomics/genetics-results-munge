@@ -1,10 +1,10 @@
-# rCNV dosage sensitivity and gene associations (Collins et al. 2022)
+# rCNV dosage sensitivity, gene associations and segments (Collins et al. 2022)
 
-`scripts/munge_rcnv.{py,sh}` turns two of the published products of
+`scripts/munge_rcnv.{py,sh}` turns three published products of
 [Collins et al. 2022](https://doi.org/10.1016/j.cell.2022.06.036) into the suite's `rcnv`
-tables: the dosage-sensitivity scores (`--product scores`) and the gene-based CNV
-association summary statistics (`--product genes`). This note records the decisions that
-are not obvious from the code.
+tables: the dosage-sensitivity scores (`--product scores`), the gene-based CNV association
+summary statistics (`--product genes`) and the 163 disease-associated large segments
+(`--product segments`). This note records the decisions that are not obvious from the code.
 
 **Citation.** Collins RL, Glessner JT, Porcu E, et al. *A cross-disorder dosage
 sensitivity map of the human genome.* Cell 2022;185(16):3041-3055.e25.
@@ -20,11 +20,21 @@ https://zenodo.org/records/6347673
   Collins_rCNV_2022.gene_association_sumstats.tar.gz   --product genes   (108 tabixed BEDs)
   Collins_rCNV_2022.sliding_window_sumstats.tar.gz     not munged here
   Collins_rCNV_2022.gene_features_matrix.tar.gz        not loaded
+
+Cell supplement (doi:10.1016/j.cell.2022.06.036), NOT on Zenodo
+  mmc3.xlsx  sheet "Table S3"                          --product segments (163 segments)
 ```
 
 `--product` exists because the record ships four products: the sliding-window sumstats are
-separate work and the gene-features matrix is not loaded. `scores` and `genes` are
-implemented; nothing is stubbed for the others.
+separate work and the gene-features matrix is not loaded. `scores`, `genes` and `segments`
+are implemented; nothing is stubbed for the others.
+
+`segments` is the one product whose input is **not** on Zenodo and **not** CC-BY: it comes
+from the paper's own supplement, under Elsevier's terms. The xlsx is therefore never
+committed to this repo, and the script has no download URL for it — Cell and PMC answer a
+scripted request with a bot-check page rather than the file (measured on the PMC
+`articles/instance/9742861/bin/` path, which returns a 1.8 kB placeholder). Fetch it in a
+browser and put it in `--cache-dir`.
 
 The scores file is `#gene pHaplo pTriplo`, 18,641 rows, one per autosomal protein-coding
 gene of Gencode v19, no duplicate symbols and no missing-value token. pHaplo and pTriplo are
@@ -289,6 +299,166 @@ mlog10p_secondary  mlog10_fdr_q_secondary
 Reference-run totals: 1,864,404 rows (108 files x 17,263 genes), 54 distinct phenotypes,
 `cnv_type` exactly `{DEL, DUP}`, 1,214,820 NA rows (65.16%), `ensembl_gene_id` never `NA`.
 
+## Disease-associated segments (`--product segments`)
+
+`mmc3.xlsx` sheet `Table S3` is the paper's locus-level result table: 163 large rCNV
+segments reaching genome-wide significance or FDR in the cross-disorder meta-analysis, one
+row each, with pooled frequencies and effect sizes, the associated HPO terms, the 95%
+credible interval(s) for the association and the Gencode v19 genes inside the segment.
+
+**Table S4 is deliberately not loaded.** It is the 178-segment *consensus* set: the same 163
+rows plus 15 genomic disorders taken from the literature, with extra columns that are
+annotations derived from other datasets (Size, Best P-Value, Best ln(OR), Discovery Sig.,
+Known GD, gnomAD Constrained Genes, min(LOEUF), min(MisOEUF), ClinGen) rather than results of
+this study. Loading it would duplicate 163 rows of results to gain 15 literature loci and a
+set of derived columns the suite can compute or does not want.
+
+### Input assertions
+
+163 rows; 69 `DEL` and 94 `DUP`; 88 `Genome-wide` and 75 `FDR`. Both breakdowns are checked,
+not just the row count — the row count alone passes on the wrong sheet of a re-released
+supplement. Beyond that, each of the three source counter columns is checked against the list
+it counts, per row: `# HPOs` vs `associated_hpos`, `# CredInts` vs `credints_grch37`,
+`# Genes` vs `genes_gencode_v19`. That is the check that would catch a cell truncated by the
+xlsx reader or a stray delimiter, and it is why `split_list` treats an empty cell as **zero**
+tokens rather than one: 12 of the 163 segments contain no genes at all (`# Genes` = 0 with an
+empty `Genes` cell), and `str.split(';')` on those returns `['']`.
+
+### Column mapping
+
+| source column | output column | note |
+|---|---|---|
+| — | `dataset` | constant `Collins_rCNV_2022`, as in `--product genes` |
+| `Segment ID` | `segment_id` | e.g. `merged_DEL_segment_22q11.21` |
+| `CNV Type` | `cnv_type` | `DEL` / `DUP` |
+| `Chrom` | `chr` | bare integer 1-22, no `chr` prefix — `datasets.yaml` types every `chr` in the suite `INT64`. All 163 segments are autosomal, so the X-is-23 convention never arises here |
+| lifted `Start` | `start` | GRCh38; `NA` where the lift failed |
+| lifted `End` | `end` | GRCh38; `NA` where the lift failed |
+| `Start` | `start_grch37` | always present |
+| `End` | `end_grch37` | always present |
+| `Cytoband` | `cytoband` | |
+| `Best Significance` | `best_significance` | `Genome-wide` / `FDR` |
+| `Pooled Control Freq.` | `control_freq` | |
+| `Pooled Case Freq.` | `case_freq` | |
+| `Pooled ln(OR)` | `beta` | |
+| `Pooled ln(OR) Lower` / `Upper` | `beta_lower` / `beta_upper` | pooled 95% CI |
+| `Min. ln(OR)` / `Max. ln(OR)` | `beta_min` / `beta_max` | across the segment's associated phenotypes |
+| `# HPOs` | `n_hpos` | |
+| `Associated HPOs` | `associated_hpos` | `;`-joined, colon stripped (below) |
+| `# CredInts` | `n_credints` | |
+| lifted `CredInts` | `credints` | `;`-joined GRCh38 `chr:start-end` |
+| `CredInts` | `credints_grch37` | `;`-joined, as published |
+| `CredInt Size` | `credint_size` | the source's own **GRCh37** total, in bp, of the credible intervals; it is not recomputed from the lifted ones |
+| `# Genes` | `n_genes` | |
+| resolved `Genes` | `genes` | current symbols |
+| `Genes` | `genes_gencode_v19` | as published |
+| resolved `Genes` | `gene_ensembl_ids` | ENSG per gene, same order |
+
+The `beta*` columns are formatted `:.3e` per the repo's statistics invariant, the same as
+`--product genes`. `control_freq` and `case_freq` are written at full round-trip precision:
+openpyxl hands back Python floats, so unlike the text-file products there is no source
+string to pass through verbatim, and `repr` is the spelling that reads back as the same
+double.
+
+### The `;` delimiter is a contract with the loader
+
+`associated_hpos`, `credints`, `credints_grch37`, `genes`, `genes_gencode_v19` and
+`gene_ensembl_ids` are `;`-joined strings, and the BigQuery loader splits them into
+`ARRAY<STRING>`. `;` is the source's own delimiter and it stays `;` — changing it would
+silently change what the loader produces. Nothing has to trust that no value contains one:
+the per-row count checks above fail the run if a list ever gains or loses an element.
+
+`gene_ensembl_ids` is positionally aligned with `genes` and `genes_gencode_v19`, so
+`genes[i]`, `genes_gencode_v19[i]` and `gene_ensembl_ids[i]` are the same gene. The column
+carries `NA` for a gene the mapping cannot place, but `munge_segments` asserts it never does
+for this input, naming the offending symbols and raising `SystemExit` if it ever did: all
+1,711 distinct v19 symbols across the 163 segments are in the mapping file's `gene_name_19`
+column.
+
+### HPO ids are spelled without the colon
+
+The supplement writes `HP:0012759`; the output writes `HP0012759`. That is the spelling the
+Zenodo file names use, hence the `phenotype` column of `--product genes` and the `phenocode`
+of `configs/rcnv_pheno.json` in the suite. Writing the paper's spelling here would mean every
+join from a segment to a phenotype or to a gene association carried a `REPLACE(hpo, ':', '')`.
+`UNKNOWN` (the unaffected-phenotype-unknown group, present on 33 of the 163 segments) passes
+through as itself.
+
+### Symbol resolution
+
+Identical to the other two products — `resolve_symbols()`, run on this product's own set of
+v19 symbols. Reference run: 1,711 distinct v19 symbols over 2,200 gene mentions; 1,632
+resolved through Gencode, 51 through HGNC, 28 left with their v19 spelling (clone-style
+placeholder names Gencode no longer carries); 204 distinct symbols changed, 254 gene
+mentions.
+
+### liftOver GRCh37 -> GRCh38
+
+The procedure is the one `scripts/rcnv_liftover_windows.py` established and measured for the
+sliding windows, imported from it rather than re-implemented: whole-interval BED4 with a key
+in the name column, one UCSC `liftOver` run at defaults (minMatch 0.95, no `-multiple`), then
+drop anything that mapped more than once, landed on another chromosome, or changed length by
+more than the tolerance. The tolerance is **±10% of the interval's own GRCh37 length** — the
+windows measurement's 180-220 kb around a fixed 200 kb window, expressed as a fraction,
+because segments run from 200 kb to 10.3 Mb and credible intervals are smaller still.
+
+The segment span and every credible interval go through one `liftOver` call. That script's
+second, endpoint-only pass is not repeated here: it never rescues an interval, it exists to
+attribute a measurement's failure to one end, and liftOver's own reason string is enough for
+a 163-row table. The four filters decide the dropped set, so both products drop the same
+intervals for the same reasons.
+
+The binary and the chain are not vendored; `--download` fetches them into `--cache-dir`
+(`--liftover-bin` / `--chain` override):
+
+```
+https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/liftOver
+https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz
+```
+
+**A failure keeps the row.** The segment or credible interval that did not lift gets `NA` in
+the GRCh38 column and keeps its GRCh37 coordinates; nothing is dropped. Inside `credints` an
+`NA` holds the failed interval's place, so the GRCh38 list stays element-for-element aligned
+with `credints_grch37` and both still carry `n_credints` entries.
+
+Reference run: **153 of 163 segment spans and 214 of 225 credible intervals lifted.** The
+10 segments left with NULL GRCh38 coordinates:
+
+| segment | GRCh37 | liftOver verdict | credible intervals also lost |
+|---|---|---|---|
+| `merged_DUP_segment_1p36.32-p36.33` | 1:1,690,000-5,380,000 | Partially deleted in new | 1 of 5 |
+| `merged_DUP_segment_1p11.2-p12` | 1:119,360,000-120,990,000 | Split in new | 1 of 1 |
+| `merged_DUP_segment_1q21.1-q21.2` | 1:145,290,000-147,820,000 | Split in new | 0 of 2 |
+| `merged_DUP_segment_8q24.3` | 8:145,540,000-146,360,000 | Split in new | 1 of 2 |
+| `merged_DUP_segment_10q26.3` | 10:135,260,000-135,530,000 | lifted 340,926 bp vs 270,000 bp | 1 of 1 |
+| `merged_DEL_segment_13q34` | 13:114,490,000-115,160,000 | Partially deleted in new | 1 of 1 |
+| `merged_DUP_segment_15q11.2-q13.3` | 15:22,740,000-32,530,000 | Split in new | 0 of 4 |
+| `merged_DEL_segment_17p13.3` | 17:130,000-1,900,000 | Split in new | 1 of 2 |
+| `merged_DUP_segment_22q11.21` | 22:18,560,000-21,540,000 | Split in new | 1 of 1 |
+| `merged_DEL_segment_22q11.21` | 22:18,820,000-21,540,000 | Split in new | 1 of 1 |
+
+Three further segments lifted themselves but lost one credible interval each:
+`merged_DEL_segment_1q43-q44` (1 of 2), `merged_DEL_segment_9q34.3` (1 of 3),
+`merged_DUP_segment_16p13.3_A` (1 of 2).
+
+**6.1% of segments fail, against 1.8% of the sliding windows, and that is not a regression in
+the chain.** The ten failed spans — 1p36.32-p36.33 DUP, 1p11.2-p12, 1q21.1-q21.2, 8q24.3,
+10q26.3, 13q34, 15q11.2-q13.3, 17p13.3, 22q11.21 DEL, 22q11.21 DUP — are each a recurrent
+genomic disorder *because* they are flanked by segmental duplications, which is exactly the
+sequence hg19 and hg38 rearranged; "Split in new" is liftOver saying the interval no longer
+has one image. Three further segments lift their span but lose a credible interval — a
+credible-interval-only failure — 16p13.3_A, 9q34.3 and 1q43-q44. The failure rate is higher
+here than for the windows because these intervals are 10-50x longer and are, by construction,
+the rearranged ones. A measurement recorded during this task and **not** acted on: lifting
+the two endpoints independently and rebuilding the span would recover 4 of the 10 segments
+(1p36.32-p36.33 DUP, 15q11.2-q13.3, 17p13.3 DEL, 22q11.21 DUP) and 3 of the 11 credible
+intervals. Of the remaining 6 segments, 2 are rejected by the ±10% filter
+(`merged_DEL_segment_22q11.21` at -13.5%, `merged_DUP_segment_1q21.1-q21.2` at -13.1%), which
+is the tolerance doing its job rather than a case to widen it, and 4 have an endpoint where
+liftOver reports "Deleted in new" (1p11.2-p12, 8q24.3, 10q26.3, 13q34). Changing the
+procedure is a decision for the epic, not for this munge: it would make this product drop a
+different set of intervals than the sliding-window product does from the same chain.
+
 ## Running it
 
 ```bash
@@ -297,6 +467,9 @@ scripts/munge_rcnv.sh
 
 # gene associations instead of the dosage-sensitivity scores
 PRODUCT=genes scripts/munge_rcnv.sh
+
+# the 163 segments; mmc3.xlsx must already be in $HOME/rcnv_munge/cache
+PRODUCT=segments scripts/munge_rcnv.sh
 
 # produce and publish to both profile buckets
 scripts/munge_rcnv.sh --stage
@@ -321,7 +494,12 @@ gs://finngen-commons/results_api_data/rcnv/collins_rcnv_2022/    # finngen profi
 gs://daly-genetics-results/rcnv/collins_rcnv_2022/               # daly profile
   collins_rcnv_2022_dosage_sensitivity.tsv.gz
   collins_rcnv_2022_gene_associations.tsv.gz
+  collins_rcnv_2022_segments.tsv.gz
 ```
+
+`--product segments` is the one product with an input the script cannot fetch: put
+`mmc3.xlsx` in `--cache-dir` (or pass `--segments-xlsx`) first. `--download` still fetches
+the gencode mapping, the HGNC set, and the liftOver binary and chain.
 
 The BigQuery table and view are defined in `genetics-results-db`, and the dataset is
 declared in `genetics-results-suite`'s `configs/datasets.yaml`.

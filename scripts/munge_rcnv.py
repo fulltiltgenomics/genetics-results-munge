@@ -27,10 +27,19 @@ Source (Zenodo record 6347673, v0.2 2022-03-11, CC-BY 4.0):
       NULL` (or `mlog10p`) instead. NA rows are kept rather than dropped, so "tested, no
       meta-analysis" stays distinguishable from "gene absent from this file".
 
-`--product` exists because the same Zenodo record also ships the gene association
-sumstats, the sliding-window sumstats and the gene feature matrix. `scores` and `genes`
-are implemented; the sliding-window sumstats and the feature matrix are separate work and
-are not stubbed here.
+  --product segments -> mmc3.xlsx sheet `Table S3`
+      The 163 genome-wide-significant / FDR large rCNV segments, from the Cell supplement
+      rather than Zenodo. 69 DEL, 94 DUP; 88 genome-wide, 75 FDR. One row per segment, with
+      the ';'-joined HPO, credible-interval and gene lists kept as ';'-joined strings for the
+      BigQuery loader to split into ARRAY<STRING>. Coordinates are GRCh37 and are lifted to
+      GRCh38 here (segment span and every credible interval); the GRCh37 pair is kept.
+      There is no download URL: Cell and PMC serve a bot-check page instead of the xlsx, so
+      the user places mmc3.xlsx in --cache-dir by hand. Table S4 (the 178-segment consensus
+      set) is deliberately not read: it repeats these 163 rows and adds derived annotations.
+
+`--product` exists because the same Zenodo record also ships the sliding-window sumstats and
+the gene feature matrix. `scores`, `genes` and `segments` are implemented; the sliding-window
+sumstats and the feature matrix are separate work and are not stubbed here.
 
 WHAT WAS READ OFF THE BYTES (not taken from the paper):
   - 18,641 rows, no duplicate gene symbols, no header comment block beyond line 1.
@@ -43,7 +52,7 @@ WHAT WAS READ OFF THE BYTES (not taken from the paper):
     misses; what misses is the ENSG -> *current* symbol step, for genes Gencode later
     dropped or left unnamed.
 
-NO COORDINATES ARE ADDED. The scores are a per-gene property, the source file carries no
+NO COORDINATES ARE ADDED TO scores/genes. The scores are a per-gene property, the source file carries no
 positions, and adding GRCh37 ones (or lifting them) would create a build-dependent column
 where the data has none. The table is keyed by gene symbol and is build-independent by
 construction, so it joins to the suite's GRCh38 gene views by symbol / ENSG.
@@ -90,6 +99,13 @@ itself.
 Output, scores (one bgzipped TSV, no tabix index -- there is nothing to index):
   symbol  symbol_gencode_v19  ensembl_gene_id  phaplo  ptriplo  haploinsufficient  triplosensitive
 
+Output, segments (one bgzipped TSV, no tabix index):
+  dataset  segment_id  cnv_type  chr  start  end  start_grch37  end_grch37
+  cytoband  best_significance  control_freq  case_freq
+  beta  beta_lower  beta_upper  beta_min  beta_max
+  n_hpos  associated_hpos  n_credints  credints  credints_grch37  credint_size
+  n_genes  genes  genes_gencode_v19  gene_ensembl_ids
+
 Output, genes (one bgzipped TSV, long format, no tabix index):
   dataset  phenotype  cnv_type  symbol  symbol_gencode_v19  ensembl_gene_id
   n_nominal_cohorts  top_cohort  cohorts_excluded  case_freq  control_freq
@@ -107,6 +123,7 @@ against.
 Usage:
   python3 scripts/munge_rcnv.py --product scores --download --output out/collins_rcnv_2022_dosage_sensitivity.tsv.gz
   python3 scripts/munge_rcnv.py --product genes --download --output out/collins_rcnv_2022_gene_associations.tsv.gz
+  python3 scripts/munge_rcnv.py --product segments --download --output out/collins_rcnv_2022_segments.tsv.gz
   scripts/munge_rcnv.sh                       # produce locally (PRODUCT=scores by default)
   scripts/munge_rcnv.sh --stage               # produce and publish to both buckets
   PRODUCT=genes scripts/munge_rcnv.sh --stage # gene associations, produce and publish
@@ -121,10 +138,16 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
+
+# the liftOver procedure is defined once, by the sliding-window measurement that established
+# it; re-implementing the four steps here is exactly the duplication that makes two products
+# drop different intervals from the same chain
+from rcnv_liftover_windows import read_mapped, read_unmapped, run_liftover, write_bed
 
 ZENODO_RECORD = "6347673"
 SCORES_FILE = "Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz"
@@ -216,6 +239,50 @@ EXPECTED_GENE_ROWS = EXPECTED_GENE_FILES * EXPECTED_GENES_PER_FILE
 # paths and the BigQuery dataset/table
 DATASET_LABEL = "Collins_rCNV_2022"
 
+# the Cell supplement, not Zenodo: Elsevier serves mmc3.xlsx behind a bot check that returns
+# a placeholder page to curl, so there is no download URL and the user stages it by hand
+SEGMENTS_XLSX = "mmc3.xlsx"
+SEGMENTS_SHEET = "Table S3"
+
+SEGMENT_SOURCE_HEADER = [
+    "Chrom", "Start", "End", "Segment ID", "CNV Type", "Best Significance", "Cytoband",
+    "Pooled Control Freq.", "Pooled Case Freq.",
+    "Pooled ln(OR)", "Pooled ln(OR) Lower", "Pooled ln(OR) Upper",
+    "Min. ln(OR)", "Max. ln(OR)",
+    "# HPOs", "Associated HPOs", "# CredInts", "CredInts", "CredInt Size", "# Genes", "Genes",
+]
+
+SEGMENT_COLUMNS = [
+    "dataset", "segment_id", "cnv_type", "chr", "start", "end", "start_grch37", "end_grch37",
+    "cytoband", "best_significance", "control_freq", "case_freq",
+    "beta", "beta_lower", "beta_upper", "beta_min", "beta_max",
+    "n_hpos", "associated_hpos", "n_credints", "credints", "credints_grch37", "credint_size",
+    "n_genes", "genes", "genes_gencode_v19", "gene_ensembl_ids",
+]
+
+# input-file integrity for --product segments; the two breakdowns are the paper's own and
+# catch a supplement re-release or the wrong sheet far better than the row count alone
+EXPECTED_SEGMENT_ROWS = 163
+EXPECTED_SEGMENT_CNV_TYPES = {"DEL": 69, "DUP": 94}
+EXPECTED_SEGMENT_SIGNIFICANCE = {"Genome-wide": 88, "FDR": 75}
+
+# the ';' in every list column is a contract with the BigQuery loader, which splits these
+# into ARRAY<STRING>. It is the source's own delimiter, and the three count columns are
+# checked against the lists they count, so a value that ever contained one would fail the run
+# rather than split a gene in half silently
+LIST_DELIMITER = ";"
+
+# UCSC liftOver, fetched into --cache-dir with --download; neither is vendored
+CHAIN_FILE = "hg19ToHg38.over.chain.gz"
+CHAIN_URL = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz"
+LIFTOVER_BIN = "liftOver"
+LIFTOVER_BIN_URL = "https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/liftOver"
+
+# the sliding-window measurement fixed 180-220 kb around a 200 kb window; segments range from
+# 200 kb to 10.3 Mb and credible intervals are smaller still, so the same +-10% is expressed
+# as a fraction of each interval's own GRCh37 length
+LENGTH_TOLERANCE = 0.10
+
 RESOURCE = "rcnv"
 DATASET = "collins_rcnv_2022"
 GCS = {
@@ -230,6 +297,12 @@ GCS = {
         f"{DATASET}_gene_associations.tsv.gz",
         f"gs://daly-genetics-results/{RESOURCE}/{DATASET}/"
         f"{DATASET}_gene_associations.tsv.gz",
+    ),
+    "segments": (
+        f"gs://finngen-commons/results_api_data/{RESOURCE}/{DATASET}/"
+        f"{DATASET}_segments.tsv.gz",
+        f"gs://daly-genetics-results/{RESOURCE}/{DATASET}/"
+        f"{DATASET}_segments.tsv.gz",
     ),
 }
 
@@ -748,6 +821,270 @@ def report_genes(
     print(f"NA rows (no meta-analysis):    {na_rows} ({na_rows / len(rows):.4%} of rows)", file=sys.stderr)
 
 
+def read_segments(path: Path) -> list[dict]:
+    """Table S3 as one dict per segment, keyed by the source column names.
+
+    openpyxl is imported here, not at module scope, so `--product scores` and `--product
+    genes` keep running on a host without it -- segments is the only product reading an xlsx.
+    `data_only=True` takes the stored value of every cell; the sheet carries no formulas, so
+    nothing is lost if a writer ever stripped the cached results.
+    """
+    try:
+        import openpyxl
+    except ImportError as err:
+        raise SystemExit(
+            "--product segments needs openpyxl (requirements.txt pins 3.1.2)"
+        ) from err
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    if SEGMENTS_SHEET not in workbook.sheetnames:
+        raise SystemExit(f"{path}: no sheet named {SEGMENTS_SHEET!r}; got {workbook.sheetnames}")
+    sheet = workbook[SEGMENTS_SHEET]
+    rows_iter = sheet.iter_rows(values_only=True)
+    header = [c.strip() if isinstance(c, str) else c for c in next(rows_iter)]
+    if header != SEGMENT_SOURCE_HEADER:
+        raise SystemExit(f"{path}: unexpected header on {SEGMENTS_SHEET!r}: {header}")
+    rows = [
+        dict(zip(SEGMENT_SOURCE_HEADER, values))
+        for values in rows_iter
+        if values[0] is not None
+    ]
+    workbook.close()
+    return rows
+
+
+def split_list(value) -> list[str]:
+    """A ';'-joined source cell as tokens; an empty cell is zero tokens, not one empty one.
+
+    12 of the 163 segments contain no genes at all (`# Genes` = 0, `Genes` empty), and a bare
+    `str.split(';')` would count one token there and put every gene-count check off by one.
+    """
+    return [token for token in str(value or "").split(LIST_DELIMITER) if token]
+
+
+def fmt_number(value) -> str:
+    """Shortest round-trip spelling of a numeric cell; an empty cell becomes NA.
+
+    openpyxl hands back Python floats, so there is no source string to pass through the way
+    the text-file products do; `repr` is the spelling that reads back as the same double.
+    """
+    if value is None or value == "":
+        return NA
+    return repr(value) if isinstance(value, float) else str(value)
+
+
+def resolve_liftover(cache_dir: Path, bin_arg, chain_arg, download: bool) -> tuple[str, Path]:
+    """(liftOver binary, chain path), fetched into cache_dir with --download if missing."""
+    binary = Path(bin_arg) if bin_arg else cache_dir / LIFTOVER_BIN
+    chain = Path(chain_arg) if chain_arg else cache_dir / CHAIN_FILE
+    if download:
+        if not binary.exists() and shutil.which(str(binary)) is None:
+            fetch(LIFTOVER_BIN_URL, binary)
+            binary.chmod(0o755)
+        fetch(CHAIN_URL, chain)
+    if not binary.exists() and shutil.which(str(binary)) is None:
+        raise SystemExit(
+            f"liftOver binary not found: {binary} (pass --liftover-bin, run with --download, "
+            f"or fetch it from {LIFTOVER_BIN_URL})"
+        )
+    if not chain.exists():
+        raise SystemExit(
+            f"chain not found: {chain} (pass --chain, run with --download, or fetch it from "
+            f"{CHAIN_URL})"
+        )
+    return str(binary), chain
+
+
+def lift_intervals(
+    binary: str, chain: Path, intervals: dict[str, tuple[str, int, int]], tolerance: float
+) -> tuple[dict[str, tuple[str, int, int]], dict[str, str]]:
+    """({key: GRCh38 (chrom, start, end)}, {key: failure class}) for GRCh37 `intervals`.
+
+    The procedure is the one scripts/rcnv_liftover_windows.py established and measured:
+    whole-interval BED4 with the caller's key in the name column and chr-prefixed seqnames,
+    one `liftOver` run at UCSC defaults (minMatch 0.95, no -multiple), then drop anything that
+    mapped more than once, landed on another chromosome, or changed length by more than
+    `tolerance`. That script's second, endpoint-only pass is not repeated: it never rescues an
+    interval, it exists to attribute a measurement's failure to one end, and liftOver's own
+    reason string covers the handful of failures a 163-row table can produce. The four filters
+    are what decide the dropped set, so the two products drop the same intervals.
+    """
+    with tempfile.TemporaryDirectory(prefix="rcnv_liftover_") as tmp:
+        work = Path(tmp)
+        bed_in, bed_out, bed_unmapped = work / "in.bed", work / "out.bed", work / "unmapped.bed"
+        write_bed(bed_in, [(f"chr{c}", s, e, k) for k, (c, s, e) in intervals.items()])
+        run_liftover(binary, str(chain), bed_in, bed_out, bed_unmapped)
+        mapped = read_mapped(bed_out)
+        reasons = read_unmapped(bed_unmapped)
+
+    lifted: dict[str, tuple[str, int, int]] = {}
+    failures: dict[str, str] = {}
+    for key, (c37, s37, e37) in intervals.items():
+        hits = mapped.get(key, [])
+        if not hits:
+            failures[key] = reasons.get(key, "unmapped")
+            continue
+        if len(hits) > 1:
+            failures[key] = f"multi-mapped ({len(hits)} hits)"
+            continue
+        c38, s38, e38 = hits[0]
+        if c38 != f"chr{c37}":
+            failures[key] = f"chromosome changed ({c38})"
+            continue
+        length37, length38 = e37 - s37, e38 - s38
+        if abs(length38 - length37) > tolerance * length37:
+            failures[key] = f"length {length38:,} outside +-{tolerance:.0%} of {length37:,}"
+            continue
+        lifted[key] = (c38.removeprefix("chr"), s38, e38)
+    return lifted, failures
+
+
+def munge_segments(
+    xlsx_path: Path,
+    gencode_path: Path,
+    hgnc_path: Path,
+    liftover_bin: str,
+    chain: Path,
+    output: Path,
+) -> list[list[str]]:
+    segments = read_segments(xlsx_path)
+    by_v19 = read_gencode_mapping(gencode_path)
+    approved, prev, alias = read_hgnc(hgnc_path)
+
+    if len(segments) != EXPECTED_SEGMENT_ROWS:
+        raise SystemExit(f"expected {EXPECTED_SEGMENT_ROWS} segments, got {len(segments)}")
+    for field, expected in (
+        ("CNV Type", EXPECTED_SEGMENT_CNV_TYPES),
+        ("Best Significance", EXPECTED_SEGMENT_SIGNIFICANCE),
+    ):
+        observed = dict(Counter(row[field] for row in segments))
+        if observed != expected:
+            raise SystemExit(f"expected {field} breakdown {expected}, got {observed}")
+
+    # the segment span and every credible interval go through one liftOver call: same chain,
+    # same filters, and a credible interval is an interval like any other
+    to_lift: dict[str, tuple[str, int, int]] = {}
+    for row in segments:
+        segment_id, chrom = row["Segment ID"], str(row["Chrom"])
+        to_lift[f"seg|{segment_id}"] = (chrom, int(row["Start"]), int(row["End"]))
+        for i, credint in enumerate(split_list(row["CredInts"])):
+            ci_chrom, span = credint.split(":")
+            start, end = span.split("-")
+            if ci_chrom != chrom:
+                raise SystemExit(
+                    f"{segment_id}: credible interval {credint} is not on the segment's "
+                    f"chromosome {chrom}"
+                )
+            to_lift[f"ci|{segment_id}|{i}"] = (ci_chrom, int(start), int(end))
+    lifted, lift_failures = lift_intervals(liftover_bin, chain, to_lift, LENGTH_TOLERANCE)
+
+    resolved = resolve_symbols(
+        {gene for row in segments for gene in split_list(row["Genes"])},
+        by_v19, approved, prev, alias,
+    )
+    missing_ensg = sorted(v19 for v19, (_, ensg, _) in resolved.items() if ensg == NA)
+    if missing_ensg:
+        raise SystemExit(
+            f"{len(missing_ensg)} v19 symbols have no ensembl_gene_id, so gene_ensembl_ids "
+            f"would carry NA for them: {missing_ensg}"
+        )
+
+    rows: list[list[str]] = []
+    for row in segments:
+        segment_id, chrom = row["Segment ID"], str(row["Chrom"])
+        # a segment or credible interval that did not lift keeps NULL GRCh38 coordinates
+        # rather than losing its row; the GRCh37 pair is always there
+        hit = lifted.get(f"seg|{segment_id}")
+        start38, end38 = (str(hit[1]), str(hit[2])) if hit else (NA, NA)
+        credints37 = split_list(row["CredInts"])
+        # NA holds the failed interval's place so the GRCh38 list stays element-for-element
+        # aligned with the GRCh37 one and both keep `# CredInts` entries
+        credints38 = []
+        for i, _ in enumerate(credints37):
+            ci_hit = lifted.get(f"ci|{segment_id}|{i}")
+            credints38.append(f"{ci_hit[0]}:{ci_hit[1]}-{ci_hit[2]}" if ci_hit else NA)
+        # HP:0000118 -> HP0000118, the spelling configs/rcnv_pheno.json and the gene
+        # association table's phenotype column use, so the lists join without a REPLACE
+        hpos = [hpo.replace(":", "") for hpo in split_list(row["Associated HPOs"])]
+        genes_v19 = split_list(row["Genes"])
+        rows.append(
+            [
+                DATASET_LABEL, segment_id, row["CNV Type"], chrom,
+                start38, end38, str(row["Start"]), str(row["End"]),
+                row["Cytoband"], row["Best Significance"],
+                fmt_number(row["Pooled Control Freq."]), fmt_number(row["Pooled Case Freq."]),
+                fmt_exp(fmt_number(row["Pooled ln(OR)"])),
+                fmt_exp(fmt_number(row["Pooled ln(OR) Lower"])),
+                fmt_exp(fmt_number(row["Pooled ln(OR) Upper"])),
+                fmt_exp(fmt_number(row["Min. ln(OR)"])),
+                fmt_exp(fmt_number(row["Max. ln(OR)"])),
+                str(row["# HPOs"]), LIST_DELIMITER.join(hpos),
+                str(row["# CredInts"]),
+                LIST_DELIMITER.join(credints38), LIST_DELIMITER.join(credints37),
+                str(row["CredInt Size"]),
+                str(row["# Genes"]),
+                LIST_DELIMITER.join(resolved[g][0] for g in genes_v19),
+                LIST_DELIMITER.join(genes_v19),
+                LIST_DELIMITER.join(resolved[g][1] for g in genes_v19),
+            ]
+        )
+    rows.sort(key=lambda r: (int(r[3]), int(r[6]), r[1]))
+
+    report_segments(rows, resolved, lifted, lift_failures)
+
+    # the three counter columns are the source's own, so checking each against the list it
+    # counts is what catches a cell truncated by the xlsx reader or a stray delimiter
+    for row in rows:
+        for count_index, list_index, label in (
+            (17, 18, "# HPOs"), (19, 21, "# CredInts"), (23, 25, "# Genes")
+        ):
+            listed = len(split_list(row[list_index]))
+            if int(row[count_index]) != listed:
+                raise SystemExit(
+                    f"{row[1]}: {label} says {row[count_index]} but the list carries {listed}"
+                )
+
+    write_bgzip(rows, SEGMENT_COLUMNS, output)
+    return rows
+
+
+def report_segments(
+    rows: list[list[str]],
+    resolved: dict[str, tuple[str, str, str]],
+    lifted: dict[str, tuple[str, int, int]],
+    failures: dict[str, str],
+) -> None:
+    routes: Counter[str] = Counter(route for _, _, route in resolved.values())
+    hgnc = sum(v for k, v in routes.items() if k.startswith("hgnc_"))
+    n_seg = sum(1 for k in lifted if k.startswith("seg|")) + sum(
+        1 for k in failures if k.startswith("seg|"))
+    n_ci = len(lifted) + len(failures) - n_seg
+    seg_ok = sum(1 for k in lifted if k.startswith("seg|"))
+    ci_ok = len(lifted) - seg_ok
+    print("", file=sys.stderr)
+    print(f"segments:                      {len(rows)}", file=sys.stderr)
+    for cnv_type, n in sorted(Counter(r[2] for r in rows).items()):
+        print(f"  {cnv_type:<28} {n}", file=sys.stderr)
+    for significance, n in sorted(Counter(r[9] for r in rows).items()):
+        print(f"  {significance:<28} {n}", file=sys.stderr)
+    print(f"distinct v19 gene symbols:     {len(resolved)}", file=sys.stderr)
+    print(f"gene mentions:                 {sum(len(split_list(r[25])) for r in rows)}", file=sys.stderr)
+    print(f"  symbol via gencode           {routes['gencode']}", file=sys.stderr)
+    print(f"  symbol via HGNC              {hgnc}", file=sys.stderr)
+    print(f"  unmapped (kept v19 spelling) {routes['unmapped']}", file=sys.stderr)
+    print(f"  symbol changed from v19      "
+          f"{sum(1 for v19, (cur, _, _) in resolved.items() if cur != v19)}", file=sys.stderr)
+    print(f"liftOver GRCh37 -> GRCh38:", file=sys.stderr)
+    print(f"  segment spans lifted         {seg_ok} of {n_seg}", file=sys.stderr)
+    print(f"  credible intervals lifted    {ci_ok} of {n_ci}", file=sys.stderr)
+    if failures:
+        print(f"  FAILED (GRCh38 left NULL):   {len(failures)}", file=sys.stderr)
+        for key in sorted(failures):
+            print(f"    {key:<52} {failures[key]}", file=sys.stderr)
+    else:
+        print("  failed                       0", file=sys.stderr)
+
+
+
 def write_bgzip(rows: list[list[str]], columns: list[str], output: Path) -> None:
     """One bgzipped TSV, no index.
 
@@ -771,9 +1108,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--product",
-        choices=["scores", "genes"],
+        choices=["scores", "genes", "segments"],
         required=True,
-        help="which Zenodo product to munge: dosage-sensitivity scores, or gene-association sumstats",
+        help="which product to munge: dosage-sensitivity scores, gene-association sumstats, "
+        "or the supplement's 163 disease-associated segments",
     )
     parser.add_argument("--scores", type=Path, help=f"local {SCORES_FILE} (default: <cache-dir>/{SCORES_FILE})")
     parser.add_argument(
@@ -786,13 +1124,22 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help=f"gencode gene name mapping TSV (default: <cache-dir>/{GENCODE_MAPPING_FILE})",
     )
+    parser.add_argument(
+        "--segments-xlsx",
+        type=Path,
+        help=f"local Cell supplement {SEGMENTS_XLSX} carrying sheet {SEGMENTS_SHEET!r} "
+        f"(default: <cache-dir>/{SEGMENTS_XLSX}); no URL exists, place it there by hand",
+    )
     parser.add_argument("--hgnc", type=Path, help=f"HGNC complete set TSV (default: <cache-dir>/{HGNC_FILE})")
+    parser.add_argument("--liftover-bin", help=f"UCSC liftOver binary (default: <cache-dir>/{LIFTOVER_BIN})")
+    parser.add_argument("--chain", help=f"hg19ToHg38 chain (default: <cache-dir>/{CHAIN_FILE})")
     parser.add_argument("--cache-dir", type=Path, default=Path("data/rcnv"), help="where downloaded inputs are cached")
     parser.add_argument(
         "--download",
         action="store_true",
         help="fetch any missing input into --cache-dir (Zenodo for the scores/gene-assoc tar, "
-        "the daly mapping_files bucket for the gencode mapping and HGNC set); OFF by default",
+        "the daly mapping_files bucket for the gencode mapping and HGNC set, UCSC for the "
+        "liftOver binary and chain); OFF by default. The segments xlsx has no URL",
     )
     parser.add_argument("--hgnc-url", default=HGNC_URL, help="public HGNC source, used with --download when gcloud is unavailable")
     parser.add_argument("--output", type=Path, help="output .tsv.gz (default derived from --product)")
@@ -826,6 +1173,17 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             raise SystemExit(f"{scores} not found (pass --scores, or run with --download)")
         return scores, gencode, hgnc
 
+    if args.product == "segments":
+        xlsx = args.segments_xlsx or args.cache_dir / SEGMENTS_XLSX
+        if not xlsx.exists():
+            raise SystemExit(
+                f"{xlsx} not found. The Cell supplement is not downloadable -- Elsevier and "
+                f"PMC answer a script with a bot-check page -- so fetch mmc3.xlsx from "
+                f"https://doi.org/10.1016/j.cell.2022.06.036 in a browser and put it there "
+                f"(or pass --segments-xlsx)"
+            )
+        return xlsx, gencode, hgnc
+
     if args.gene_assoc_dir is not None:
         if not args.gene_assoc_dir.exists():
             raise SystemExit(f"--gene-assoc-dir {args.gene_assoc_dir} not found")
@@ -847,12 +1205,19 @@ def main() -> None:
         raise SystemExit("bgzip not found on PATH (run inside the munge image)")
 
     primary, gencode, hgnc = resolve_inputs(args)
-    output_suffix = "dosage_sensitivity" if args.product == "scores" else "gene_associations"
+    output_suffix = {
+        "scores": "dosage_sensitivity", "genes": "gene_associations", "segments": "segments",
+    }[args.product]
     output = args.output or Path(f"{DATASET}_{output_suffix}.tsv.gz")
     if args.product == "scores":
         munge_scores(primary, gencode, hgnc, output)
-    else:
+    elif args.product == "genes":
         munge_genes(primary, gencode, hgnc, output)
+    else:
+        liftover_bin, chain = resolve_liftover(
+            args.cache_dir, args.liftover_bin, args.chain, args.download
+        )
+        munge_segments(primary, gencode, hgnc, liftover_bin, chain, output)
 
     if args.stage:
         finngen, daly = GCS[args.product]

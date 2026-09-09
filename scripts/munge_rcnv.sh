@@ -8,15 +8,19 @@
 #   zenodo : https://zenodo.org/records/6347673
 #   scores : Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz     (18,641 genes x pHaplo/pTriplo)
 #   genes  : Collins_rCNV_2022.gene_association_sumstats.tar.gz    (108 phenotype x DEL/DUP BEDs)
+#   segments: Cell supplement mmc3.xlsx, sheet "Table S3"          (163 disease-associated segments)
 #
-# --product selects which Zenodo product to munge: `scores` (dosage-sensitivity probabilities)
-# or `genes` (gene-based CNV association sumstats, one long table). Neither carries GRCh38
-# coordinates, so both outputs are build-independent BigQuery load files with no tabix index.
+# PRODUCT selects what to munge: `scores` (dosage-sensitivity probabilities), `genes`
+# (gene-based CNV association sumstats, one long table) or `segments` (the supplement's 163
+# segments). scores and genes carry no coordinates at all; segments carries GRCh37 ones and is
+# lifted to GRCh38 here. All three are BigQuery load files with no tabix index.
 #
 # Inputs are cached under CACHE_DIR and downloaded on demand (--download): the scores or
 # gene-association tar from Zenodo, the gencode gene name mapping and the HGNC complete set
 # from the daly mapping_files bucket (the HGNC set falls back to genenames.org if that bucket
-# is not readable).
+# is not readable), and the UCSC liftOver binary and hg19ToHg38 chain for `segments`.
+# mmc3.xlsx has no URL -- Elsevier and PMC answer a script with a bot-check page -- so place
+# it in CACHE_DIR by hand before running PRODUCT=segments.
 #
 # Run inside the genetics-results-munge Docker image (htslib bgzip available).
 # Staging to GCS is OFF by default; pass --stage explicitly only when ready to publish.
@@ -32,7 +36,8 @@ DATASET_ID=${DATASET_ID:-"collins_rcnv_2022"}
 case "$PRODUCT" in
     scores) OUTPUT_SUFFIX=dosage_sensitivity ;;
     genes)  OUTPUT_SUFFIX=gene_associations ;;
-    *) echo "unknown PRODUCT '$PRODUCT' (expected scores or genes)" >&2; exit 1 ;;
+    segments) OUTPUT_SUFFIX=segments ;;
+    *) echo "unknown PRODUCT '$PRODUCT' (expected scores, genes or segments)" >&2; exit 1 ;;
 esac
 OUTPUT=${OUTPUT:-"$OUT_DIR/${DATASET_ID}_${OUTPUT_SUFFIX}.tsv.gz"}
 
