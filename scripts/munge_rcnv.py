@@ -304,6 +304,11 @@ EXPECTED_WINDOW_ROWS = EXPECTED_WINDOW_FILES * EXPECTED_WINDOWS_PER_FILE
 # identical to the measurement's 180-220 kb; the run asserts it rather than assuming it
 WINDOW_LENGTH = 200_000
 
+# the grid the windows are laid on: 200 kb wide every 10 kb. A coordinate is a window start
+# exactly when it is a multiple of the step, and a window end for the same reason, which is
+# the property the segments product's boundary fallback rests on
+WINDOW_STEP = 10_000
+
 # docs/rcnv-sliding-windows.md's measured result. Asserting it is what makes "the same
 # procedure" checkable: another chain, binary or filter moves these two numbers
 EXPECTED_WINDOWS_LIFTED = 262357
@@ -987,10 +992,12 @@ def lift_intervals(
     whole-interval BED4 with the caller's key in the name column and chr-prefixed seqnames,
     one `liftOver` run at UCSC defaults (minMatch 0.95, no -multiple), then drop anything that
     mapped more than once, landed on another chromosome, or changed length by more than
-    `tolerance`. That script's second, endpoint-only pass is not repeated: it never rescues an
-    interval, it exists to attribute a measurement's failure to one end, and liftOver's own
-    reason string covers the handful of failures a 163-row table can produce. The four filters
-    are what decide the dropped set, so the two products drop the same intervals.
+    `tolerance`. The four filters are what decide the dropped set: a window whose interior
+    disagrees between builds is a window whose per-base statistics do not transfer, so the
+    sliding-window product wants it dropped. The segments product runs this first and then
+    composes what it rejects out of window lifts (`lift_boundary_windows`), because a
+    segment's GRCh38 columns mean where its boundaries are and not that its megabases of
+    interior correspond base for base.
     """
     with tempfile.TemporaryDirectory(prefix="rcnv_liftover_") as tmp:
         work = Path(tmp)
@@ -1022,6 +1029,55 @@ def lift_intervals(
     return lifted, failures
 
 
+def lift_boundary_windows(
+    binary: str, chain: Path, intervals: dict[str, tuple[str, int, int]], tolerance: float
+) -> tuple[dict[str, tuple[str, int, int]], dict[str, str]]:
+    """({key: GRCh38 (chrom, start, end)}, {key: failure class}) composed from window lifts.
+
+    Every boundary in Table S3 sits on the sliding-window grid, so a segment's start is also
+    the start of a 200 kb window and its end the end of another. Lifting those two windows
+    through `lift_intervals` -- the same helper, chain and filters the windows product uses --
+    and taking their outer edges makes the segment's GRCh38 boundary, by construction, the
+    coordinate `rcnv_window_associations_v` carries for the window sitting on it, so the two
+    tables cannot disagree about where a boundary is.
+
+    Lifting the two 1-bp endpoints instead is the obvious alternative and is wrong here on
+    both counts a boundary can fail: an endpoint abutting an assembly gap has no base to map
+    at all, and a lone base inside a segmental duplication maps into the paralogous copy
+    rather than into the region -- 15q11.2's start lands ~470 kb from where every window
+    beneath it goes. A 200 kb window has enough unique sequence for minMatch to anchor it.
+
+    Accepted only when both boundary windows lift, to the interval's own chromosome, leaving
+    start < end. No length filter is applied to the composed interval: 22q11.21's DEL really
+    does contract to 0.87 of its GRCh37 length in GRCh38.
+    """
+    windows: dict[str, tuple[str, int, int]] = {}
+    for key, (chrom, start, end) in intervals.items():
+        windows[f"{key}|start"] = (chrom, start, start + WINDOW_LENGTH)
+        windows[f"{key}|end"] = (chrom, end - WINDOW_LENGTH, end)
+    lifted_windows, window_failures = lift_intervals(binary, chain, windows, tolerance)
+
+    lifted: dict[str, tuple[str, int, int]] = {}
+    failures: dict[str, str] = {}
+    for key, (c37, _, _) in intervals.items():
+        why = [
+            f"{side} window {windows[f'{key}|{side}'][0]}:{windows[f'{key}|{side}'][1]}-"
+            f"{windows[f'{key}|{side}'][2]} {window_failures[f'{key}|{side}']}"
+            for side in ("start", "end")
+            if f"{key}|{side}" not in lifted_windows
+        ]
+        if why:
+            failures[key] = "; ".join(why)
+            continue
+        s38 = lifted_windows[f"{key}|start"][1]
+        e38 = lifted_windows[f"{key}|end"][2]
+        if s38 >= e38:
+            failures[key] = f"boundary windows land inverted on GRCh38 ({s38:,} >= {e38:,})"
+            continue
+        lifted[key] = (c37, s38, e38)
+    return lifted, failures
+
+
 def munge_segments(
     xlsx_path: Path,
     gencode_path: Path,
@@ -1045,7 +1101,7 @@ def munge_segments(
             raise SystemExit(f"expected {field} breakdown {expected}, got {observed}")
 
     # the segment span and every credible interval go through one liftOver call: same chain,
-    # same filters, and a credible interval is an interval like any other
+    # same rule, and a credible interval is an interval like any other
     to_lift: dict[str, tuple[str, int, int]] = {}
     for row in segments:
         segment_id, chrom = row["Segment ID"], str(row["Chrom"])
@@ -1059,7 +1115,35 @@ def munge_segments(
                     f"chromosome {chrom}"
                 )
             to_lift[f"ci|{segment_id}|{i}"] = (ci_chrom, int(start), int(end))
+
+    # the fallback below borrows a boundary from the 200 kb window that starts (or ends) on
+    # it, which only works while every boundary in the table is on the window grid. A
+    # supplement re-release that moved one off the 10 kb step would silently lift a window
+    # the windows product does not carry, so it fails the run instead
+    off_grid = sorted(
+        f"{key} {chrom}:{coord}"
+        for key, (chrom, start, end) in to_lift.items()
+        for coord in (start, end)
+        if coord % WINDOW_STEP
+    )
+    if off_grid:
+        raise SystemExit(
+            f"{len(off_grid)} of {2 * len(to_lift)} segment/credible-interval boundaries are "
+            f"not on the {WINDOW_STEP:,} bp sliding-window grid: {off_grid}"
+        )
+
     lifted, lift_failures = lift_intervals(liftover_bin, chain, to_lift, LENGTH_TOLERANCE)
+    # an interval the whole-interval lift rejects still has two boundaries that are perfectly
+    # well defined on GRCh38; take them from the windows sitting on them
+    borrowed, borrow_failures = lift_boundary_windows(
+        liftover_bin, chain, {k: to_lift[k] for k in lift_failures}, LENGTH_TOLERANCE
+    )
+    lift_failures = {
+        key: f"{reason}; {borrow_failures[key]}"
+        for key, reason in lift_failures.items()
+        if key in borrow_failures
+    }
+    lifted.update(borrowed)
 
     resolved = resolve_symbols(
         {gene for row in segments for gene in split_list(row["Genes"])},
@@ -1113,7 +1197,7 @@ def munge_segments(
         )
     rows.sort(key=lambda r: (int(r[3]), int(r[6]), r[1]))
 
-    report_segments(rows, resolved, lifted, lift_failures)
+    report_segments(rows, resolved, lifted, borrowed, lift_failures)
 
     # the three counter columns are the source's own, so checking each against the list it
     # counts is what catches a cell truncated by the xlsx reader or a stray delimiter
@@ -1135,6 +1219,7 @@ def report_segments(
     rows: list[list[str]],
     resolved: dict[str, tuple[str, str, str]],
     lifted: dict[str, tuple[str, int, int]],
+    borrowed: dict[str, tuple[str, int, int]],
     failures: dict[str, str],
 ) -> None:
     routes: Counter[str] = Counter(route for _, _, route in resolved.values())
@@ -1160,6 +1245,10 @@ def report_segments(
     print(f"liftOver GRCh37 -> GRCh38:", file=sys.stderr)
     print(f"  segment spans lifted         {seg_ok} of {n_seg}", file=sys.stderr)
     print(f"  credible intervals lifted    {ci_ok} of {n_ci}", file=sys.stderr)
+    print(f"  of which via boundary windows {len(borrowed)}", file=sys.stderr)
+    for key in sorted(borrowed):
+        chrom, start, end = borrowed[key]
+        print(f"    {key:<51} {chrom}:{start}-{end}", file=sys.stderr)
     if failures:
         print(f"  FAILED (GRCh38 left NULL):   {len(failures)}", file=sys.stderr)
         for key in sorted(failures):
