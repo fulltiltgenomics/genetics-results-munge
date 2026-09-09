@@ -435,7 +435,11 @@ def liftover_intervals(intervals: pl.DataFrame, args: argparse.Namespace) -> pl.
         new_columns=["new_chrom", "new_start", "new_end", "_hg19key"],
     )
     n_lifted = mapped.height
-    # drop intervals whose hg19 key maps MORE THAN ONCE (multi-mapped / split -> inconsistent)
+    # drop intervals whose hg19 key maps MORE THAN ONCE (multi-mapped / split -> inconsistent).
+    # inert as invoked: liftOver is called without -multiple, so it emits at most one line per
+    # input and a split interval goes to the unmapped file instead -- the multi-mapped count
+    # printed below is therefore always 0. Adding -multiple to the call above is what makes
+    # this filter start doing something.
     counts = mapped.group_by("_hg19key").len()
     unique_keys = counts.filter(pl.col("len") == 1).select("_hg19key")
     mapped = mapped.join(unique_keys, on="_hg19key", how="inner")

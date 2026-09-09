@@ -1247,6 +1247,11 @@ def munge_windows(window_dir: Path, liftover_bin: str, chain: Path, output: Path
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as fh:
         proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=fh)
+        # a SystemExit raised mid-stream closes this pipe cleanly, so bgzip finishes its block
+        # and the truncated file looks complete on disk. Nothing publishes it: --stage runs
+        # after this function returns and the .sh wrapper is set -e, so the partial output can
+        # only ever sit in the local output dir. Keep it that way -- moving the upload inside
+        # the loop would make a mid-stream failure publishable.
         with io.TextIOWrapper(proc.stdin, "utf-8", newline="") as pipe:
             writer = csv.writer(pipe, delimiter="\t", lineterminator="\n")
             writer.writerow(WINDOW_COLUMNS)
@@ -1307,6 +1312,9 @@ def munge_windows(window_dir: Path, liftover_bin: str, chain: Path, output: Path
         lifted, failures, rows_in, na_dropped, unlifted_dropped, rows_out,
         per_file, phenotypes, cnv_types,
     )
+    # cannot fire as written: discover_window_files() asserts the file count and every file is
+    # asserted at EXPECTED_WINDOWS_PER_FILE inside the loop. Kept because it is the only place
+    # the product's total is stated, and the per-file assert could be relaxed.
     if rows_in != EXPECTED_WINDOW_ROWS:
         raise SystemExit(
             f"expected {EXPECTED_WINDOW_ROWS} source rows ({EXPECTED_WINDOW_FILES} files x "
@@ -1353,8 +1361,9 @@ def write_bgzip(rows: list[list[str]], columns: list[str], output: Path) -> None
     """One bgzipped TSV, no index.
 
     The output family writers in sumstat_utils/peak_utils all build a tabix index over
-    coordinates. Both rCNV products have none, so this writes its own bgzip pipe: the file
-    is a BigQuery load file only.
+    coordinates. No rCNV product is queried by position -- scores and genes have no
+    coordinates at all, segments and windows carry lifted ones but are read from BigQuery --
+    so this writes its own bgzip pipe: the file is a BigQuery load file only.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as fh:

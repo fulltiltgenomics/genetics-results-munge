@@ -18,8 +18,8 @@
 # All four are BigQuery load files with no tabix index. `windows` streams 28.9M source rows
 # and takes several minutes.
 #
-# Inputs are cached under CACHE_DIR and downloaded on demand (--download): the scores or
-# gene-association tar from Zenodo, the gencode gene name mapping and the HGNC complete set
+# Inputs are cached under CACHE_DIR and downloaded on demand (--download): the scores,
+# gene-association or sliding-window tar from Zenodo, the gencode gene name mapping and the HGNC complete set
 # from the daly mapping_files bucket (the HGNC set falls back to genenames.org if that bucket
 # is not readable), and the UCSC liftOver binary and hg19ToHg38 chain for `segments` and
 # `windows`. The windows product needs neither mapping input -- a window carries no symbol.

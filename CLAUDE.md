@@ -91,8 +91,9 @@ parts that got copied across the family and then had to be corrected across it. 
 - sumstats and exome/burden: `write_sumstat_output()` / `write_exome_output()` from
   `scripts/sumstat_utils.py`. bgzipped TSV + tabix index, plus a `mlog10p > 4` filtered
   companion with its own index. Write your own bgzip pipe only where the output's shape
-  genuinely differs — rows that never fit one DataFrame, or a product that is a directory of
-  files rather than one file — and say which in that script's docstring. Several already do;
+  genuinely differs — rows that never fit one DataFrame, a product that is a directory of
+  files rather than one file, or a product that carries no coordinates at all and therefore
+  has no index for the shared writer to build — and say which in that script's docstring. Several already do;
   `grep -l '"bgzip"' scripts/*.py` is the live list, not a line here
 - peak / open-chromatin / variant-effect tables: `scripts/peak_utils.py` — the numeric
   chromosome expression, the canonical-contig filter, and the sort → bgzip → tabix write. A
@@ -135,6 +136,7 @@ parts that got copied across the family and then had to be corrected across it. 
 | `scripts/sumstat_utils.py`, `scripts/peak_utils.py` | `CLAUDE.md` — the output contract above |
 | `scripts/peak_utils.py` | `README.md` — the open-chromatin entry names it as the family's shared writer |
 | `scripts/coloc/*` | `scripts/coloc/R14_UPDATE.md` |
+| `scripts/munge_rcnv.{py,sh}`, `scripts/rcnv_liftover_windows.py` | `docs/rcnv-dosage-sensitivity.md`, `docs/rcnv-sliding-windows.md` — the per-product column mappings and drop rules, and the liftOver measurement the windows product is gated on |
 | `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` |
 | `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` |
 
