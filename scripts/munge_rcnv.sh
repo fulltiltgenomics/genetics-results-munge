@@ -6,16 +6,17 @@
 # Source:
 #   paper  : Collins et al., Cell 2022, 185(16):3041-3055 (doi:10.1016/j.cell.2022.06.036)
 #   zenodo : https://zenodo.org/records/6347673
-#   scores : Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz  (18,641 genes x pHaplo/pTriplo)
+#   scores : Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz     (18,641 genes x pHaplo/pTriplo)
+#   genes  : Collins_rCNV_2022.gene_association_sumstats.tar.gz    (108 phenotype x DEL/DUP BEDs)
 #
-# --product selects which Zenodo product to munge; `scores` is the only one implemented.
-# The scores carry no coordinates, so the output is build-independent and needs no liftOver
-# and no tabix index -- it is a BigQuery load file.
+# --product selects which Zenodo product to munge: `scores` (dosage-sensitivity probabilities)
+# or `genes` (gene-based CNV association sumstats, one long table). Neither carries GRCh38
+# coordinates, so both outputs are build-independent BigQuery load files with no tabix index.
 #
-# Inputs are cached under CACHE_DIR and downloaded on demand (--download): the scores from
-# Zenodo, the gencode gene name mapping and the HGNC complete set from the daly
-# mapping_files bucket (the HGNC set falls back to genenames.org if that bucket is not
-# readable).
+# Inputs are cached under CACHE_DIR and downloaded on demand (--download): the scores or
+# gene-association tar from Zenodo, the gencode gene name mapping and the HGNC complete set
+# from the daly mapping_files bucket (the HGNC set falls back to genenames.org if that bucket
+# is not readable).
 #
 # Run inside the genetics-results-munge Docker image (htslib bgzip available).
 # Staging to GCS is OFF by default; pass --stage explicitly only when ready to publish.
@@ -28,7 +29,12 @@ PRODUCT=${PRODUCT:-scores}
 CACHE_DIR=${CACHE_DIR:-"$HOME/rcnv_munge/cache"}
 OUT_DIR=${OUT_DIR:-"$HOME/rcnv_munge/out"}
 DATASET_ID=${DATASET_ID:-"collins_rcnv_2022"}
-OUTPUT=${OUTPUT:-"$OUT_DIR/${DATASET_ID}_dosage_sensitivity.tsv.gz"}
+case "$PRODUCT" in
+    scores) OUTPUT_SUFFIX=dosage_sensitivity ;;
+    genes)  OUTPUT_SUFFIX=gene_associations ;;
+    *) echo "unknown PRODUCT '$PRODUCT' (expected scores or genes)" >&2; exit 1 ;;
+esac
+OUTPUT=${OUTPUT:-"$OUT_DIR/${DATASET_ID}_${OUTPUT_SUFFIX}.tsv.gz"}
 
 # GCS destinations (used only with --stage): <bucket>/rcnv/<dataset-id>/
 # finngen serves from finngen-commons/results_api_data; daly from daly-genetics-results.

@@ -9,9 +9,28 @@ Source (Zenodo record 6347673, v0.2 2022-03-11, CC-BY 4.0):
       18,641 rows, header `#gene pHaplo pTriplo`, one row per autosomal protein-coding
       gene of Gencode v19. No coordinates in the file at all.
 
+  --product genes -> Collins_rCNV_2022.gene_association_sumstats.tar.gz
+      108 tabixed BEDs (54 phenotypes x DEL/DUP), 17,263 rows each -- the same gene *set* in
+      every file (row order is not identical: two genes tied on GRCh37 (chr, start) come out
+      in a different relative order between a phenotype's DEL and DUP file -- confirmed on
+      HP0000118), one row per autosomal protein-coding gene of Gencode v19. 21 source columns
+      per the bundled README; phenotype code and CNV type come from the file name, not a
+      column. GRCh37 chr/start/end are dropped: a row's coordinates come from
+      `gene_annotations_v` at query time, the same way the `scores` product carries none.
+      Overall 65.2% of rows are all-NA past `case_freq`/`control_freq` (mean 11,248 rows per
+      file, ranging 591 to 16,570 depending on phenotype -- there is no single per-file
+      figure). `meta_lnOR` onward is NA wherever the meta-analysis produced no estimate,
+      which correlates with no CNV ever observed (`case_freq = control_freq = 0`) but is not
+      implied by `n_nominal_cohorts`: 449,103 rows have `n_nominal_cohorts = 0` with a
+      non-NA beta, and 17,412 NA rows have `n_nominal_cohorts >= 1`. Filtering on
+      `n_nominal_cohorts` does not select the analysable rows -- filter on `beta IS NOT
+      NULL` (or `mlog10p`) instead. NA rows are kept rather than dropped, so "tested, no
+      meta-analysis" stays distinguishable from "gene absent from this file".
+
 `--product` exists because the same Zenodo record also ships the gene association
-sumstats, the sliding-window sumstats and the gene feature matrix. Only `scores` is
-implemented; the others are separate work and are not stubbed here.
+sumstats, the sliding-window sumstats and the gene feature matrix. `scores` and `genes`
+are implemented; the sliding-window sumstats and the feature matrix are separate work and
+are not stubbed here.
 
 WHAT WAS READ OFF THE BYTES (not taken from the paper):
   - 18,641 rows, no duplicate gene symbols, no header comment block beyond line 1.
@@ -60,13 +79,37 @@ SYMBOL RESOLUTION (--gencode-mapping, --hgnc):
 association sumstats, sliding windows) are keyed on the v19 symbol, and because a published
 result must stay traceable to the identifier the paper actually used.
 
-Output (one bgzipped TSV, no tabix index -- there is nothing to index):
+`--product genes` resolves symbols through the exact same functions
+(`read_gencode_mapping`, `read_hgnc`, `pick_gencode`, `resolve_fallback`, wrapped by the
+shared `resolve_symbols`) -- one v19->current-symbol resolution for both products, run
+separately on each product's own set of v19 symbols (17,263 for genes, a subset of the
+scores' 18,641), so the two products can pick different winners for a symbol that is
+ambiguous only because of who else is in the set, without ever forking the resolution logic
+itself.
+
+Output, scores (one bgzipped TSV, no tabix index -- there is nothing to index):
   symbol  symbol_gencode_v19  ensembl_gene_id  phaplo  ptriplo  haploinsufficient  triplosensitive
+
+Output, genes (one bgzipped TSV, long format, no tabix index):
+  dataset  phenotype  cnv_type  symbol  symbol_gencode_v19  ensembl_gene_id
+  n_nominal_cohorts  top_cohort  cohorts_excluded  case_freq  control_freq
+  beta  beta_lower  beta_upper  z  mlog10p  mlog10_fdr_q
+  beta_secondary  beta_lower_secondary  beta_upper_secondary  z_secondary
+  mlog10p_secondary  mlog10_fdr_q_secondary
+See docs/rcnv-dosage-sensitivity.md for the full source-column mapping table and the
+NA-row contract. Per the repo's Statistics invariants, `beta`/`beta_lower`/`beta_upper`
+(and their `_secondary` twins) are formatted `:.3e` and `mlog10p`/`mlog10_fdr_q` are
+rounded to 4 decimals; `z` has no such house rule and is passed through verbatim. NA stays
+the literal string `NA` throughout -- unlike the scores' probabilities, these values carry
+no boolean threshold downstream, so there is no verbatim-vs-rounded disagreement to protect
+against.
 
 Usage:
   python3 scripts/munge_rcnv.py --product scores --download --output out/collins_rcnv_2022_dosage_sensitivity.tsv.gz
-  scripts/munge_rcnv.sh            # produce locally
-  scripts/munge_rcnv.sh --stage    # produce and publish to both buckets
+  python3 scripts/munge_rcnv.py --product genes --download --output out/collins_rcnv_2022_gene_associations.tsv.gz
+  scripts/munge_rcnv.sh                       # produce locally (PRODUCT=scores by default)
+  scripts/munge_rcnv.sh --stage               # produce and publish to both buckets
+  PRODUCT=genes scripts/munge_rcnv.sh --stage # gene associations, produce and publish
 """
 
 import argparse
@@ -77,6 +120,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
@@ -85,6 +129,10 @@ from pathlib import Path
 ZENODO_RECORD = "6347673"
 SCORES_FILE = "Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz"
 SCORES_URL = f"https://zenodo.org/records/{ZENODO_RECORD}/files/{SCORES_FILE}?download=1"
+
+GENE_ASSOC_DIR_NAME = "Collins_rCNV_2022.gene_association_sumstats"
+GENE_ASSOC_TAR = f"{GENE_ASSOC_DIR_NAME}.tar.gz"
+GENE_ASSOC_URL = f"https://zenodo.org/records/{ZENODO_RECORD}/files/{GENE_ASSOC_TAR}?download=1"
 
 # the mapping inputs are already staged in the daly bucket; --hgnc-url is the public
 # alternative for a machine without access to it
@@ -128,6 +176,46 @@ COLUMNS = [
     "triplosensitive",
 ]
 
+# house names for the 21 source columns (`gene` and the GRCh37 chr/start/end are handled
+# separately -- gene becomes symbol_gencode_v19, chr/start/end are dropped); order matches
+# GENE_SOURCE_HEADER from n_nominal_cohorts onward
+GENE_SOURCE_HEADER = [
+    "#chr", "start", "end", "gene",
+    "n_nominal_cohorts", "top_cohort", "cohorts_excluded_from_meta",
+    "case_freq", "control_freq",
+    "meta_lnOR", "meta_lnOR_lower", "meta_lnOR_upper", "meta_z",
+    "meta_neg_log10_p", "meta_neg_log10_fdr_q",
+    "meta_lnOR_secondary", "meta_lnOR_lower_secondary", "meta_lnOR_upper_secondary",
+    "meta_z_secondary", "meta_neg_log10_p_secondary", "meta_neg_log10_fdr_q_secondary",
+]
+
+GENE_COLUMNS = [
+    "dataset", "phenotype", "cnv_type", "symbol", "symbol_gencode_v19", "ensembl_gene_id",
+    "n_nominal_cohorts", "top_cohort", "cohorts_excluded", "case_freq", "control_freq",
+    "beta", "beta_lower", "beta_upper", "z", "mlog10p", "mlog10_fdr_q",
+    "beta_secondary", "beta_lower_secondary", "beta_upper_secondary", "z_secondary",
+    "mlog10p_secondary", "mlog10_fdr_q_secondary",
+]
+
+# the file name, not a column, carries phenotype and CNV type
+GENE_FILE_RE = re.compile(
+    r"^(?P<phenotype>HP\d+|UNKNOWN)\.rCNV\.(?P<cnv_type>DEL|DUP)\."
+    r"gene_association\.meta_analysis\.stats\.bed\.gz$"
+)
+
+# input-file integrity for --product genes: 54 phenotypes x DEL/DUP, 17,263 genes each
+EXPECTED_GENE_FILES = 108
+EXPECTED_GENE_PHENOTYPES = 54
+EXPECTED_GENES_PER_FILE = 17263
+EXPECTED_GENE_ROWS = EXPECTED_GENE_FILES * EXPECTED_GENES_PER_FILE
+
+# the gene set is identical across all 108 files (row order is not -- see munge_genes)
+
+# the literal Zenodo file-name spelling, for the `dataset` column inside the long-format
+# gene-association output; distinct from the lowercase DATASET id below, which names GCS
+# paths and the BigQuery dataset/table
+DATASET_LABEL = "Collins_rCNV_2022"
+
 RESOURCE = "rcnv"
 DATASET = "collins_rcnv_2022"
 GCS = {
@@ -136,6 +224,12 @@ GCS = {
         f"{DATASET}_dosage_sensitivity.tsv.gz",
         f"gs://daly-genetics-results/{RESOURCE}/{DATASET}/"
         f"{DATASET}_dosage_sensitivity.tsv.gz",
+    ),
+    "genes": (
+        f"gs://finngen-commons/results_api_data/{RESOURCE}/{DATASET}/"
+        f"{DATASET}_gene_associations.tsv.gz",
+        f"gs://daly-genetics-results/{RESOURCE}/{DATASET}/"
+        f"{DATASET}_gene_associations.tsv.gz",
     ),
 }
 
@@ -176,6 +270,31 @@ def fetch_gcs(gcs_path: str, dest: Path) -> Path:
     print(f"  copying {gcs_path}", file=sys.stderr)
     subprocess.run(["gcloud", "storage", "cp", gcs_path, str(dest)], check=True)
     return dest
+
+
+def fetch_gene_assoc(cache_dir: Path) -> Path:
+    """Download and unpack the gene-association tar.gz into cache_dir; return the unpacked dir.
+
+    Unverified against a live Zenodo download -- this host cannot reach Zenodo, so this was
+    exercised only against a pre-fetched unpacked copy passed via --gene-assoc-dir. If the
+    tar's own layout does not unpack to cache_dir/GENE_ASSOC_DIR_NAME, this raises with the
+    tar's location so a working host can extract it by hand and pass --gene-assoc-dir.
+    """
+    target = cache_dir / GENE_ASSOC_DIR_NAME
+    if target.exists():
+        return target
+    tar_path = cache_dir / GENE_ASSOC_TAR
+    fetch(GENE_ASSOC_URL, tar_path)
+    print(f"  extracting {tar_path}", file=sys.stderr)
+    with tarfile.open(tar_path) as tf:
+        # the Dockerfile pins python:3.13-slim, which has the `filter` argument (PEP 706)
+        tf.extractall(cache_dir, filter="data")
+    if not target.exists():
+        raise SystemExit(
+            f"expected {tar_path} to unpack into {target}; check its actual layout and "
+            f"rerun with --gene-assoc-dir pointing at the unpacked BEDs"
+        )
+    return target
 
 
 def read_scores(path: Path) -> list[tuple[str, str, str]]:
@@ -324,19 +443,27 @@ def resolve_fallback(
     return v19, "unmapped"
 
 
-def munge_scores(
-    scores_path: Path, gencode_path: Path, hgnc_path: Path, output: Path
-) -> list[list[str]]:
-    scores = read_scores(scores_path)
-    by_v19 = read_gencode_mapping(gencode_path)
-    approved, prev, alias = read_hgnc(hgnc_path)
+def resolve_symbols(
+    v19_symbols,
+    by_v19: dict[str, list[tuple[str, str | None]]],
+    approved: dict[str, str],
+    prev: dict[str, list[str]],
+    alias: dict[str, list[str]],
+) -> dict[str, tuple[str, str, str]]:
+    """{v19_symbol: (current_symbol, ensembl_gene_id, route)} for one set of v19 symbols.
 
+    The one symbol->ENSG->current-symbol resolution both --product scores and --product
+    genes run -- see pick_gencode/resolve_fallback for the ordering rules. Run per-product on
+    that product's own set of v19 symbols (not shared across products) because `claimed`
+    collisions depend on who else is in the set; the routes and functions are identical, the
+    winners for an ambiguous symbol need not be.
+    """
     # symbols that keep their name are settled before any renaming route runs, so the
     # fallback can see every symbol already taken and by which ENSG. Both non-renaming
     # routes belong in that pass: Gencode's own current name, and the v19 symbol HGNC still
     # approves. Leaving the latter out is what let a prev_symbol rename land on a symbol
     # its own gene was keeping.
-    picks = {v19: pick_gencode(v19, by_v19) for v19, _, _ in scores}
+    picks = {v19: pick_gencode(v19, by_v19) for v19 in v19_symbols}
     claimed: dict[str, set[str]] = defaultdict(set)
     settled: dict[str, tuple[str, str]] = {}
     for v19, (ensg, current) in picks.items():
@@ -365,12 +492,23 @@ def munge_scores(
             if route != "unmapped":
                 claimed[symbol].add(picks[v19][0])
 
+    return {v19: (settled[v19][0], picks[v19][0], settled[v19][1]) for v19 in picks}
+
+
+def munge_scores(
+    scores_path: Path, gencode_path: Path, hgnc_path: Path, output: Path
+) -> list[list[str]]:
+    scores = read_scores(scores_path)
+    by_v19 = read_gencode_mapping(gencode_path)
+    approved, prev, alias = read_hgnc(hgnc_path)
+
+    resolved = resolve_symbols({v19 for v19, _, _ in scores}, by_v19, approved, prev, alias)
+
     rows: list[list[str]] = []
     routes: Counter[str] = Counter()
     unmapped: list[str] = []
     for v19, phaplo, ptriplo in scores:
-        ensg, _ = picks[v19]
-        symbol, route = settled[v19]
+        symbol, ensg, route = resolved[v19]
         routes[route] += 1
         if route == "unmapped":
             unmapped.append(v19)
@@ -435,7 +573,7 @@ def munge_scores(
             f"MAX_DUPLICATE_SYMBOLS"
         )
 
-    write_bgzip(rows, output)
+    write_bgzip(rows, COLUMNS, output)
     return rows
 
 
@@ -465,19 +603,164 @@ def report(
     print(f"unmapped symbols: {sorted(unmapped)}", file=sys.stderr)
 
 
-def write_bgzip(rows: list[list[str]], output: Path) -> None:
+def discover_gene_assoc_files(gene_assoc_dir: Path) -> list[Path]:
+    """Sorted list of the 108 phenotype x DEL/DUP BEDs, filtered to the expected name shape."""
+    matched = sorted(p for p in gene_assoc_dir.glob("*.bed.gz") if GENE_FILE_RE.match(p.name))
+    if len(matched) != EXPECTED_GENE_FILES:
+        found = sorted(p.name for p in gene_assoc_dir.glob("*.bed.gz"))
+        raise SystemExit(
+            f"{gene_assoc_dir}: expected {EXPECTED_GENE_FILES} gene-association bed.gz "
+            f"files matching <phenotype>.rCNV.<DEL|DUP>.gene_association...bed.gz, found "
+            f"{len(matched)} of {len(found)} .bed.gz files present: {found[:10]}"
+        )
+    return matched
+
+
+def read_gene_assoc_file(path: Path) -> list[list[str]]:
+    """Read one tabixed gene-association BED as its 21 raw columns, header and width verified."""
+    with gzip.open(path, "rt") as fh:
+        reader = csv.reader(fh, delimiter="\t")
+        header = next(reader)
+        if header != GENE_SOURCE_HEADER:
+            raise SystemExit(f"{path}: unexpected header {header}")
+        rows = []
+        for row in reader:
+            if not row:
+                continue
+            if len(row) != len(GENE_SOURCE_HEADER):
+                raise SystemExit(
+                    f"{path}:{reader.line_num}: expected {len(GENE_SOURCE_HEADER)} columns, "
+                    f"got {len(row)}"
+                )
+            rows.append(row)
+        return rows
+
+
+def fmt_exp(value: str) -> str:
+    """`:.3e`, matching the repo's beta-formatting invariant; NA passes through unchanged."""
+    return value if value == NA else f"{float(value):.3e}"
+
+
+def fmt_round4(value: str) -> str:
+    """Round to 4 decimals, matching the repo's mlog10p invariant; NA passes through unchanged."""
+    return value if value == NA else f"{round(float(value), 4)}"
+
+
+def munge_genes(
+    gene_assoc_dir: Path, gencode_path: Path, hgnc_path: Path, output: Path
+) -> list[list[str]]:
+    files = discover_gene_assoc_files(gene_assoc_dir)
+    by_v19 = read_gencode_mapping(gencode_path)
+    approved, prev, alias = read_hgnc(hgnc_path)
+
+    phenotypes: set[str] = set()
+    cnv_types: set[str] = set()
+    reference_genes: list[str] | None = None
+    all_v19: set[str] = set()
+    parsed: list[tuple[str, str, list[list[str]]]] = []
+    total_rows = 0
+    for i, path in enumerate(files):
+        match = GENE_FILE_RE.match(path.name)
+        phenotype, cnv_type = match["phenotype"], match["cnv_type"]
+        phenotypes.add(phenotype)
+        cnv_types.add(cnv_type)
+        data = read_gene_assoc_file(path)
+        if len(data) != EXPECTED_GENES_PER_FILE:
+            raise SystemExit(
+                f"{path}: expected {EXPECTED_GENES_PER_FILE} rows, got {len(data)}"
+            )
+        genes_here = [row[3] for row in data]
+        if reference_genes is None:
+            reference_genes = genes_here
+        # sorted, not positional: adjacent rows tied on GRCh37 (chr, start) are ordered
+        # inconsistently between DEL and DUP files for the same phenotype (a source sort
+        # instability, confirmed on HP0000118 -- e.g. APITD1 and PMF1-BGLAP swap by one
+        # position), so row order is not actually identical across files. The gene *set*
+        # is what matters here: this output drops chr/start/end entirely, so a local
+        # reorder around a coordinate tie is invisible downstream.
+        elif sorted(genes_here) != sorted(reference_genes):
+            raise SystemExit(
+                f"{path}: gene set differs from {files[0].name} -- the README claims the "
+                f"same 17,263 genes in every phenotype file"
+            )
+        all_v19.update(genes_here)
+        total_rows += len(data)
+        parsed.append((phenotype, cnv_type, data))
+
+    if len(phenotypes) != EXPECTED_GENE_PHENOTYPES:
+        raise SystemExit(
+            f"expected {EXPECTED_GENE_PHENOTYPES} distinct phenotypes, got "
+            f"{len(phenotypes)}: {sorted(phenotypes)}"
+        )
+    if cnv_types != {"DEL", "DUP"}:
+        raise SystemExit(f"expected cnv_type in {{DEL, DUP}} only, got {sorted(cnv_types)}")
+    if total_rows != EXPECTED_GENE_ROWS:
+        raise SystemExit(
+            f"expected {EXPECTED_GENE_ROWS} rows ({EXPECTED_GENE_FILES} files x "
+            f"{EXPECTED_GENES_PER_FILE} genes), got {total_rows}"
+        )
+
+    resolved = resolve_symbols(all_v19, by_v19, approved, prev, alias)
+
+    rows: list[list[str]] = []
+    for phenotype, cnv_type, data in parsed:
+        for row in data:
+            v19 = row[3]
+            symbol, ensg, _route = resolved[v19]
+            rows.append(
+                [
+                    DATASET_LABEL, phenotype, cnv_type, symbol, v19, ensg,
+                    row[4], row[5], row[6], row[7], row[8],
+                    fmt_exp(row[9]), fmt_exp(row[10]), fmt_exp(row[11]),
+                    row[12], fmt_round4(row[13]), fmt_round4(row[14]),
+                    fmt_exp(row[15]), fmt_exp(row[16]), fmt_exp(row[17]),
+                    row[18], fmt_round4(row[19]), fmt_round4(row[20]),
+                ]
+            )
+
+    na_rows = sum(1 for row in rows if row[11] == NA)
+    ensgs_missing = sum(1 for row in rows if row[5] == NA)
+    report_genes(rows, resolved, na_rows)
+
+    if ensgs_missing:
+        raise SystemExit(
+            f"{ensgs_missing} rows have no ensembl_gene_id; every v19 symbol is supposed to "
+            f"be in the mapping file's gene_name_19 column"
+        )
+
+    write_bgzip(rows, GENE_COLUMNS, output)
+    return rows
+
+
+def report_genes(
+    rows: list[list[str]], resolved: dict[str, tuple[str, str, str]], na_rows: int
+) -> None:
+    routes: Counter[str] = Counter(route for _, _, route in resolved.values())
+    hgnc = sum(v for k, v in routes.items() if k.startswith("hgnc_"))
+    print("", file=sys.stderr)
+    print(f"rows:                          {len(rows)}", file=sys.stderr)
+    print(f"distinct v19 symbols:          {len(resolved)}", file=sys.stderr)
+    print(f"symbol via gencode:            {routes['gencode']}", file=sys.stderr)
+    print(f"symbol via HGNC:               {hgnc}", file=sys.stderr)
+    for route in ("hgnc_approved", "hgnc_prev", "hgnc_alias"):
+        print(f"  {route[5:]:<28} {routes[route]}", file=sys.stderr)
+    print(f"unmapped (kept as v19 symbol): {routes['unmapped']}", file=sys.stderr)
+    print(f"NA rows (no meta-analysis):    {na_rows} ({na_rows / len(rows):.4%} of rows)", file=sys.stderr)
+
+
+def write_bgzip(rows: list[list[str]], columns: list[str], output: Path) -> None:
     """One bgzipped TSV, no index.
 
     The output family writers in sumstat_utils/peak_utils all build a tabix index over
-    coordinates. This product has none, so it writes its own bgzip pipe: the file is a
-    BigQuery load file only.
+    coordinates. Both rCNV products have none, so this writes its own bgzip pipe: the file
+    is a BigQuery load file only.
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as fh:
         proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=fh)
         with io.TextIOWrapper(proc.stdin, "utf-8", newline="") as pipe:
             writer = csv.writer(pipe, delimiter="\t", lineterminator="\n")
-            writer.writerow(COLUMNS)
+            writer.writerow(columns)
             writer.writerows(rows)
         if proc.wait() != 0:
             raise SystemExit("bgzip failed")
@@ -488,11 +771,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--product",
-        choices=["scores"],
+        choices=["scores", "genes"],
         required=True,
-        help="which Zenodo product to munge; only the dosage-sensitivity scores today",
+        help="which Zenodo product to munge: dosage-sensitivity scores, or gene-association sumstats",
     )
     parser.add_argument("--scores", type=Path, help=f"local {SCORES_FILE} (default: <cache-dir>/{SCORES_FILE})")
+    parser.add_argument(
+        "--gene-assoc-dir",
+        type=Path,
+        help=f"local unpacked {GENE_ASSOC_DIR_NAME}/ (108 bed.gz) (default: <cache-dir>/{GENE_ASSOC_DIR_NAME})",
+    )
     parser.add_argument(
         "--gencode-mapping",
         type=Path,
@@ -503,8 +791,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--download",
         action="store_true",
-        help="fetch any missing input into --cache-dir (Zenodo for the scores, the daly "
-        "mapping_files bucket for the gencode mapping and HGNC set); OFF by default",
+        help="fetch any missing input into --cache-dir (Zenodo for the scores/gene-assoc tar, "
+        "the daly mapping_files bucket for the gencode mapping and HGNC set); OFF by default",
     )
     parser.add_argument("--hgnc-url", default=HGNC_URL, help="public HGNC source, used with --download when gcloud is unavailable")
     parser.add_argument("--output", type=Path, help="output .tsv.gz (default derived from --product)")
@@ -515,11 +803,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path]:
-    scores = args.scores or args.cache_dir / SCORES_FILE
+    """(product-specific input, gencode mapping, hgnc set) -- the mapping inputs are shared."""
     gencode = args.gencode_mapping or args.cache_dir / GENCODE_MAPPING_FILE
     hgnc = args.hgnc or args.cache_dir / HGNC_FILE
     if args.download:
-        fetch(SCORES_URL, scores)
         fetch_gcs(f"{MAPPING_BUCKET}/{GENCODE_MAPPING_FILE}", gencode)
         if not hgnc.exists():
             try:
@@ -527,10 +814,31 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             except (subprocess.CalledProcessError, FileNotFoundError):
                 print("  bucket copy failed, falling back to genenames.org", file=sys.stderr)
                 fetch(args.hgnc_url, hgnc)
-    for path, flag in ((scores, "--scores"), (gencode, "--gencode-mapping"), (hgnc, "--hgnc")):
+    for path, flag in ((gencode, "--gencode-mapping"), (hgnc, "--hgnc")):
         if not path.exists():
             raise SystemExit(f"{path} not found (pass {flag}, or run with --download)")
-    return scores, gencode, hgnc
+
+    if args.product == "scores":
+        scores = args.scores or args.cache_dir / SCORES_FILE
+        if args.download:
+            fetch(SCORES_URL, scores)
+        if not scores.exists():
+            raise SystemExit(f"{scores} not found (pass --scores, or run with --download)")
+        return scores, gencode, hgnc
+
+    if args.gene_assoc_dir is not None:
+        if not args.gene_assoc_dir.exists():
+            raise SystemExit(f"--gene-assoc-dir {args.gene_assoc_dir} not found")
+        return args.gene_assoc_dir, gencode, hgnc
+
+    gene_assoc_dir = args.cache_dir / GENE_ASSOC_DIR_NAME
+    if not gene_assoc_dir.exists() and args.download:
+        gene_assoc_dir = fetch_gene_assoc(args.cache_dir)
+    if not gene_assoc_dir.exists():
+        raise SystemExit(
+            f"{gene_assoc_dir} not found (pass --gene-assoc-dir, or run with --download)"
+        )
+    return gene_assoc_dir, gencode, hgnc
 
 
 def main() -> None:
@@ -538,9 +846,13 @@ def main() -> None:
     if shutil.which("bgzip") is None:
         raise SystemExit("bgzip not found on PATH (run inside the munge image)")
 
-    scores, gencode, hgnc = resolve_inputs(args)
-    output = args.output or Path(f"{DATASET}_dosage_sensitivity.tsv.gz")
-    munge_scores(scores, gencode, hgnc, output)
+    primary, gencode, hgnc = resolve_inputs(args)
+    output_suffix = "dosage_sensitivity" if args.product == "scores" else "gene_associations"
+    output = args.output or Path(f"{DATASET}_{output_suffix}.tsv.gz")
+    if args.product == "scores":
+        munge_scores(primary, gencode, hgnc, output)
+    else:
+        munge_genes(primary, gencode, hgnc, output)
 
     if args.stage:
         finngen, daly = GCS[args.product]

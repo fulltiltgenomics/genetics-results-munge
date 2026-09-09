@@ -1,8 +1,10 @@
-# rCNV dosage sensitivity (Collins et al. 2022)
+# rCNV dosage sensitivity and gene associations (Collins et al. 2022)
 
-`scripts/munge_rcnv.{py,sh}` turns the published dosage-sensitivity scores of
-[Collins et al. 2022](https://doi.org/10.1016/j.cell.2022.06.036) into the suite's
-`rcnv` table. This note records the decisions that are not obvious from the code.
+`scripts/munge_rcnv.{py,sh}` turns two of the published products of
+[Collins et al. 2022](https://doi.org/10.1016/j.cell.2022.06.036) into the suite's `rcnv`
+tables: the dosage-sensitivity scores (`--product scores`) and the gene-based CNV
+association summary statistics (`--product genes`). This note records the decisions that
+are not obvious from the code.
 
 **Citation.** Collins RL, Glessner JT, Porcu E, et al. *A cross-disorder dosage
 sensitivity map of the human genome.* Cell 2022;185(16):3041-3055.e25.
@@ -15,13 +17,14 @@ released under **CC-BY 4.0** — attribution is required wherever these values a
 ```
 https://zenodo.org/records/6347673
   Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz   --product scores  (386 kB)
-  Collins_rCNV_2022.gene_association_sumstats.tar.gz   not munged here
+  Collins_rCNV_2022.gene_association_sumstats.tar.gz   --product genes   (108 tabixed BEDs)
   Collins_rCNV_2022.sliding_window_sumstats.tar.gz     not munged here
   Collins_rCNV_2022.gene_features_matrix.tar.gz        not loaded
 ```
 
-`--product` exists because the record ships four products and the later ones are separate
-work. Only `scores` is implemented; nothing is stubbed for the others.
+`--product` exists because the record ships four products: the sliding-window sumstats are
+separate work and the gene-features matrix is not loaded. `scores` and `genes` are
+implemented; nothing is stubbed for the others.
 
 The scores file is `#gene pHaplo pTriplo`, 18,641 rows, one per autosomal protein-coding
 gene of Gencode v19, no duplicate symbols and no missing-value token. pHaplo and pTriplo are
@@ -65,6 +68,11 @@ construction; it joins to the suite's GRCh38 gene views on those keys. There is 
 index because there is nothing to index — the file is a BigQuery load file only.
 
 ## Symbol resolution
+
+This section describes `--product scores`. `--product genes` (below) resolves symbols
+through the exact same functions, run separately on its own 17,263-symbol set rather than
+sharing this product's 18,641-symbol resolution -- see "Gene associations" for why that
+matters and for that run's own counts.
 
 The paper's symbols are Gencode v19 (GRCh37-era); the script prints how many of them are not
 what the gene is called now (`symbol changed from v19` in the run summary) rather than this
@@ -168,15 +176,137 @@ symbol  symbol_gencode_v19  ensembl_gene_id  phaplo  ptriplo  haploinsufficient 
 load. The file carries no `dataset` column; the loader injects it with `--const-column`, as
 for the HLA combined file.
 
+## Gene associations (`--product genes`)
+
+`Collins_rCNV_2022.gene_association_sumstats.tar.gz` unpacks to 108 tabixed BEDs -- one
+`<phenotype>.rCNV.<DEL|DUP>.gene_association.meta_analysis.stats.bed.gz` per phenotype x
+CNV-type combination, 54 phenotypes (HP-code or `UNKNOWN`) times `DEL`/`DUP`. Each BED has
+17,263 rows, one per autosomal protein-coding Gencode v19 gene, 21 columns per the tarball's
+own `README`. Phenotype and CNV type are read from the **file name**, not a column.
+
+**The gene set is the same across all 108 files; row order is not.** Two genes tied on
+GRCh37 `(chr, start)` come out in a different relative order between a phenotype's DEL and
+DUP file -- confirmed on `HP0000118`, where `APITD1`, `PMF1-BGLAP`, `CHMP3`, `LY75` and
+`URGCP-MRPS24` each sit one row off between the two. This output drops chr/start/end
+entirely, so the reorder is invisible downstream; what the script actually checks is the
+gene **set**, sorted, of every file against the first, plus each file's own row count
+against the expected 17,263, backed by the total row count (108 x 17,263 = 1,864,404) for
+the whole product.
+
+### Column mapping
+
+GRCh37 `chr`/`start`/`end` are dropped -- coordinates come from `gene_annotations_v` at
+query time, the same as `--product scores`. `gene` becomes `symbol_gencode_v19`; `symbol`
+and `ensembl_gene_id` are added by the same resolution described above.
+
+| source column (README) | output column | how |
+|---|---|---|
+| `gene` | `symbol_gencode_v19` | verbatim |
+| -- | `symbol` | resolved (see below) |
+| -- | `ensembl_gene_id` | resolved (see below) |
+| -- | `dataset` | constant `Collins_rCNV_2022` (the Zenodo file-name spelling) |
+| file name | `phenotype` | HP-code exactly as in the file name, or `UNKNOWN` |
+| file name | `cnv_type` | `DEL` or `DUP` exactly as in the file name |
+| `n_nominal_cohorts` | `n_nominal_cohorts` | verbatim |
+| `top_cohort` | `top_cohort` | verbatim |
+| `cohorts_excluded_from_meta` | `cohorts_excluded` | verbatim (`;`-list, or `NA` if none excluded) |
+| `case_freq` | `case_freq` | verbatim |
+| `control_freq` | `control_freq` | verbatim |
+| `meta_lnOR` | `beta` | `:.3e` (repo's beta-formatting invariant) |
+| `meta_lnOR_lower` | `beta_lower` | `:.3e` |
+| `meta_lnOR_upper` | `beta_upper` | `:.3e` |
+| `meta_z` | `z` | verbatim -- no house rule names `z` |
+| `meta_neg_log10_p` | `mlog10p` | rounded to 4 decimals (repo's mlog10p invariant) |
+| `meta_neg_log10_fdr_q` | `mlog10_fdr_q` | rounded to 4 decimals |
+| `meta_lnOR_secondary` | `beta_secondary` | `:.3e` |
+| `meta_lnOR_lower_secondary` | `beta_lower_secondary` | `:.3e` |
+| `meta_lnOR_upper_secondary` | `beta_upper_secondary` | `:.3e` |
+| `meta_z_secondary` | `z_secondary` | verbatim |
+| `meta_neg_log10_p_secondary` | `mlog10p_secondary` | rounded to 4 decimals |
+| `meta_neg_log10_fdr_q_secondary` | `mlog10_fdr_q_secondary` | rounded to 4 decimals |
+
+`_secondary` columns repeat the same statistic after excluding the cohort named in
+`top_cohort` from the meta-analysis (the README's own definition).
+
+### NA rows are kept, not dropped
+
+`meta_lnOR` onward is `NA` wherever the meta-analysis produced no estimate for that
+gene/phenotype/CNV-type row; this correlates with no CNV ever observed in the cohort
+(`case_freq = control_freq = 0` -- a few thousand of the NA rows have `case_freq` or
+`control_freq` themselves `NA`), but it is **not** implied by `n_nominal_cohorts`:
+449,103 rows have `n_nominal_cohorts = 0` with a non-`NA` `beta`, and 17,412 `NA` rows have
+`n_nominal_cohorts >= 1`. Filtering on `n_nominal_cohorts` does **not** select the
+analysable rows -- filter on `beta IS NOT NULL` (or `mlog10p`) instead. This munge keeps
+the NA rows, all-`NA` past `control_freq`, rather than dropping them: "tested, no
+meta-analysis" (the row is present, stats are `NA`) has to stay distinguishable from "gene
+absent from this file" (the row doesn't exist at all), and only keeping the row can carry
+that distinction. The **NA rate is not constant across phenotypes**: 65.2% overall
+(1,214,820 of 1,864,404 rows), from 591 rows (3.4%) on the largest phenotype checked
+(`HP0000118.DUP`) to 16,570 rows (96.0%) on the smallest (`HP0012447.DEL`); there is no
+single "~N NA rows per file" to quote.
+
+### Symbol resolution, run on this product's own gene set
+
+`--product genes` calls the shared `resolve_symbols()` on the 17,263 v19 symbols found in
+the gene-association files -- a strict subset of the scores product's 18,641 -- not on the
+scores' own resolution. The functions are identical (`pick_gencode`, `resolve_fallback`);
+running them on a smaller set can settle an ambiguous symbol differently, because `claimed`
+only sees the competitors that are actually in the set being resolved. `ensembl_gene_id` is
+asserted never `NA`, same as `--product scores`.
+
+This product is meant to be joined on `ensembl_gene_id`, not `symbol`: a few symbols carry
+two genes within a single phenotype/CNV-type file (the same collision pattern as `--product
+scores` -- one ENSG Gencode renamed onto the symbol and one ENSG Gencode no longer names at
+all) -- check the script's own printed symbol-resolution summary for the current run's
+list rather than trusting a hand-typed one here.
+
+Counts from the reference run (script prints these on every run; trust them over this table
+if they differ):
+
+| route | genes |
+|---|---|
+| Gencode `gene_name_19` -> current `gene_name` | 16,888 |
+| HGNC -- v19 symbol still approved | 110 |
+| HGNC -- `prev_symbol` | 41 |
+| HGNC -- `alias_symbol` | 5 |
+| unresolved, kept as the v19 symbol | 219 |
+
+### Output
+
+One bgzipped TSV, `collins_rcnv_2022_gene_associations.tsv.gz`, long format (one row per
+gene x phenotype x CNV type), grouped by file in the order the 108 BEDs were read (not
+sorted -- there is no natural single sort key across dataset/phenotype/cnv_type/symbol that
+the API needs, unlike the scores' `(symbol, symbol_gencode_v19)`):
+
+```
+dataset  phenotype  cnv_type  symbol  symbol_gencode_v19  ensembl_gene_id
+n_nominal_cohorts  top_cohort  cohorts_excluded  case_freq  control_freq
+beta  beta_lower  beta_upper  z  mlog10p  mlog10_fdr_q
+beta_secondary  beta_lower_secondary  beta_upper_secondary  z_secondary
+mlog10p_secondary  mlog10_fdr_q_secondary
+```
+
+Reference-run totals: 1,864,404 rows (108 files x 17,263 genes), 54 distinct phenotypes,
+`cnv_type` exactly `{DEL, DUP}`, 1,214,820 NA rows (65.16%), `ensembl_gene_id` never `NA`.
+
 ## Running it
 
 ```bash
 # download inputs to $HOME/rcnv_munge/cache, produce locally, no upload
 scripts/munge_rcnv.sh
 
+# gene associations instead of the dosage-sensitivity scores
+PRODUCT=genes scripts/munge_rcnv.sh
+
 # produce and publish to both profile buckets
 scripts/munge_rcnv.sh --stage
 ```
+
+`--download` for `--product genes` fetches and untars
+`Collins_rCNV_2022.gene_association_sumstats.tar.gz` into `<cache-dir>/`; this path has not
+been exercised against a live Zenodo download from this host (see the script's
+`fetch_gene_assoc` docstring). `--gene-assoc-dir` points the script at an already-unpacked
+copy of the 108 BEDs directly, bypassing both the download and the untar.
 
 `--stage` attempts **both** destinations regardless of whether the first succeeds, reports
 every failure at the end and exits non-zero if any failed — the two buckets are in different
@@ -190,6 +320,7 @@ override the defaults; `--stage` is never implied. Staged layout:
 gs://finngen-commons/results_api_data/rcnv/collins_rcnv_2022/    # finngen profile
 gs://daly-genetics-results/rcnv/collins_rcnv_2022/               # daly profile
   collins_rcnv_2022_dosage_sensitivity.tsv.gz
+  collins_rcnv_2022_gene_associations.tsv.gz
 ```
 
 The BigQuery table and view are defined in `genetics-results-db`, and the dataset is
