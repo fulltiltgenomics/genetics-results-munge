@@ -34,7 +34,10 @@ Source (Zenodo record 6347673, v0.2 2022-03-11, CC-BY 4.0):
       BigQuery loader to split into ARRAY<STRING>. Coordinates are GRCh37 and are lifted to
       GRCh38 here (segment span and every credible interval); the GRCh37 pair is kept.
       There is no download URL: Cell and PMC serve a bot-check page instead of the xlsx, so
-      the user places mmc3.xlsx in --cache-dir by hand. Table S4 (the 178-segment consensus
+      the user places mmc3.xlsx in --cache-dir by hand. The sliding-window BEDs below are a
+      second input to this product: an interval that does not lift whole borrows its
+      boundaries from published 200 kb windows, and membership in that window set is checked
+      rather than inferred from the 10 kb grid. Table S4 (the 178-segment consensus
       set) is deliberately not read: it repeats these 163 rows and adds derived annotations.
 
   --product windows -> Collins_rCNV_2022.sliding_window_sumstats.tar.gz
@@ -304,9 +307,12 @@ EXPECTED_WINDOW_ROWS = EXPECTED_WINDOW_FILES * EXPECTED_WINDOWS_PER_FILE
 # identical to the measurement's 180-220 kb; the run asserts it rather than assuming it
 WINDOW_LENGTH = 200_000
 
-# the grid the windows are laid on: 200 kb wide every 10 kb. A coordinate is a window start
-# exactly when it is a multiple of the step, and a window end for the same reason, which is
-# the property the segments product's boundary fallback rests on
+# the grid the windows are laid on: 200 kb wide every 10 kb. Sitting on the step is necessary
+# for a coordinate to be a published window boundary and nowhere near sufficient: 200 kb
+# windows on a 10 kb step fit the hg19 autosome lengths 287,673 times against the 267,237
+# windows the paper published, so ~7% of on-grid positions are not windows at all. The
+# segments product's boundary fallback therefore asserts the step and then checks membership
+# in the published set itself
 WINDOW_STEP = 10_000
 
 # docs/rcnv-sliding-windows.md's measured result. Asserting it is what makes "the same
@@ -1029,33 +1035,67 @@ def lift_intervals(
     return lifted, failures
 
 
+def load_published_windows(window_dir: Path) -> set[tuple[str, int, int]]:
+    """The published GRCh37 sliding windows, read from one of the 108 source BEDs.
+
+    One file is enough because every file carries the same set, which `munge_windows` asserts
+    over all 108 by refusing any window its reference file did not carry.
+    """
+    reference = discover_window_files(window_dir)[0]
+    windows = set(read_windows(reference))
+    if len(windows) != EXPECTED_WINDOWS_PER_FILE:
+        raise SystemExit(
+            f"{reference}: expected {EXPECTED_WINDOWS_PER_FILE} distinct windows, got "
+            f"{len(windows)}"
+        )
+    return windows
+
+
 def lift_boundary_windows(
-    binary: str, chain: Path, intervals: dict[str, tuple[str, int, int]], tolerance: float
+    binary: str,
+    chain: Path,
+    intervals: dict[str, tuple[str, int, int]],
+    tolerance: float,
+    published: set[tuple[str, int, int]],
 ) -> tuple[dict[str, tuple[str, int, int]], dict[str, str]]:
     """({key: GRCh38 (chrom, start, end)}, {key: failure class}) composed from window lifts.
 
-    Every boundary in Table S3 sits on the sliding-window grid, so a segment's start is also
-    the start of a 200 kb window and its end the end of another. Lifting those two windows
-    through `lift_intervals` -- the same helper, chain and filters the windows product uses --
-    and taking their outer edges makes the segment's GRCh38 boundary, by construction, the
-    coordinate `rcnv_window_associations_v` carries for the window sitting on it, so the two
-    tables cannot disagree about where a boundary is.
+    A boundary is only borrowed from a window this checks is in `published` -- the window set
+    the windows product reads out of the source BEDs. Being on the 10 kb grid does not make a
+    coordinate a published window boundary, so membership is checked rather than inferred, and
+    that check is what makes the composed GRCh38 boundary the coordinate
+    `rcnv_window_associations_v` carries for the window sitting on it: the two tables cannot
+    disagree about where a boundary is. The lift is `lift_intervals` -- the same helper, chain
+    and filters the windows product uses -- and the composed interval takes the two windows'
+    outer edges.
+
+    A boundary whose window was never published is left unlifted with that as its reason, not
+    raised: the grid assertion upstream catches a supplement that moved a boundary off the
+    step, while a window the paper did not publish is a fact about the data.
 
     Lifting the two 1-bp endpoints instead is the obvious alternative and is wrong here on
     both counts a boundary can fail: an endpoint abutting an assembly gap has no base to map
     at all, and a lone base inside a segmental duplication maps into the paralogous copy
-    rather than into the region -- 15q11.2's start lands ~470 kb from where every window
-    beneath it goes. A 200 kb window has enough unique sequence for minMatch to anchor it.
+    rather than into the region -- merged_DUP_segment_15q11.2-q13.3's start lands far from
+    where every window beneath it goes. A 200 kb window has enough unique sequence for
+    minMatch to anchor it.
 
     Accepted only when both boundary windows lift, to the interval's own chromosome, leaving
     start < end. No length filter is applied to the composed interval: 22q11.21's DEL really
-    does contract to 0.87 of its GRCh37 length in GRCh38.
+    does contract in GRCh38 (docs/rcnv-dosage-sensitivity.md carries the measured ratio, which
+    is a property of this chain and liftOver build).
     """
     windows: dict[str, tuple[str, int, int]] = {}
     for key, (chrom, start, end) in intervals.items():
         windows[f"{key}|start"] = (chrom, start, start + WINDOW_LENGTH)
         windows[f"{key}|end"] = (chrom, end - WINDOW_LENGTH, end)
-    lifted_windows, window_failures = lift_intervals(binary, chain, windows, tolerance)
+    to_lift = {k: w for k, w in windows.items() if w in published}
+    lifted_windows, window_failures = (
+        lift_intervals(binary, chain, to_lift, tolerance) if to_lift else ({}, {})
+    )
+    window_failures.update(
+        {k: "is not a published sliding window" for k in windows if k not in to_lift}
+    )
 
     lifted: dict[str, tuple[str, int, int]] = {}
     failures: dict[str, str] = {}
@@ -1085,6 +1125,7 @@ def munge_segments(
     liftover_bin: str,
     chain: Path,
     output: Path,
+    window_dir: Path,
 ) -> list[list[str]]:
     segments = read_segments(xlsx_path)
     by_v19 = read_gencode_mapping(gencode_path)
@@ -1117,9 +1158,11 @@ def munge_segments(
             to_lift[f"ci|{segment_id}|{i}"] = (ci_chrom, int(start), int(end))
 
     # the fallback below borrows a boundary from the 200 kb window that starts (or ends) on
-    # it, which only works while every boundary in the table is on the window grid. A
-    # supplement re-release that moved one off the 10 kb step would silently lift a window
-    # the windows product does not carry, so it fails the run instead
+    # it. Being on the 10 kb step is the cheap half of "that window exists": it is necessary,
+    # not sufficient, and lift_boundary_windows checks membership in the published set for the
+    # other half. A boundary off the step is a supplement re-release rather than a data fact,
+    # so unlike non-membership it fails the run here instead of costing that row its GRCh38
+    # coordinates
     off_grid = sorted(
         f"{key} {chrom}:{coord}"
         for key, (chrom, start, end) in to_lift.items()
@@ -1136,7 +1179,8 @@ def munge_segments(
     # an interval the whole-interval lift rejects still has two boundaries that are perfectly
     # well defined on GRCh38; take them from the windows sitting on them
     borrowed, borrow_failures = lift_boundary_windows(
-        liftover_bin, chain, {k: to_lift[k] for k in lift_failures}, LENGTH_TOLERANCE
+        liftover_bin, chain, {k: to_lift[k] for k in lift_failures}, LENGTH_TOLERANCE,
+        load_published_windows(window_dir),
     )
     lift_failures = {
         key: f"{reason}; {borrow_failures[key]}"
@@ -1229,6 +1273,8 @@ def report_segments(
     n_ci = len(lifted) + len(failures) - n_seg
     seg_ok = sum(1 for k in lifted if k.startswith("seg|"))
     ci_ok = len(lifted) - seg_ok
+    seg_borrowed = sum(1 for k in borrowed if k.startswith("seg|"))
+    ci_borrowed = len(borrowed) - seg_borrowed
     print("", file=sys.stderr)
     print(f"segments:                      {len(rows)}", file=sys.stderr)
     for cnv_type, n in sorted(Counter(r[2] for r in rows).items()):
@@ -1244,8 +1290,9 @@ def report_segments(
           f"{sum(1 for v19, (cur, _, _) in resolved.items() if cur != v19)}", file=sys.stderr)
     print(f"liftOver GRCh37 -> GRCh38:", file=sys.stderr)
     print(f"  segment spans lifted         {seg_ok} of {n_seg}", file=sys.stderr)
+    print(f"    via boundary windows       {seg_borrowed}", file=sys.stderr)
     print(f"  credible intervals lifted    {ci_ok} of {n_ci}", file=sys.stderr)
-    print(f"  of which via boundary windows {len(borrowed)}", file=sys.stderr)
+    print(f"    via boundary windows       {ci_borrowed}", file=sys.stderr)
     for key in sorted(borrowed):
         chrom, start, end = borrowed[key]
         print(f"    {key:<51} {chrom}:{start}-{end}", file=sys.stderr)
@@ -1609,7 +1656,11 @@ def main() -> None:
         if args.product == "windows":
             munge_windows(primary, liftover_bin, chain, output)
         else:
-            munge_segments(primary, gencode, hgnc, liftover_bin, chain, output)
+            # the boundary fallback reads the published window set, so this product needs
+            # the sliding-window BEDs as well as the xlsx
+            munge_segments(
+                primary, gencode, hgnc, liftover_bin, chain, output, resolve_window_dir(args)
+            )
 
     if args.stage:
         finngen, daly = GCS[args.product]

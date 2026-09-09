@@ -408,15 +408,25 @@ windows measurement's 180-220 kb around a fixed 200 kb window, expressed as a fr
 because segments run from 200 kb to 10.3 Mb and credible intervals are smaller still.
 
 The segment span and every credible interval go through one such `liftOver` call. What that
-call rejects gets a second chance from its **boundary windows**. Every boundary in Table S3
-sits on the sliding-window grid — each `Start`, `End` and credible-interval endpoint is a
-multiple of the 10 kb step, which the run asserts over all of them rather than assuming — so
-an interval's start is also the start of a published 200 kb window and its end the end of
-another. Those two windows are lifted by the same `lift_intervals`, same chain, same four
-filters, and the composed interval is kept only when both windows lift, to the interval's own
-chromosome, leaving start < end. A segment's GRCh38 boundary is then, by construction, the
-coordinate `rcnv_window_associations_v` carries for the window sitting on it, so a segment and
-the windows beneath it cannot disagree about where a boundary is.
+call rejects gets a second chance from its **boundary windows**, and two things have to hold
+before a boundary is borrowed. Every `Start`, `End` and credible-interval endpoint is a
+multiple of the 10 kb step, which the run asserts over all of them; a supplement that moved
+one off the step fails the run. And the 200 kb window that starts (or ends) on the boundary
+has to be **a member of the published window set**, which the run reads out of one of the
+sliding-window BEDs and checks per borrowed window. Sitting on the grid does not imply
+membership: 200 kb windows on a 10 kb step fit the hg19 autosome lengths 287,673 times
+against the 267,237 windows the paper published, so ~7% of on-grid positions are not windows
+— and a boundary whose window was never published is left unlifted with
+that as its reason. The two windows are lifted by the same `lift_intervals`, same chain, same
+four filters, and the composed interval is kept only when both windows lift, to the interval's
+own chromosome, leaving start < end. Because membership is checked rather than inferred, a
+segment's GRCh38 boundary is the coordinate `rcnv_window_associations_v` carries for the
+window sitting on it, so a segment and the windows beneath it cannot disagree about where a
+boundary is.
+
+That check makes the unpacked sliding-window BEDs a second input to `--product segments`:
+`--download` fetches the same Zenodo tar `--product windows` uses, and `--window-dir`
+overrides where it is looked for.
 
 **Why the window and not the endpoint.** Lifting the two 1 bp endpoints instead is the obvious
 cheaper move, and it is wrong on both counts a boundary fails here: an endpoint that abuts an
@@ -479,11 +489,13 @@ Three further segments lift their own span but lose one credible interval each:
 **Segments fail more often than sliding windows do, and that is not a regression in the
 chain.** A segment is a recurrent genomic disorder *because* segmental duplications flank it,
 which is exactly the sequence hg19 and hg38 rearranged, and these intervals are 10-50x longer
-than a window; "Split in new" is liftOver saying the interval no longer has one image. What
-survives that for the span usually survives it for the boundary too, which is why the
-boundary-window pass recovers the four best-known DUP/DEL loci and leaves the six above,
-where the 200 kb window on one end is itself deleted, split, or lifts to a length the shared
-filter rejects.
+than a window; "Split in new" is liftOver saying the interval no longer has one image. The
+boundary-window pass is there for precisely the intervals whose span did *not* survive: a
+200 kb window often transfers intact where the megabase span around it does not, which is how
+the `1p36.32-p36.33`, `1q21.1-q21.2` and `15q11.2-q13.3` DUP spans and the `22q11.21` DEL span
+come back. It leaves the six above, where the 200 kb window on one end is itself deleted,
+split, or lifts to a length the shared filter rejects — `22q11.21` DUP among them, so that
+locus is recovered for DEL and not for DUP.
 
 ## Sliding windows (`--product windows`)
 
