@@ -1,10 +1,11 @@
-# rCNV dosage sensitivity, gene associations and segments (Collins et al. 2022)
+# rCNV dosage sensitivity, gene associations, segments and sliding windows (Collins et al. 2022)
 
-`scripts/munge_rcnv.{py,sh}` turns three published products of
+`scripts/munge_rcnv.{py,sh}` turns four published products of
 [Collins et al. 2022](https://doi.org/10.1016/j.cell.2022.06.036) into the suite's `rcnv`
 tables: the dosage-sensitivity scores (`--product scores`), the gene-based CNV association
-summary statistics (`--product genes`) and the 163 disease-associated large segments
-(`--product segments`). This note records the decisions that are not obvious from the code.
+summary statistics (`--product genes`), the 163 disease-associated large segments
+(`--product segments`) and the sliding-window association summary statistics
+(`--product windows`). This note records the decisions that are not obvious from the code.
 
 **Citation.** Collins RL, Glessner JT, Porcu E, et al. *A cross-disorder dosage
 sensitivity map of the human genome.* Cell 2022;185(16):3041-3055.e25.
@@ -18,16 +19,16 @@ released under **CC-BY 4.0** — attribution is required wherever these values a
 https://zenodo.org/records/6347673
   Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz   --product scores  (386 kB)
   Collins_rCNV_2022.gene_association_sumstats.tar.gz   --product genes   (108 tabixed BEDs)
-  Collins_rCNV_2022.sliding_window_sumstats.tar.gz     not munged here
+  Collins_rCNV_2022.sliding_window_sumstats.tar.gz     --product windows (108 tabixed BEDs)
   Collins_rCNV_2022.gene_features_matrix.tar.gz        not loaded
 
 Cell supplement (doi:10.1016/j.cell.2022.06.036), NOT on Zenodo
   mmc3.xlsx  sheet "Table S3"                          --product segments (163 segments)
 ```
 
-`--product` exists because the record ships four products: the sliding-window sumstats are
-separate work and the gene-features matrix is not loaded. `scores`, `genes` and `segments`
-are implemented; nothing is stubbed for the others.
+`--product` exists because the record ships four products; the gene-features matrix is not
+loaded. `scores`, `genes`, `segments` and `windows` are implemented; nothing is stubbed for
+the feature matrix.
 
 `segments` is the one product whose input is **not** on Zenodo and **not** CC-BY: it comes
 from the paper's own supplement, under Elsevier's terms. The xlsx is therefore never
@@ -332,10 +333,10 @@ empty `Genes` cell), and `str.split(';')` on those returns `['']`.
 | `Segment ID` | `segment_id` | e.g. `merged_DEL_segment_22q11.21` |
 | `CNV Type` | `cnv_type` | `DEL` / `DUP` |
 | `Chrom` | `chr` | bare integer 1-22, no `chr` prefix — `datasets.yaml` types every `chr` in the suite `INT64`. All 163 segments are autosomal, so the X-is-23 convention never arises here |
-| lifted `Start` | `start` | GRCh38; `NA` where the lift failed |
-| lifted `End` | `end` | GRCh38; `NA` where the lift failed |
-| `Start` | `start_grch37` | always present |
-| `End` | `end_grch37` | always present |
+| lifted `Start` | `segment_start` | GRCh38; `NA` where the lift failed |
+| lifted `End` | `segment_end` | GRCh38; `NA` where the lift failed |
+| `Start` | `segment_start_grch37` | always present |
+| `End` | `segment_end_grch37` | always present |
 | `Cytoband` | `cytoband` | |
 | `Best Significance` | `best_significance` | `Genome-wide` / `FDR` |
 | `Pooled Control Freq.` | `control_freq` | |
@@ -359,6 +360,10 @@ The `beta*` columns are formatted `:.3e` per the repo's statistics invariant, th
 openpyxl hands back Python floats, so unlike the text-file products there is no source
 string to pass through verbatim, and `repr` is the spelling that reads back as the same
 double.
+
+`segment_start`/`segment_end` rather than `start`/`end`, matching `--product windows`:
+`end` is a reserved word in BigQuery, so a column called `end` has to be backticked in every
+query a consumer writes.
 
 ### The `;` delimiter is a contract with the loader
 
@@ -459,6 +464,126 @@ liftOver reports "Deleted in new" (1p11.2-p12, 8q24.3, 10q26.3, 13q34). Changing
 procedure is a decision for the epic, not for this munge: it would make this product drop a
 different set of intervals than the sliding-window product does from the same chain.
 
+## Sliding windows (`--product windows`)
+
+`Collins_rCNV_2022.sliding_window_sumstats.tar.gz` unpacks to 108 tabixed BEDs -- one
+`<phenotype>.rCNV.<DEL|DUP>.sliding_window.meta_analysis.stats.bed.gz` per phenotype x
+CNV-type combination, the same 54 phenotypes as `--product genes`. Each BED carries the
+**same 267,237 windows** -- 200 kb wide, 10 kb step, GRCh37 autosomes -- and 20 columns: the
+gene product's 21 minus `gene`. Phenotype and CNV type are read from the file name.
+
+**The full measurement of the liftOver is
+[docs/rcnv-sliding-windows.md](rcnv-sliding-windows.md)**, including the per-chromosome and
+per-region breakdown of what is lost and the decision that let this product ship at all
+(1.826% of windows fail, against the epic's ~2% descope trigger). This section records only
+what the munge does with it.
+
+### liftOver runs once, over the window set
+
+The window set is identical in all 108 files, so the lift runs on the **first file's 267,237
+windows** and the streaming pass then looks every row's window up in the result. A window the
+lift never saw is a hard error, which checks the "same set in every file" claim across all
+108 files rather than the two the measurement hashed.
+
+The procedure is the measurement's, imported from `scripts/rcnv_liftover_windows.py`
+(`read_windows`, `write_bed`, `run_liftover`, `read_mapped`, `read_unmapped`) and filtered
+by the same `lift_intervals` the segments product uses: whole-interval BED4, UCSC defaults
+(minMatch 0.95, no `-multiple`), drop multi-mapped, drop a different chromosome, drop a
+lifted length outside +-10%. That +-10% *is* the measurement's 180-220 kb because every
+source window is exactly 200,000 bp -- which the run asserts per window rather than assumes.
+The measurement's second, endpoint-only pass is not repeated: it never rescues a window, it
+only attributes a failure to one end.
+
+The run then **asserts the result equals the measured one -- 262,357 lifted, 4,880 dropped**.
+That assertion is what makes "the same procedure" checkable: another chain file, another
+liftOver build or a moved filter changes those two numbers and fails the run.
+
+### Two drop rules, and why this product drops where `--product genes` keeps
+
+| rule | what it drops |
+|---|---|
+| `meta_lnOR` onward is `NA` | the window was tested in this phenotype x CNV type but the meta-analysis produced no estimate |
+| the window did not lift | every row of that window, in all 108 files |
+
+`--product genes` keeps its NA rows so that "tested, no estimate" stays distinguishable from
+"gene absent from this file". The windows are different in kind: the window set is fixed,
+identical in every file and enumerated by the table itself, so a missing `(phenotype,
+cnv_type, window)` row already means "no estimate" without a row saying so -- and the NA rows
+are the majority here, so keeping them would multiply a table that is already the suite's
+largest rCNV product. `meta_lnOR` is `NA` exactly where the whole meta-analysis block is
+(checked on the source files), so one column decides the rule.
+
+Reference run (every run prints this):
+
+```
+windows in the source set:     267,237
+  lifted to GRCh38             262,357 (98.174%)
+  dropped (did not lift)       4,880 (1.826%)
+rows read:                     28,861,596
+  dropped, NA meta-analysis    17,544,364 (60.788%)
+  dropped, window not lifted   118,917 (0.412%)
+rows written:                  11,198,315 (38.800%)
+  fewest from one file         17,114  HP0012447.rCNV.DEL.sliding_window.meta_analysis.stats.bed.gz
+  most from one file           257,726  HP0000118.rCNV.DUP.sliding_window.meta_analysis.stats.bed.gz
+files:                         108
+distinct phenotypes:           54
+cnv types:                     DEL, DUP
+```
+
+Rows out per file range from 17,114 (`HP0012447` DEL) to 257,726 (`HP0000118` DUP) -- the phenotypes differ by orders of magnitude in how
+much of the genome they had power to test, so there is no single per-file figure.
+
+### The lifted windows are not a grid
+
+**Do not derive a window index, a step or a width from the GRCh38 coordinates.** From the
+measurement:
+
+- 90.541% of the surviving windows are exactly 200,000 bp; the rest run 190,000-219,265 bp.
+- 378 adjacent same-chromosome pairs (0.144% of 262,335) come out **reordered** -- the later
+  GRCh37 window starts at or before its predecessor in GRCh38 -- and a further 218 (0.083%)
+  overlap by more than one 10 kb step away from their GRCh37 overlap. A "next window" query
+  answered by GRCh38 ordering disagrees with GRCh37 ordering for those 758 windows.
+- The 4,880 dropped windows are not spread evenly: chr9 loses 7.685% of its windows (the
+  pericentromeric block), chr21 4.358%, chr22 3.616%, chr1 3.242%. A region query over a lost
+  block returns **nothing**, not fewer rows.
+
+`window_start_grch37`/`window_end_grch37` are on every row for exactly this reason: they are
+the regular 200 kb / 10 kb grid, they are what the paper reports, and they are what makes a
+row traceable back to the published file. The GRCh38 pair is what joins to the rest of the
+suite.
+
+### Column mapping
+
+| source column | output column | note |
+|---|---|---|
+| — | `dataset` | constant `Collins_rCNV_2022`, as in `--product genes` |
+| — | `phenotype` | from the file name, `HP0000118`-style; `UNKNOWN` is a real group |
+| — | `cnv_type` | from the file name, `DEL` / `DUP` |
+| lifted `#chr` | `chr` | bare integer 1-22, no `chr` prefix, as in the other products |
+| lifted `start` / `end` | `window_start` / `window_end` | GRCh38; a window that did not lift has no rows at all |
+| `start` / `end` | `window_start_grch37` / `window_end_grch37` | always present |
+| `n_nominal_cohorts` | `n_nominal_cohorts` | |
+| `top_cohort` | `top_cohort` | |
+| `cohorts_excluded_from_meta` | `cohorts_excluded` | `;`-joined in the source and left as it is |
+| `case_freq` / `control_freq` | `case_freq` / `control_freq` | |
+| `meta_lnOR` / `_lower` / `_upper` | `beta` / `beta_lower` / `beta_upper` | `:.3e` |
+| `meta_z` | `z` | verbatim; no house rule covers `z` |
+| `meta_neg_log10_p` | `mlog10p` | rounded to 4 decimals |
+| `meta_neg_log10_fdr_q` | `mlog10_fdr_q` | rounded to 4 decimals |
+| the six `*_secondary` | the six `*_secondary` | same spelling and formatting as `--product genes` |
+
+`window_start`/`window_end` rather than `start`/`end`: `end` is a reserved word in BigQuery.
+The `*_secondary` block can still be `NA` on a kept row -- it is the leave-top-cohort-out
+meta-analysis, which does not exist wherever one cohort carried the association.
+
+### Output
+
+One bgzipped TSV, `collins_rcnv_2022_window_associations.tsv.gz`, written **streaming**: 28.9M
+source rows go through the `bgzip` pipe as they are read, so nothing but the window set is
+held in memory. Row order is file order -- phenotype x CNV type in file-name order, windows in
+GRCh37 coordinate order within each -- and the row key is `(phenotype, cnv_type, chr,
+window_start_grch37)`.
+
 ## Running it
 
 ```bash
@@ -471,15 +596,20 @@ PRODUCT=genes scripts/munge_rcnv.sh
 # the 163 segments; mmc3.xlsx must already be in $HOME/rcnv_munge/cache
 PRODUCT=segments scripts/munge_rcnv.sh
 
+# the sliding windows; several minutes, 28.9M source rows streamed
+PRODUCT=windows scripts/munge_rcnv.sh
+
 # produce and publish to both profile buckets
 scripts/munge_rcnv.sh --stage
 ```
 
-`--download` for `--product genes` fetches and untars
-`Collins_rCNV_2022.gene_association_sumstats.tar.gz` into `<cache-dir>/`; this path has not
-been exercised against a live Zenodo download from this host (see the script's
-`fetch_gene_assoc` docstring). `--gene-assoc-dir` points the script at an already-unpacked
-copy of the 108 BEDs directly, bypassing both the download and the untar.
+`--download` for `--product genes` and `--product windows` fetches and untars the matching
+Zenodo tarball into `<cache-dir>/`; neither path has been exercised against a live Zenodo
+download from this host (see the script's `fetch_tarred_beds` docstring). `--gene-assoc-dir`
+and `--window-dir` point the script at an already-unpacked copy of that product's 108 BEDs
+directly, bypassing both the download and the untar. `--product windows` needs neither
+mapping input -- a window carries no gene symbol -- so `--download` fetches only the liftOver
+binary and chain for it.
 
 `--stage` attempts **both** destinations regardless of whether the first succeeds, reports
 every failure at the end and exits non-zero if any failed — the two buckets are in different
@@ -495,6 +625,7 @@ gs://daly-genetics-results/rcnv/collins_rcnv_2022/               # daly profile
   collins_rcnv_2022_dosage_sensitivity.tsv.gz
   collins_rcnv_2022_gene_associations.tsv.gz
   collins_rcnv_2022_segments.tsv.gz
+  collins_rcnv_2022_window_associations.tsv.gz
 ```
 
 `--product segments` is the one product with an input the script cannot fetch: put

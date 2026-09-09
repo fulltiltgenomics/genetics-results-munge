@@ -9,16 +9,20 @@
 #   scores : Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz     (18,641 genes x pHaplo/pTriplo)
 #   genes  : Collins_rCNV_2022.gene_association_sumstats.tar.gz    (108 phenotype x DEL/DUP BEDs)
 #   segments: Cell supplement mmc3.xlsx, sheet "Table S3"          (163 disease-associated segments)
+#   windows: Collins_rCNV_2022.sliding_window_sumstats.tar.gz     (108 phenotype x DEL/DUP BEDs)
 #
 # PRODUCT selects what to munge: `scores` (dosage-sensitivity probabilities), `genes`
-# (gene-based CNV association sumstats, one long table) or `segments` (the supplement's 163
-# segments). scores and genes carry no coordinates at all; segments carries GRCh37 ones and is
-# lifted to GRCh38 here. All three are BigQuery load files with no tabix index.
+# (gene-based CNV association sumstats, one long table), `segments` (the supplement's 163
+# segments) or `windows` (the sliding-window sumstats, one long table). scores and genes carry
+# no coordinates at all; segments and windows carry GRCh37 ones and are lifted to GRCh38 here.
+# All four are BigQuery load files with no tabix index. `windows` streams 28.9M source rows
+# and takes several minutes.
 #
 # Inputs are cached under CACHE_DIR and downloaded on demand (--download): the scores or
 # gene-association tar from Zenodo, the gencode gene name mapping and the HGNC complete set
 # from the daly mapping_files bucket (the HGNC set falls back to genenames.org if that bucket
-# is not readable), and the UCSC liftOver binary and hg19ToHg38 chain for `segments`.
+# is not readable), and the UCSC liftOver binary and hg19ToHg38 chain for `segments` and
+# `windows`. The windows product needs neither mapping input -- a window carries no symbol.
 # mmc3.xlsx has no URL -- Elsevier and PMC answer a script with a bot-check page -- so place
 # it in CACHE_DIR by hand before running PRODUCT=segments.
 #
@@ -37,7 +41,8 @@ case "$PRODUCT" in
     scores) OUTPUT_SUFFIX=dosage_sensitivity ;;
     genes)  OUTPUT_SUFFIX=gene_associations ;;
     segments) OUTPUT_SUFFIX=segments ;;
-    *) echo "unknown PRODUCT '$PRODUCT' (expected scores, genes or segments)" >&2; exit 1 ;;
+    windows) OUTPUT_SUFFIX=window_associations ;;
+    *) echo "unknown PRODUCT '$PRODUCT' (expected scores, genes, segments or windows)" >&2; exit 1 ;;
 esac
 OUTPUT=${OUTPUT:-"$OUT_DIR/${DATASET_ID}_${OUTPUT_SUFFIX}.tsv.gz"}
 

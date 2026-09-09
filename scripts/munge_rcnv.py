@@ -37,9 +37,21 @@ Source (Zenodo record 6347673, v0.2 2022-03-11, CC-BY 4.0):
       the user places mmc3.xlsx in --cache-dir by hand. Table S4 (the 178-segment consensus
       set) is deliberately not read: it repeats these 163 rows and adds derived annotations.
 
-`--product` exists because the same Zenodo record also ships the sliding-window sumstats and
-the gene feature matrix. `scores`, `genes` and `segments` are implemented; the sliding-window
-sumstats and the feature matrix are separate work and are not stubbed here.
+  --product windows -> Collins_rCNV_2022.sliding_window_sumstats.tar.gz
+      108 tabixed BEDs (54 phenotypes x DEL/DUP), 267,237 rows each -- the same 200 kb GRCh37
+      windows in 10 kb steps in every file, 20 source columns (the gene product's 21 minus
+      `gene`). Phenotype and CNV type come from the file name. Unlike the gene product this
+      one DROPS rows whose meta-analysis produced no estimate (`meta_lnOR` onward NA): the
+      windows are NA-heavy in every phenotype, and the window set is fixed and enumerated by
+      the table itself, so an NA row records nothing the remaining rows do not. Coordinates
+      are lifted to GRCh38 once for the window set rather than per row, and the GRCh37 pair is
+      kept; a window that does not lift loses its rows in every file. See
+      docs/rcnv-sliding-windows.md for the liftOver measurement whose procedure and dropped
+      set this reproduces exactly.
+
+`--product` exists because the same Zenodo record also ships the gene feature matrix.
+`scores`, `genes`, `segments` and `windows` are implemented; the feature matrix is separate
+work and is not stubbed here.
 
 WHAT WAS READ OFF THE BYTES (not taken from the paper):
   - 18,641 rows, no duplicate gene symbols, no header comment block beyond line 1.
@@ -100,11 +112,22 @@ Output, scores (one bgzipped TSV, no tabix index -- there is nothing to index):
   symbol  symbol_gencode_v19  ensembl_gene_id  phaplo  ptriplo  haploinsufficient  triplosensitive
 
 Output, segments (one bgzipped TSV, no tabix index):
-  dataset  segment_id  cnv_type  chr  start  end  start_grch37  end_grch37
+  dataset  segment_id  cnv_type  chr  segment_start  segment_end
+  segment_start_grch37  segment_end_grch37
   cytoband  best_significance  control_freq  case_freq
   beta  beta_lower  beta_upper  beta_min  beta_max
   n_hpos  associated_hpos  n_credints  credints  credints_grch37  credint_size
   n_genes  genes  genes_gencode_v19  gene_ensembl_ids
+
+Output, windows (one bgzipped TSV, long format, no tabix index):
+  dataset  phenotype  cnv_type  chr  window_start  window_end
+  window_start_grch37  window_end_grch37
+  n_nominal_cohorts  top_cohort  cohorts_excluded  case_freq  control_freq
+  beta  beta_lower  beta_upper  z  mlog10p  mlog10_fdr_q
+  beta_secondary  beta_lower_secondary  beta_upper_secondary  z_secondary
+  mlog10p_secondary  mlog10_fdr_q_secondary
+`window_start`/`window_end` rather than `start`/`end`: `end` is a reserved word in BigQuery
+and every consumer would have to backtick it.
 
 Output, genes (one bgzipped TSV, long format, no tabix index):
   dataset  phenotype  cnv_type  symbol  symbol_gencode_v19  ensembl_gene_id
@@ -124,6 +147,7 @@ Usage:
   python3 scripts/munge_rcnv.py --product scores --download --output out/collins_rcnv_2022_dosage_sensitivity.tsv.gz
   python3 scripts/munge_rcnv.py --product genes --download --output out/collins_rcnv_2022_gene_associations.tsv.gz
   python3 scripts/munge_rcnv.py --product segments --download --output out/collins_rcnv_2022_segments.tsv.gz
+  python3 scripts/munge_rcnv.py --product windows --download --output out/collins_rcnv_2022_window_associations.tsv.gz
   scripts/munge_rcnv.sh                       # produce locally (PRODUCT=scores by default)
   scripts/munge_rcnv.sh --stage               # produce and publish to both buckets
   PRODUCT=genes scripts/munge_rcnv.sh --stage # gene associations, produce and publish
@@ -147,7 +171,13 @@ from pathlib import Path
 # the liftOver procedure is defined once, by the sliding-window measurement that established
 # it; re-implementing the four steps here is exactly the duplication that makes two products
 # drop different intervals from the same chain
-from rcnv_liftover_windows import read_mapped, read_unmapped, run_liftover, write_bed
+from rcnv_liftover_windows import (
+    read_mapped,
+    read_unmapped,
+    read_windows,
+    run_liftover,
+    write_bed,
+)
 
 ZENODO_RECORD = "6347673"
 SCORES_FILE = "Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz"
@@ -156,6 +186,10 @@ SCORES_URL = f"https://zenodo.org/records/{ZENODO_RECORD}/files/{SCORES_FILE}?do
 GENE_ASSOC_DIR_NAME = "Collins_rCNV_2022.gene_association_sumstats"
 GENE_ASSOC_TAR = f"{GENE_ASSOC_DIR_NAME}.tar.gz"
 GENE_ASSOC_URL = f"https://zenodo.org/records/{ZENODO_RECORD}/files/{GENE_ASSOC_TAR}?download=1"
+
+WINDOW_DIR_NAME = "Collins_rCNV_2022.sliding_window_sumstats"
+WINDOW_TAR = f"{WINDOW_DIR_NAME}.tar.gz"
+WINDOW_URL = f"https://zenodo.org/records/{ZENODO_RECORD}/files/{WINDOW_TAR}?download=1"
 
 # the mapping inputs are already staged in the daly bucket; --hgnc-url is the public
 # alternative for a machine without access to it
@@ -234,6 +268,47 @@ EXPECTED_GENE_ROWS = EXPECTED_GENE_FILES * EXPECTED_GENES_PER_FILE
 
 # the gene set is identical across all 108 files (row order is not -- see munge_genes)
 
+# the gene product's 21 source columns minus `gene`; a window has no feature name
+WINDOW_SOURCE_HEADER = [
+    "#chr", "start", "end",
+    "n_nominal_cohorts", "top_cohort", "cohorts_excluded_from_meta",
+    "case_freq", "control_freq",
+    "meta_lnOR", "meta_lnOR_lower", "meta_lnOR_upper", "meta_z",
+    "meta_neg_log10_p", "meta_neg_log10_fdr_q",
+    "meta_lnOR_secondary", "meta_lnOR_lower_secondary", "meta_lnOR_upper_secondary",
+    "meta_z_secondary", "meta_neg_log10_p_secondary", "meta_neg_log10_fdr_q_secondary",
+]
+
+# `window_start`/`window_end`, not `start`/`end`: `end` is reserved in BigQuery
+WINDOW_COLUMNS = [
+    "dataset", "phenotype", "cnv_type", "chr", "window_start", "window_end",
+    "window_start_grch37", "window_end_grch37",
+    "n_nominal_cohorts", "top_cohort", "cohorts_excluded", "case_freq", "control_freq",
+    "beta", "beta_lower", "beta_upper", "z", "mlog10p", "mlog10_fdr_q",
+    "beta_secondary", "beta_lower_secondary", "beta_upper_secondary", "z_secondary",
+    "mlog10p_secondary", "mlog10_fdr_q_secondary",
+]
+
+WINDOW_FILE_RE = re.compile(
+    r"^(?P<phenotype>HP\d+|UNKNOWN)\.rCNV\.(?P<cnv_type>DEL|DUP)\."
+    r"sliding_window\.meta_analysis\.stats\.bed\.gz$"
+)
+
+# input-file integrity for --product windows: 54 phenotypes x DEL/DUP, 267,237 windows each
+EXPECTED_WINDOW_FILES = 108
+EXPECTED_WINDOW_PHENOTYPES = 54
+EXPECTED_WINDOWS_PER_FILE = 267237
+EXPECTED_WINDOW_ROWS = EXPECTED_WINDOW_FILES * EXPECTED_WINDOWS_PER_FILE
+
+# every source window is exactly this wide, which is what makes the shared +-10% length filter
+# identical to the measurement's 180-220 kb; the run asserts it rather than assuming it
+WINDOW_LENGTH = 200_000
+
+# docs/rcnv-sliding-windows.md's measured result. Asserting it is what makes "the same
+# procedure" checkable: another chain, binary or filter moves these two numbers
+EXPECTED_WINDOWS_LIFTED = 262357
+EXPECTED_WINDOWS_DROPPED = 4880
+
 # the literal Zenodo file-name spelling, for the `dataset` column inside the long-format
 # gene-association output; distinct from the lowercase DATASET id below, which names GCS
 # paths and the BigQuery dataset/table
@@ -252,8 +327,10 @@ SEGMENT_SOURCE_HEADER = [
     "# HPOs", "Associated HPOs", "# CredInts", "CredInts", "CredInt Size", "# Genes", "Genes",
 ]
 
+# `segment_start`/`segment_end` and not `start`/`end`: `end` is reserved in BigQuery
 SEGMENT_COLUMNS = [
-    "dataset", "segment_id", "cnv_type", "chr", "start", "end", "start_grch37", "end_grch37",
+    "dataset", "segment_id", "cnv_type", "chr",
+    "segment_start", "segment_end", "segment_start_grch37", "segment_end_grch37",
     "cytoband", "best_significance", "control_freq", "case_freq",
     "beta", "beta_lower", "beta_upper", "beta_min", "beta_max",
     "n_hpos", "associated_hpos", "n_credints", "credints", "credints_grch37", "credint_size",
@@ -304,6 +381,12 @@ GCS = {
         f"gs://daly-genetics-results/{RESOURCE}/{DATASET}/"
         f"{DATASET}_segments.tsv.gz",
     ),
+    "windows": (
+        f"gs://finngen-commons/results_api_data/{RESOURCE}/{DATASET}/"
+        f"{DATASET}_window_associations.tsv.gz",
+        f"gs://daly-genetics-results/{RESOURCE}/{DATASET}/"
+        f"{DATASET}_window_associations.tsv.gz",
+    ),
 }
 
 # Gencode writes the bare ENSG id as gene_name for genes it carries but does not name
@@ -345,19 +428,20 @@ def fetch_gcs(gcs_path: str, dest: Path) -> Path:
     return dest
 
 
-def fetch_gene_assoc(cache_dir: Path) -> Path:
-    """Download and unpack the gene-association tar.gz into cache_dir; return the unpacked dir.
+def fetch_tarred_beds(cache_dir: Path, dir_name: str, tar_name: str, url: str, flag: str) -> Path:
+    """Download and unpack a Zenodo BED tarball into cache_dir; return the unpacked dir.
 
-    Unverified against a live Zenodo download -- this host cannot reach Zenodo, so this was
-    exercised only against a pre-fetched unpacked copy passed via --gene-assoc-dir. If the
-    tar's own layout does not unpack to cache_dir/GENE_ASSOC_DIR_NAME, this raises with the
-    tar's location so a working host can extract it by hand and pass --gene-assoc-dir.
+    Unverified against a live Zenodo download -- this host cannot reach Zenodo, so both
+    tarred products were exercised only against pre-fetched unpacked copies passed via
+    --gene-assoc-dir / --window-dir. If the tar's own layout does not unpack to
+    cache_dir/dir_name, this raises with the tar's location so a working host can extract it
+    by hand and pass that flag.
     """
-    target = cache_dir / GENE_ASSOC_DIR_NAME
+    target = cache_dir / dir_name
     if target.exists():
         return target
-    tar_path = cache_dir / GENE_ASSOC_TAR
-    fetch(GENE_ASSOC_URL, tar_path)
+    tar_path = cache_dir / tar_name
+    fetch(url, tar_path)
     print(f"  extracting {tar_path}", file=sys.stderr)
     with tarfile.open(tar_path) as tf:
         # the Dockerfile pins python:3.13-slim, which has the `filter` argument (PEP 706)
@@ -365,7 +449,7 @@ def fetch_gene_assoc(cache_dir: Path) -> Path:
     if not target.exists():
         raise SystemExit(
             f"expected {tar_path} to unpack into {target}; check its actual layout and "
-            f"rerun with --gene-assoc-dir pointing at the unpacked BEDs"
+            f"rerun with {flag} pointing at the unpacked BEDs"
         )
     return target
 
@@ -1085,6 +1169,186 @@ def report_segments(
 
 
 
+def window_key(chrom: str, start: int, end: int) -> str:
+    """The GRCh37 window's identity, spelled as rcnv_liftover_windows.py's BED name column."""
+    return f"{chrom}-{start}-{end}"
+
+
+def discover_window_files(window_dir: Path) -> list[Path]:
+    """Sorted list of the 108 phenotype x DEL/DUP sliding-window BEDs."""
+    matched = sorted(p for p in window_dir.glob("*.bed.gz") if WINDOW_FILE_RE.match(p.name))
+    if len(matched) != EXPECTED_WINDOW_FILES:
+        found = sorted(p.name for p in window_dir.glob("*.bed.gz"))
+        raise SystemExit(
+            f"{window_dir}: expected {EXPECTED_WINDOW_FILES} sliding-window bed.gz files "
+            f"matching <phenotype>.rCNV.<DEL|DUP>.sliding_window...bed.gz, found "
+            f"{len(matched)} of {len(found)} .bed.gz files present: {found[:10]}"
+        )
+    return matched
+
+
+def lift_window_set(
+    reference: Path, liftover_bin: str, chain: Path
+) -> tuple[dict[str, tuple[str, int, int]], dict[str, str]]:
+    """Lift the 267,237 GRCh37 windows once, and check the result against the measurement.
+
+    Every file carries the same window set, so this runs on one file and the streaming pass
+    below refuses any window it did not see here -- which checks the "same set" claim over all
+    108 files rather than the two rcnv_liftover_windows.py hashes.
+    """
+    windows = read_windows(reference)
+    if len(windows) != EXPECTED_WINDOWS_PER_FILE:
+        raise SystemExit(
+            f"{reference}: expected {EXPECTED_WINDOWS_PER_FILE} windows, got {len(windows)}"
+        )
+    to_lift: dict[str, tuple[str, int, int]] = {}
+    for chrom, start, end in windows:
+        if end - start != WINDOW_LENGTH:
+            raise SystemExit(
+                f"{reference}: window {chrom}:{start}-{end} is {end - start} bp, not "
+                f"{WINDOW_LENGTH}; the +-{LENGTH_TOLERANCE:.0%} length filter is only the "
+                f"measurement's 180-220 kb while every source window is exactly 200 kb"
+            )
+        to_lift[window_key(chrom, start, end)] = (chrom, start, end)
+    if len(to_lift) != len(windows):
+        raise SystemExit(f"{reference}: duplicate (chr,start,end) triples in the window set")
+
+    lifted, failures = lift_intervals(liftover_bin, chain, to_lift, LENGTH_TOLERANCE)
+    if (len(lifted), len(failures)) != (EXPECTED_WINDOWS_LIFTED, EXPECTED_WINDOWS_DROPPED):
+        raise SystemExit(
+            f"liftOver gave {len(lifted)} clean / {len(failures)} dropped windows, not the "
+            f"{EXPECTED_WINDOWS_LIFTED} / {EXPECTED_WINDOWS_DROPPED} docs/rcnv-sliding-"
+            f"windows.md measured -- a different chain, liftOver build or filter"
+        )
+    return lifted, failures
+
+
+def munge_windows(window_dir: Path, liftover_bin: str, chain: Path, output: Path) -> None:
+    """Stream the 108 window files into one long TSV; nothing but the window set is held.
+
+    28.9M source rows, so the rows are written through the bgzip pipe as they are read rather
+    than collected the way the other three products do.
+    """
+    files = discover_window_files(window_dir)
+    phenotypes = {WINDOW_FILE_RE.match(p.name)["phenotype"] for p in files}
+    cnv_types = {WINDOW_FILE_RE.match(p.name)["cnv_type"] for p in files}
+    if len(phenotypes) != EXPECTED_WINDOW_PHENOTYPES:
+        raise SystemExit(
+            f"expected {EXPECTED_WINDOW_PHENOTYPES} distinct phenotypes, got "
+            f"{len(phenotypes)}: {sorted(phenotypes)}"
+        )
+    if cnv_types != {"DEL", "DUP"}:
+        raise SystemExit(f"expected cnv_type in {{DEL, DUP}} only, got {sorted(cnv_types)}")
+
+    lifted, failures = lift_window_set(files[0], liftover_bin, chain)
+
+    rows_in = na_dropped = unlifted_dropped = rows_out = 0
+    per_file: list[tuple[str, int]] = []
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("wb") as fh:
+        proc = subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=fh)
+        with io.TextIOWrapper(proc.stdin, "utf-8", newline="") as pipe:
+            writer = csv.writer(pipe, delimiter="\t", lineterminator="\n")
+            writer.writerow(WINDOW_COLUMNS)
+            for path in files:
+                match = WINDOW_FILE_RE.match(path.name)
+                phenotype, cnv_type = match["phenotype"], match["cnv_type"]
+                file_in = file_out = 0
+                with gzip.open(path, "rt") as src:
+                    reader = csv.reader(src, delimiter="\t")
+                    header = next(reader)
+                    if header != WINDOW_SOURCE_HEADER:
+                        raise SystemExit(f"{path}: unexpected header {header}")
+                    for row in reader:
+                        if not row:
+                            continue
+                        if len(row) != len(WINDOW_SOURCE_HEADER):
+                            raise SystemExit(
+                                f"{path}:{reader.line_num}: expected "
+                                f"{len(WINDOW_SOURCE_HEADER)} columns, got {len(row)}"
+                            )
+                        file_in += 1
+                        # meta_lnOR is NA exactly where the whole meta-analysis block is
+                        if row[8] == NA:
+                            na_dropped += 1
+                            continue
+                        key = window_key(row[0], int(row[1]), int(row[2]))
+                        hit = lifted.get(key)
+                        if hit is None:
+                            if key not in failures:
+                                raise SystemExit(
+                                    f"{path}: window {key} is absent from {files[0].name}'s "
+                                    f"window set, which every file is supposed to repeat"
+                                )
+                            unlifted_dropped += 1
+                            continue
+                        chrom38, start38, end38 = hit
+                        writer.writerow([
+                            DATASET_LABEL, phenotype, cnv_type,
+                            chrom38, str(start38), str(end38), row[1], row[2],
+                            row[3], row[4], row[5], row[6], row[7],
+                            fmt_exp(row[8]), fmt_exp(row[9]), fmt_exp(row[10]),
+                            row[11], fmt_round4(row[12]), fmt_round4(row[13]),
+                            fmt_exp(row[14]), fmt_exp(row[15]), fmt_exp(row[16]),
+                            row[17], fmt_round4(row[18]), fmt_round4(row[19]),
+                        ])
+                        file_out += 1
+                if file_in != EXPECTED_WINDOWS_PER_FILE:
+                    raise SystemExit(
+                        f"{path}: expected {EXPECTED_WINDOWS_PER_FILE} rows, got {file_in}"
+                    )
+                rows_in += file_in
+                rows_out += file_out
+                per_file.append((path.name, file_out))
+        if proc.wait() != 0:
+            raise SystemExit("bgzip failed")
+
+    report_windows(
+        lifted, failures, rows_in, na_dropped, unlifted_dropped, rows_out,
+        per_file, phenotypes, cnv_types,
+    )
+    if rows_in != EXPECTED_WINDOW_ROWS:
+        raise SystemExit(
+            f"expected {EXPECTED_WINDOW_ROWS} source rows ({EXPECTED_WINDOW_FILES} files x "
+            f"{EXPECTED_WINDOWS_PER_FILE} windows), got {rows_in}"
+        )
+    print(f"\nwrote {output}", file=sys.stderr)
+
+
+def report_windows(
+    lifted: dict[str, tuple[str, int, int]],
+    failures: dict[str, str],
+    rows_in: int,
+    na_dropped: int,
+    unlifted_dropped: int,
+    rows_out: int,
+    per_file: list[tuple[str, int]],
+    phenotypes: set[str],
+    cnv_types: set[str],
+) -> None:
+    total_windows = len(lifted) + len(failures)
+    smallest = min(per_file, key=lambda kv: kv[1])
+    largest = max(per_file, key=lambda kv: kv[1])
+    print("", file=sys.stderr)
+    print(f"windows in the source set:     {total_windows:,}", file=sys.stderr)
+    print(f"  lifted to GRCh38             {len(lifted):,} "
+          f"({len(lifted) / total_windows:.3%})", file=sys.stderr)
+    print(f"  dropped (did not lift)       {len(failures):,} "
+          f"({len(failures) / total_windows:.3%})", file=sys.stderr)
+    print(f"rows read:                     {rows_in:,}", file=sys.stderr)
+    print(f"  dropped, NA meta-analysis    {na_dropped:,} "
+          f"({na_dropped / rows_in:.3%})", file=sys.stderr)
+    print(f"  dropped, window not lifted   {unlifted_dropped:,} "
+          f"({unlifted_dropped / rows_in:.3%})", file=sys.stderr)
+    print(f"rows written:                  {rows_out:,} "
+          f"({rows_out / rows_in:.3%})", file=sys.stderr)
+    print(f"  fewest from one file         {smallest[1]:,}  {smallest[0]}", file=sys.stderr)
+    print(f"  most from one file           {largest[1]:,}  {largest[0]}", file=sys.stderr)
+    print(f"files:                         {len(per_file)}", file=sys.stderr)
+    print(f"distinct phenotypes:           {len(phenotypes)}", file=sys.stderr)
+    print(f"cnv types:                     {', '.join(sorted(cnv_types))}", file=sys.stderr)
+
+
 def write_bgzip(rows: list[list[str]], columns: list[str], output: Path) -> None:
     """One bgzipped TSV, no index.
 
@@ -1108,16 +1372,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--product",
-        choices=["scores", "genes", "segments"],
+        choices=["scores", "genes", "segments", "windows"],
         required=True,
         help="which product to munge: dosage-sensitivity scores, gene-association sumstats, "
-        "or the supplement's 163 disease-associated segments",
+        "the supplement's 163 disease-associated segments, or the sliding-window sumstats",
     )
     parser.add_argument("--scores", type=Path, help=f"local {SCORES_FILE} (default: <cache-dir>/{SCORES_FILE})")
     parser.add_argument(
         "--gene-assoc-dir",
         type=Path,
         help=f"local unpacked {GENE_ASSOC_DIR_NAME}/ (108 bed.gz) (default: <cache-dir>/{GENE_ASSOC_DIR_NAME})",
+    )
+    parser.add_argument(
+        "--window-dir",
+        type=Path,
+        help=f"local unpacked {WINDOW_DIR_NAME}/ (108 bed.gz) (default: <cache-dir>/{WINDOW_DIR_NAME})",
     )
     parser.add_argument(
         "--gencode-mapping",
@@ -1153,6 +1422,9 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     """(product-specific input, gencode mapping, hgnc set) -- the mapping inputs are shared."""
     gencode = args.gencode_mapping or args.cache_dir / GENCODE_MAPPING_FILE
     hgnc = args.hgnc or args.cache_dir / HGNC_FILE
+    if args.product == "windows":
+        # a window carries no gene symbol, so neither mapping input is fetched or required
+        return resolve_window_dir(args), gencode, hgnc
     if args.download:
         fetch_gcs(f"{MAPPING_BUCKET}/{GENCODE_MAPPING_FILE}", gencode)
         if not hgnc.exists():
@@ -1191,12 +1463,30 @@ def resolve_inputs(args: argparse.Namespace) -> tuple[Path, Path, Path]:
 
     gene_assoc_dir = args.cache_dir / GENE_ASSOC_DIR_NAME
     if not gene_assoc_dir.exists() and args.download:
-        gene_assoc_dir = fetch_gene_assoc(args.cache_dir)
+        gene_assoc_dir = fetch_tarred_beds(
+            args.cache_dir, GENE_ASSOC_DIR_NAME, GENE_ASSOC_TAR, GENE_ASSOC_URL,
+            "--gene-assoc-dir",
+        )
     if not gene_assoc_dir.exists():
         raise SystemExit(
             f"{gene_assoc_dir} not found (pass --gene-assoc-dir, or run with --download)"
         )
     return gene_assoc_dir, gencode, hgnc
+
+
+def resolve_window_dir(args: argparse.Namespace) -> Path:
+    if args.window_dir is not None:
+        if not args.window_dir.exists():
+            raise SystemExit(f"--window-dir {args.window_dir} not found")
+        return args.window_dir
+    window_dir = args.cache_dir / WINDOW_DIR_NAME
+    if not window_dir.exists() and args.download:
+        window_dir = fetch_tarred_beds(
+            args.cache_dir, WINDOW_DIR_NAME, WINDOW_TAR, WINDOW_URL, "--window-dir"
+        )
+    if not window_dir.exists():
+        raise SystemExit(f"{window_dir} not found (pass --window-dir, or run with --download)")
+    return window_dir
 
 
 def main() -> None:
@@ -1207,6 +1497,7 @@ def main() -> None:
     primary, gencode, hgnc = resolve_inputs(args)
     output_suffix = {
         "scores": "dosage_sensitivity", "genes": "gene_associations", "segments": "segments",
+        "windows": "window_associations",
     }[args.product]
     output = args.output or Path(f"{DATASET}_{output_suffix}.tsv.gz")
     if args.product == "scores":
@@ -1217,7 +1508,10 @@ def main() -> None:
         liftover_bin, chain = resolve_liftover(
             args.cache_dir, args.liftover_bin, args.chain, args.download
         )
-        munge_segments(primary, gencode, hgnc, liftover_bin, chain, output)
+        if args.product == "windows":
+            munge_windows(primary, liftover_bin, chain, output)
+        else:
+            munge_segments(primary, gencode, hgnc, liftover_bin, chain, output)
 
     if args.stage:
         finngen, daly = GCS[args.product]
