@@ -3,7 +3,6 @@
 ### converts gencode gff file to tsv file with gene id, chromosome, gene start, gene end, gene strand, gene name, and gene type
 ### usage, e.g. for gencode v49: python3 gencode_to_gene_pos_tsv.py https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_49/gencode.v49.annotation.gff3.gz gencode.v49.annotation.genes.tsv
 
-import polars as pl
 import sys
 import gzip
 import io

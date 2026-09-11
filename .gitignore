@@ -8,3 +8,8 @@ __pycache__/
 .dolt/
 *.db
 .beads-credential-key
+
+# Environment
+# every .env variant holds real credentials; the committed example does not
+.env*
+!.env.example

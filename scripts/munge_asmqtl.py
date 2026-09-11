@@ -385,7 +385,6 @@ def main():
         n_before = df.height
         df = df.join(annot, on=["#chr", "pos", "ref", "alt"], how="left")
         assert df.height == n_before, f"row count changed after annotation join: {n_before} -> {df.height}"
-        n_annotated = df.filter(pl.col("most_severe").is_not_null()).height
         n_variants_annotated = df.filter(pl.col("most_severe").is_not_null()).unique(subset=["#chr", "pos", "ref", "alt"]).height
         print(f"  {n_variants_annotated} unique variants annotated with gnomAD consequence")
 

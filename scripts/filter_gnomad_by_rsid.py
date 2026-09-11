@@ -13,7 +13,6 @@ Usage:
 import argparse
 import gzip
 import subprocess
-import sys
 
 GNOMAD_DEFAULT = "gs://finngen-commons/results_api_data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
 

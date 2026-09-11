@@ -53,7 +53,6 @@ zcat "$LOCAL_INPUT" | tail -n +2 | awk -F'\t' -v dir="$PER_TRAIT_DIR" -v tc="$TR
 
 echo "Bgzipping and tabixing per-trait files..."
 for f in "$PER_TRAIT_DIR"/*.tsv; do
-    trait=$(basename "$f" .tsv)
     # prepend header
     { echo "$HEADER"; cat "$f"; } | bgzip -@2 > "$f.gz"
     rm "$f"

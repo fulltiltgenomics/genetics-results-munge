@@ -13,7 +13,6 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-from scipy.special import log_ndtr
 
 from sumstat_utils import write_exome_output
 
@@ -32,6 +31,12 @@ GENE_ANNOTATION_CLASSES = [
 ]
 
 MLOG10P_THRESHOLD = 4
+
+# the source reports p as 0 once it underflows float64, and this dataset ships no se: it is
+# derived here as |beta| / |qnorm(p/2)|, which is undefined on exactly those rows, so the
+# log_ndtr recovery CLAUDE.md prescribes has no independent se to work from. Censor them at
+# the float64 floor (-log10(5e-324) = 323.3) instead of inventing a p that was never measured.
+MLOG10P_UNDERFLOW = 324.0
 
 CODING_CONSEQUENCES = {
     "missense_variant", "frameshift_variant", "inframe_deletion", "inframe_insertion",
@@ -119,7 +124,7 @@ def compute_gene_stats(df: pl.DataFrame) -> pl.DataFrame:
             pl.when(pl.col("pvalue").is_not_null() & (pl.col("pvalue") > 0))
                 .then(pl.max_horizontal((-np.log10(pl.col("pvalue"))).round(4), 0.0))
                 .when(pl.col("pvalue").is_not_null() & pl.col("pvalue").eq(0))
-                .then(324.0)
+                .then(MLOG10P_UNDERFLOW)
                 .otherwise(None)
                 .alias("mlog10p_burden"),
         )
@@ -282,12 +287,12 @@ def compute_variant_stats(df: pl.DataFrame) -> pl.DataFrame:
             (pl.col("an_case") + pl.col("an_ctrl")).alias("an"),
         )
 
-        # mlog10p from beta/se when available
+        # mlog10p from p; beta is required only so a row with no effect estimate is dropped
         df = df.with_columns(
             pl.when(pl.col("BETA_meta").is_not_null() & pl.col("P_meta").is_not_null() & (pl.col("P_meta") > 0))
                 .then(pl.max_horizontal((-np.log10(pl.col("P_meta"))).round(4), 0.0))
                 .when(pl.col("P_meta").is_not_null() & pl.col("P_meta").eq(0))
-                .then(324.0)
+                .then(MLOG10P_UNDERFLOW)
                 .otherwise(None)
                 .alias("mlog10p"),
         )
