@@ -49,16 +49,20 @@ Staging (off by default): the .sh wrapper uploads behind --stage; this script ne
 """
 
 import argparse
+import functools
 import gzip
 import re
-import shutil
 import sys
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
+
+from sumstat_utils import fetch as _fetch
+
+# the GenCC export is ~26 MB and thegencc.org is not fast; the family default of 120 s times
+# out on it often enough to be worth raising here rather than everywhere
+fetch = functools.partial(_fetch, timeout=300)
 
 GENCC_URL = "https://search.thegencc.org/download/action/submissions-export-tsv"
 
@@ -97,30 +101,6 @@ HUMAN_TAXON = "NCBITaxon:9606"
 GENE_CATEGORY = "biolink:Gene"
 
 
-def fetch(url: str, dest: Path, download: bool) -> Path:
-    """Download `url` to `dest` unless it is already cached there."""
-    if dest.exists():
-        print(f"  cached: {dest}", file=sys.stderr)
-        return dest
-    if not download:
-        raise SystemExit(f"{dest} is not cached and --download was not given")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"  downloading {url}", file=sys.stderr)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "genetics-results-munge"})
-    try:
-        with urllib.request.urlopen(request, timeout=300) as response, tmp.open("wb") as out:
-            shutil.copyfileobj(response, out)
-    except (urllib.error.URLError, TimeoutError) as err:
-        tmp.unlink(missing_ok=True)
-        raise SystemExit(
-            f"could not fetch {url}: {err}\n"
-            f"download it by hand and put it at {dest}, then rerun without --download"
-        ) from err
-    tmp.rename(dest)
-    return dest
-
-
 def read_tsv(path: Path, expected: list[str]) -> pl.DataFrame:
     """Read a (possibly gzipped) TSV as all-strings and assert its column set."""
     opener = gzip.open if path.suffix == ".gz" else open
@@ -142,7 +122,7 @@ def monarch_release(cache_dir: Path, download: bool) -> str:
     Scanned with a regex rather than a YAML parser: this is the only YAML the repo reads and it
     is not worth a dependency for one top-level scalar.
     """
-    path = fetch(MONARCH_METADATA_URL, cache_dir / "monarch-metadata.yaml", download)
+    path = fetch(MONARCH_METADATA_URL, cache_dir / "monarch-metadata.yaml", download=download)
     text = path.read_text()
     match = re.search(r"^version:\s*'?([0-9]{4}-[0-9]{2}-[0-9]{2})'?\s*$", text, re.MULTILINE)
     if not match:
@@ -151,7 +131,7 @@ def monarch_release(cache_dir: Path, download: bool) -> str:
 
 
 def munge_gencc(cache_dir: Path, out_dir: Path, download: bool) -> Path:
-    source = fetch(GENCC_URL, cache_dir / "gencc-submissions-export.tsv", download)
+    source = fetch(GENCC_URL, cache_dir / "gencc-submissions-export.tsv", download=download)
     df = read_tsv(source, GENCC_COLUMNS)
 
     version = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -171,7 +151,7 @@ def munge_monarch(cache_dir: Path, out_dir: Path, download: bool) -> Path:
 
     frames = []
     for name, url in MONARCH_FILES.items():
-        source = fetch(url, cache_dir / f"monarch-{name}.tsv.gz", download)
+        source = fetch(url, cache_dir / f"monarch-{name}.tsv.gz", download=download)
         frame = read_tsv(source, MONARCH_COLUMNS)
         print(f"  {name:<10}     : {frame.height} rows", file=sys.stderr)
         frames.append(frame)

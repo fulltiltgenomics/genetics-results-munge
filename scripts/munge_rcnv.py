@@ -166,8 +166,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.error
-import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -181,6 +179,7 @@ from rcnv_liftover_windows import (
     run_liftover,
     write_bed,
 )
+from sumstat_utils import fetch
 
 ZENODO_RECORD = "6347673"
 SCORES_FILE = "Collins_rCNV_2022.dosage_sensitivity_scores.tsv.gz"
@@ -405,28 +404,6 @@ _ENSG_AS_NAME = re.compile(r"^ENSG\d+$")
 # clone/contig-derived placeholder names: real strings, but never what a gene is called
 _CLONE_NAME = re.compile(r"^(RP\d+-|AC\d|AL\d|AP\d|CT[ABD]-|Z\d)")
 NA = "NA"
-
-
-def fetch(url: str, dest: Path) -> Path:
-    """Download `url` to `dest` unless it is already cached there."""
-    if dest.exists():
-        print(f"  cached: {dest}", file=sys.stderr)
-        return dest
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"  downloading {url}", file=sys.stderr)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "genetics-results-munge"})
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as out:
-            shutil.copyfileobj(response, out)
-    except (urllib.error.URLError, TimeoutError) as err:
-        tmp.unlink(missing_ok=True)
-        raise SystemExit(
-            f"could not fetch {url}: {err}\n"
-            f"download it by hand and put it at {dest}, then rerun without --download"
-        ) from err
-    tmp.rename(dest)
-    return dest
 
 
 def fetch_gcs(gcs_path: str, dest: Path) -> Path:

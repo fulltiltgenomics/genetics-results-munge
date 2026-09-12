@@ -1,7 +1,16 @@
-"""Shared utilities for sumstat munging scripts."""
+"""Shared utilities for sumstat munging scripts, and the IO helpers every family shares.
 
+`upload_to_gcs` and `fetch` are not sumstat-specific: peak_utils re-exports the upload, and
+`fetch` is shared by the coordinate-free products, whose inputs are public downloads. They
+live here because a second module for two functions is how the copies start.
+"""
+
+import shutil
 import subprocess
+import sys
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import polars as pl
@@ -22,6 +31,35 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     if Path(tbi_local).exists():
         subprocess.run(["gcloud", "storage", "cp", tbi_local, gcs_path + ".tbi"], check=True)
         print(f"  uploaded {gcs_path}.tbi")
+
+
+def fetch(url: str, dest: Path, *, download: bool = True, timeout: int = 120) -> Path:
+    """Download `url` to `dest` unless it is already cached there.
+
+    Written to a `.part` sibling and renamed, so an interrupted run leaves no half file that
+    the next one would treat as cached. `download=False` refuses to reach the network at all,
+    for a caller whose own --download flag gates the whole run rather than each call site.
+    """
+    if dest.exists():
+        print(f"  cached: {dest}", file=sys.stderr)
+        return dest
+    if not download:
+        raise SystemExit(f"{dest} is not cached and --download was not given")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  downloading {url}", file=sys.stderr)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    request = urllib.request.Request(url, headers={"User-Agent": "genetics-results-munge"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response, tmp.open("wb") as out:
+            shutil.copyfileobj(response, out)
+    except (urllib.error.URLError, TimeoutError) as err:
+        tmp.unlink(missing_ok=True)
+        raise SystemExit(
+            f"could not fetch {url}: {err}\n"
+            f"download it by hand and put it at {dest}, then rerun without --download"
+        ) from err
+    tmp.rename(dest)
+    return dest
 
 
 def write_bgzip(df: pl.DataFrame, local_path: str) -> None:
