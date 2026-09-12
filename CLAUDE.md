@@ -136,6 +136,7 @@ parts that got copied across the family and then had to be corrected across it. 
 | `scripts/sumstat_utils.py`, `scripts/peak_utils.py` | `CLAUDE.md` — the output contract above |
 | `scripts/peak_utils.py` | `README.md` — the open-chromatin entry names it as the family's shared writer |
 | `scripts/coloc/*` | `scripts/coloc/R14_UPDATE.md` |
+| `scripts/munge_gene_disease.{py,sh}` | `docs/gene-disease-associations.md` — the source files taken, the version-in-the-filename cutover, and the drop and dedup rules |
 | `scripts/munge_rcnv.{py,sh}`, `scripts/rcnv_liftover_windows.py` | `docs/rcnv-dosage-sensitivity.md`, `docs/rcnv-sliding-windows.md` — the per-product column mappings and drop rules, and the liftOver measurement the windows product is gated on |
 | `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` |
 | `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` |

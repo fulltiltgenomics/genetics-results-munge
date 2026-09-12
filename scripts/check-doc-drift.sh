@@ -46,6 +46,9 @@ check '^scripts/peak_utils\.py$' "$DOC_README" \
 check '^scripts/coloc/[^/]*\.(py|sh)$' '^scripts/coloc/R14_UPDATE\.md$' \
     'scripts/coloc/ -> scripts/coloc/R14_UPDATE.md (input layout, metadata files, the invocation runbook)'
 
+check '^scripts/munge_gene_disease\.(py|sh)$' '^docs/gene-disease-associations\.md$' \
+    'scripts/munge_gene_disease.{py,sh} -> docs/gene-disease-associations.md (the source files taken, the version-in-the-filename cutover, the drop and dedup rules)'
+
 check '^scripts/(munge_rcnv|rcnv_liftover_windows)\.(py|sh)$' '^docs/rcnv-[^/]*\.md$' \
     'scripts/munge_rcnv.{py,sh}, scripts/rcnv_liftover_windows.py -> docs/rcnv-dosage-sensitivity.md, docs/rcnv-sliding-windows.md (per-product column mappings, drop rules, the liftOver measurement)'
 
