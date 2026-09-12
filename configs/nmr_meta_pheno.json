@@ -1,0 +1,1247 @@
+[
+    {
+        "phenocode": "Acetate",
+        "phenostring": "Acetate levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Acetoacetate",
+        "phenostring": "Acetoacetate levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Acetone",
+        "phenostring": "Acetone levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Ala",
+        "phenostring": "Alanine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Albumin",
+        "phenostring": "Albumin levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "ApoA1",
+        "phenostring": "Apolipoprotein A1 levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "ApoB",
+        "phenostring": "Apolipoprotein B levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "ApoB_by_ApoA1",
+        "phenostring": "Ratio of apolipoprotein B to apolipoprotein A1 levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Cholines",
+        "phenostring": "Total cholines levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Citrate",
+        "phenostring": "Citrate levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Clinical_LDL_C",
+        "phenostring": "Clinical LDL cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Creatinine",
+        "phenostring": "Creatinine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "DHA",
+        "phenostring": "Docosahexaenoic acid levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "DHA_pct",
+        "phenostring": "Ratio of docosahexaenoic acid to total fatty acid levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Gln",
+        "phenostring": "Glutamine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Glucose",
+        "phenostring": "Glucose levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Gly",
+        "phenostring": "Glycine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "GlycA",
+        "phenostring": "Glycoprotein acetyls levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_C",
+        "phenostring": "HDL cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_CE",
+        "phenostring": "Cholesteryl Esters in HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_FC",
+        "phenostring": "Free Cholesterol in HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_L",
+        "phenostring": "Total Lipids in HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_P",
+        "phenostring": "Concentration of HDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_PL",
+        "phenostring": "Phospholipids in HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_TG",
+        "phenostring": "Triglycerides in HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "HDL_size",
+        "phenostring": "Average diameter for HDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "His",
+        "phenostring": "Histidine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_C",
+        "phenostring": "Cholesterol in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_CE",
+        "phenostring": "Cholesteryl Esters in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_FC",
+        "phenostring": "Free cholesterol in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_L",
+        "phenostring": "Total lipids in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_P",
+        "phenostring": "Concentration of IDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_PL",
+        "phenostring": "Phospholipids in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_TG",
+        "phenostring": "Triglycerides in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "IDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in IDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Ile",
+        "phenostring": "Isoleucine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LA",
+        "phenostring": "Linoleic acid levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LA_pct",
+        "phenostring": "Ratio of linoleic acid to total fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_C",
+        "phenostring": "LDL cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_CE",
+        "phenostring": "Cholesteryl Esters in LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_FC",
+        "phenostring": "Free Cholesterol in LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_L",
+        "phenostring": "Total Lipids in LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_P",
+        "phenostring": "Concentration of LDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_PL",
+        "phenostring": "Phospholipids in LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_TG",
+        "phenostring": "Triglycerides in LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "LDL_size",
+        "phenostring": "Average diameter for LDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_C",
+        "phenostring": "Cholesterol in Large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_CE",
+        "phenostring": "Cholesteryl Esters in Large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_FC",
+        "phenostring": "Free cholesterol in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_L",
+        "phenostring": "Total lipids in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_P",
+        "phenostring": "Concentration of large HDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_PL",
+        "phenostring": "Phospholipids in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_TG",
+        "phenostring": "Triglycerides in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_HDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_C",
+        "phenostring": "Cholesterol in Large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_CE",
+        "phenostring": "Cholesteryl Esters in Large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_FC",
+        "phenostring": "Free cholesterol in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_L",
+        "phenostring": "Total lipids in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_P",
+        "phenostring": "Concentration of large LDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_PL",
+        "phenostring": "Phospholipids in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_TG",
+        "phenostring": "Triglycerides in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_LDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in large LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_C",
+        "phenostring": "Cholesterol in Large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_CE",
+        "phenostring": "Cholesteryl Esters in Large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_FC",
+        "phenostring": "Free cholesterol in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_L",
+        "phenostring": "Total lipids in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_P",
+        "phenostring": "Concentration of large VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_PL",
+        "phenostring": "Phospholipids in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_TG",
+        "phenostring": "Triglycerides in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "L_VLDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Lactate",
+        "phenostring": "Lactate levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Leu",
+        "phenostring": "Leucine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "MUFA",
+        "phenostring": "Monounsaturated fatty acid levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "MUFA_pct",
+        "phenostring": "Ratio of monounsaturated fatty acids to total fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_C",
+        "phenostring": "Cholesterol in Medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_CE",
+        "phenostring": "Cholesteryl Esters in Medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_FC",
+        "phenostring": "Free cholesterol in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_L",
+        "phenostring": "Total lipids in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_P",
+        "phenostring": "Concentration of medium HDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_PL",
+        "phenostring": "Phospholipids in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_TG",
+        "phenostring": "Triglycerides in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_HDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in medium HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_C",
+        "phenostring": "Cholesterol in Medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_CE",
+        "phenostring": "Cholesteryl Esters in Medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_FC",
+        "phenostring": "Free cholesterol in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_L",
+        "phenostring": "Total Lipids in Medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_P",
+        "phenostring": "Concentration of medium LDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_PL",
+        "phenostring": "Phospholipids in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_TG",
+        "phenostring": "Triglycerides in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_LDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in medium LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_C",
+        "phenostring": "Cholesterol in Medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_CE",
+        "phenostring": "Cholesteryl Esters in Medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_FC",
+        "phenostring": "Free cholesterol in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_L",
+        "phenostring": "Total lipids in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_P",
+        "phenostring": "Concentration of medium VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_PL",
+        "phenostring": "Phospholipids in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_TG",
+        "phenostring": "Triglycerides in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "M_VLDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in medium VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Omega_3",
+        "phenostring": "Omega-3 fatty acids levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Omega_3_pct",
+        "phenostring": "Ratio of omega-3 fatty acids to total fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Omega_6",
+        "phenostring": "Omega-6 fatty acids levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Omega_6_by_Omega_3",
+        "phenostring": "Ratio of omega-6 fatty acids to omega-3 fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Omega_6_pct",
+        "phenostring": "Ratio of omega-6 fatty acids to total fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "PUFA",
+        "phenostring": "Polyunsaturated fatty acid levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "PUFA_by_MUFA",
+        "phenostring": "Ratio of polyunsaturated fatty acids to monounsaturated fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "PUFA_pct",
+        "phenostring": "Ratio of polyunsaturated fatty acids to total fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Phe",
+        "phenostring": "Phenylalanine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Phosphatidylc",
+        "phenostring": "Phosphatidylcholine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Phosphoglyc",
+        "phenostring": "Phosphoglycerides levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Pyruvate",
+        "phenostring": "Pyruvate levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Remnant_C",
+        "phenostring": "Remnant cholesterol (non-HDL, non-LDL -cholesterol)",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "SFA",
+        "phenostring": "Saturated fatty acids levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "SFA_pct",
+        "phenostring": "Ratio of saturated fatty acids to total fatty acids",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_C",
+        "phenostring": "Cholesterol in Small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_CE",
+        "phenostring": "Cholesteryl Esters in Small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_FC",
+        "phenostring": "Free cholesterol in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_L",
+        "phenostring": "Total lipids in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_P",
+        "phenostring": "Concentration of small HDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_PL",
+        "phenostring": "Phospholipids in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_TG",
+        "phenostring": "Triglycerides in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_HDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in small HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_C",
+        "phenostring": "Cholesterol in Small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_CE",
+        "phenostring": "Cholesteryl Esters in Small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_FC",
+        "phenostring": "Free cholesterol in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_L",
+        "phenostring": "Total lipids in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_P",
+        "phenostring": "Concentration of small LDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_PL",
+        "phenostring": "Phospholipids in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_TG",
+        "phenostring": "Triglycerides in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_LDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in small LDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_C",
+        "phenostring": "Cholesterol in Small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_CE",
+        "phenostring": "Cholesteryl Esters in Small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_FC",
+        "phenostring": "Free cholesterol in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_L",
+        "phenostring": "Total lipids in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_P",
+        "phenostring": "Concentration of small VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_PL",
+        "phenostring": "Phospholipids in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_TG",
+        "phenostring": "Triglycerides in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "S_VLDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Sphingomyelins",
+        "phenostring": "Sphingomyelins levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "TG_by_PG",
+        "phenostring": "Ratio of triglycerides to phosphoglycerides",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_BCAA",
+        "phenostring": "Total concentration of branched-chain amino acids (leucine + isoleucine + valine)",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_C",
+        "phenostring": "Total cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_CE",
+        "phenostring": "Total esterified cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_FA",
+        "phenostring": "Total fatty acid levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_FC",
+        "phenostring": "Total free cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_L",
+        "phenostring": "Total lipid levels in lipoprotein particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_P",
+        "phenostring": "Total concentration of lipoprotein particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_PL",
+        "phenostring": "Total phospholipids in lipoprotein particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Total_TG",
+        "phenostring": "Total triglycerides levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Tyr",
+        "phenostring": "Tyrosine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Unsaturation",
+        "phenostring": "Degree of unsaturation",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_C",
+        "phenostring": "VLDL cholesterol levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_CE",
+        "phenostring": "Cholesteryl Esters in VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_FC",
+        "phenostring": "Free Cholesterol in VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_L",
+        "phenostring": "Total Lipids in VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_P",
+        "phenostring": "Concentration of VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_PL",
+        "phenostring": "Phospholipids in VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_TG",
+        "phenostring": "Triglycerides in VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "VLDL_size",
+        "phenostring": "Average diameter for VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "Val",
+        "phenostring": "Valine levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_C",
+        "phenostring": "Cholesterol in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_CE",
+        "phenostring": "Cholesteryl Esters in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_FC",
+        "phenostring": "Free cholesterol in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_L",
+        "phenostring": "Total lipids in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_P",
+        "phenostring": "Concentration of very large HDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_PL",
+        "phenostring": "Phospholipids in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_TG",
+        "phenostring": "Triglycerides in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_HDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in very large HDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_C",
+        "phenostring": "Cholesterol in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_CE",
+        "phenostring": "Cholesteryl esters in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_FC",
+        "phenostring": "Free cholesterol in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_L",
+        "phenostring": "Total lipids in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_P",
+        "phenostring": "Concentration of very large VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_PL",
+        "phenostring": "Phospholipids in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_TG",
+        "phenostring": "Triglycerides in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XL_VLDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in very large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_C",
+        "phenostring": "Cholesterol in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_CE",
+        "phenostring": "Cholesteryl Esters in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_FC",
+        "phenostring": "Free cholesterol in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_L",
+        "phenostring": "Total lipids in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_P",
+        "phenostring": "Concentration of very small VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_PL",
+        "phenostring": "Phospholipids in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_TG",
+        "phenostring": "Triglycerides in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XS_VLDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in very small VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_C",
+        "phenostring": "Cholesterol in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_CE",
+        "phenostring": "Cholesteryl Esters in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_CE_pct",
+        "phenostring": "Cholesteryl esters to total lipids ratio in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_C_pct",
+        "phenostring": "Cholesterol to total lipids ratio in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_FC",
+        "phenostring": "Free cholesterol in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_FC_pct",
+        "phenostring": "Free cholesterol to total lipids ratio in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_L",
+        "phenostring": "Total lipids in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_P",
+        "phenostring": "Concentration of chylomicrons and extremely large VLDL particles",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_PL",
+        "phenostring": "Phospholipids in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_PL_pct",
+        "phenostring": "Phospholipids to total lipids ratio in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_TG",
+        "phenostring": "Triglycerides in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "XXL_VLDL_TG_pct",
+        "phenostring": "Triglycerides to total lipids ratio in chylomicrons and extremely large VLDL",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "bOHbutyrate",
+        "phenostring": "3-Hydroxybutyrate levels",
+        "num_samples": 413897
+    },
+    {
+        "phenocode": "non_HDL_C",
+        "phenostring": "Total cholesterol minus HDL-C levels",
+        "num_samples": 413897
+    }
+]
