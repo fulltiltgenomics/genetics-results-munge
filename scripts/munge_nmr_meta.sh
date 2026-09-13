@@ -16,7 +16,7 @@ lead_variants=$2
 variant_annotation_file=$3
 data_dir=$4
 
-dataset=UKBB_EUR_NMR_2026
+dataset=nmr_ukbb_est
 output_file=${dataset}_credible_sets.tsv.gz
 
 mkdir -p "$data_dir/individual"

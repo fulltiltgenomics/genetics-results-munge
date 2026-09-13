@@ -169,7 +169,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--annotation", required=True, help="Tabix indexed FinnGen annotated variants")
     parser.add_argument("--output-dir", default=".", help="Directory to write the unsorted TSV into")
-    parser.add_argument("--dataset", default="UKBB_EUR_NMR_2026", help="Value of the dataset column")
+    parser.add_argument("--dataset", default="nmr_ukbb_est", help="Value of the dataset column")
     parser.add_argument("--cell-type", default="plasma", help="Value of the cell_type column")
     parser.add_argument(
         "--n-samples",
