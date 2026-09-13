@@ -15,11 +15,13 @@ effect sizes describe UKBB Europeans.
 
 | | dataset (API) | `dataset` column | resource |
 |---|---|---|---|
-| | `nmr_meta_finemap` | `UKBB_EUR_NMR_2026` | `nmr_meta` |
+| | `nmr_ukbb_est` | `nmr_ukbb_est` | `nmr_meta` |
 
-Note the resource is **not** `ukbb`, which holds UKB-PPP and UKB Finucane. The
-`dataset_to_resource_rules` entry for `UKBB_EUR_NMR%` has to sit before the `UKB%` one, which
-would otherwise claim it.
+The registry key and the `dataset` column carry the same string, so the name an agent sees in a
+query result is the name the dataset catalogue lists. The resource is **not** `ukbb`, which holds
+UKB-PPP and UKB Finucane, and the value deliberately does not start with `UKB`: the
+`dataset_to_resource_rules` entry for it is an exact match, and a `UKB`-prefixed value would be
+claimed by the `UKB%` rule.
 
 ## Running it
 
