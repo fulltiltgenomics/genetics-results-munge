@@ -5,7 +5,7 @@ to the trait name its authors registered in the GWAS Catalog.
 
     python3 scripts/nmr_meta_phenotypes.py \
       --input UKBB_EUR_fine_mapping_with_meta_EUR_lead_variants.parquet \
-      --output configs/nmr_meta_pheno.json
+      --output configs/nmr_ukbb_est_pheno.json
 
 Output is the pheweb-shaped list the results platform's `quantitative_pheweb` metadata
 harmonizer reads: `phenocode`, `phenostring`, `num_samples`.

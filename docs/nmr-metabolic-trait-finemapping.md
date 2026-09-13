@@ -15,9 +15,9 @@ effect sizes describe UKBB Europeans.
 
 | | dataset (API) | `dataset` column | resource |
 |---|---|---|---|
-| | `nmr_ukbb_est` | `nmr_ukbb_est` | `nmr_meta` |
+| | `nmr_ukbb_est` | `nmr_ukbb_est` | `nmr_ukbb_est` |
 
-The registry key and the `dataset` column carry the same string, so the name an agent sees in a
+Registry key, `dataset` column and resource carry the same string, so the name an agent sees in a
 query result is the name the dataset catalogue lists. The resource is **not** `ukbb`, which holds
 UKB-PPP and UKB Finucane, and the value deliberately does not start with `UKB`: the
 `dataset_to_resource_rules` entry for it is an exact match, and a `UKB`-prefixed value would be
@@ -45,7 +45,7 @@ The phenotype metadata is a separate script, because it is derived from a differ
 ```
 scripts/nmr_meta_phenotypes.py \
   --input UKBB_EUR_fine_mapping_with_meta_EUR_lead_variants.parquet \
-  --output configs/nmr_meta_pheno.json
+  --output configs/nmr_ukbb_est_pheno.json
 ```
 
 ## How the Zenodo table is mapped onto the credible set schema
