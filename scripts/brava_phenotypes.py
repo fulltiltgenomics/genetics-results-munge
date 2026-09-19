@@ -67,7 +67,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from sumstat_utils import fetch, upload_to_gcs
+from sumstat_utils import fetch, fetch_gs, upload_to_gcs
 
 SUPPLEMENT_URL = (
     "https://www.medrxiv.org/content/medrxiv/early/2026/05/24/2026.05.21.26353759/DC2/"
@@ -162,6 +162,12 @@ def phenocode(code: str, stratum: str | None) -> str:
     """`_ALL` is dropped and `_F` kept, so a phenocode carries the sex restriction where there is one."""
     base = code[: -len("_ALL")] if code.endswith("_ALL") else code
     return base if stratum is None else f"{base}|{stratum}"
+
+
+def source_file_code(base: str) -> str:
+    """The file code a phenocode came from: every file code carries a sex tag and `phenocode` above
+    stripped the `_ALL` one, so reaching back to a source file puts it on again."""
+    return base if base.endswith("_F") else base + "_ALL"
 
 
 def per_ancestry(tables: dict[str, list[dict]]) -> tuple[dict, dict]:
@@ -320,15 +326,9 @@ def cross_check(items: list[dict], wanted: list[str], args: argparse.Namespace) 
             print(f"{code:<22} not in the output")
             continue
         base, _, stratum = code.partition("|")
-        # every file code carries a sex tag, and only the `_ALL` one was stripped
-        file_code = base if base.endswith("_F") else base + "_ALL"
-        name = f"{file_code}_variant_meta_analysis_100_cutoff" + (f".{stratum}" if stratum else "") + ".vcf.gz"
-        local = cache / name
-        if not local.exists():
-            command = ["gcloud", "storage", "cp", args.variant_prefix.rstrip("/") + "/" + name, str(local)]
-            if args.billing_project:
-                command.append(f"--billing-project={args.billing_project}")
-            subprocess.run(command, check=True)
+        name = f"{source_file_code(base)}_variant_meta_analysis_100_cutoff" + (f".{stratum}" if stratum else "") + ".vcf.gz"
+        uri = args.variant_prefix.rstrip("/") + "/" + name
+        local = fetch_gs(uri, cache, billing_project=args.billing_project)
         max_ns, max_nc = vcf_maxima(local)
         json_ns = item.get("num_samples") or item["num_cases"] + item["num_controls"]
         json_nc = item.get("num_cases")

@@ -65,3 +65,14 @@ python3 munge_ibd_supp_variants.py \
 # 	/mnt/disks/data/genebass_gene_burden/gene_burden_results \
 # 	pheno_blacklist.txt \
 # 	gs://finngen-commons/results_api_data/exome_results/genebass
+
+# --- BRaVa gene burden (scripts/munge_brava.sh is the wrapper; --stage publishes to
+#     gs://daly-genetics-results/exome_results/brava/) ---
+# every trait of a run shares one combined BRaVa_gene_results.mlog10p_gt4.tsv.gz, so the
+# measurement run munged its 10 files in one invocation: AFib in all 7 strata plus three metas
+python3 munge_brava.py \
+	--phenotypes 'AFib|all' LDLC BreastCanc_F HF \
+	--cache-dir ~/brava_munge/cache \
+	--output-dir ~/brava_munge/out \
+	--per-trait-dir ~/brava_munge/out/gene_burden_per_trait \
+	--stage

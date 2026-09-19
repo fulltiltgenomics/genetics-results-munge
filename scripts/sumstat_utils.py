@@ -62,6 +62,28 @@ def fetch(url: str, dest: Path, *, download: bool = True, timeout: int = 120) ->
     return dest
 
 
+def fetch_gs(uri: str, cache_dir: Path, *, billing_project: str | None = None) -> Path:
+    """Local copy of a `gs://` object, downloaded once; a local path is passed through.
+
+    `fetch` above is the cache for http sources and cannot speak `gs://`. Written to a `.part`
+    sibling and renamed so an interrupted copy is not mistaken for a cached file.
+    """
+    if not uri.startswith("gs://"):
+        return Path(uri)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    local = cache_dir / uri.rsplit("/", 1)[-1]
+    if local.exists():
+        print(f"  cached: {local}", file=sys.stderr)
+        return local
+    part = local.with_name(local.name + ".part")
+    command = ["gcloud", "storage", "cp", uri, str(part)]
+    if billing_project:
+        command.append(f"--billing-project={billing_project}")
+    subprocess.run(command, check=True)
+    part.rename(local)
+    return local
+
+
 def write_bgzip(df: pl.DataFrame, local_path: str) -> None:
     """Write DataFrame as bgzipped TSV with tabix index."""
     with subprocess.Popen(
