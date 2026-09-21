@@ -145,6 +145,7 @@ parts that got copied across the family and then had to be corrected across it. 
 | `scripts/munge_rcnv.{py,sh}`, `scripts/rcnv_liftover_windows.py` | `docs/rcnv-dosage-sensitivity.md`, `docs/rcnv-sliding-windows.md` — the per-product column mappings and drop rules, and the liftOver measurement the windows product is gated on |
 | `wdl/munge_finngen_finemapping_results*`, `wdl/qtl_file.wdl` | `README.md` |
 | `wdl/create_pseudo_credible_sets*`, `wdl/autoreporting_*.json` | `docs/pseudo-credible-sets.md` |
+| `scripts/munge_decode_pqtl.py`, `scripts/decode_pqtl_phenotypes.py` | `docs/pseudo-credible-sets.md` — step 0 of the deCODE run: what the per-aptamer files carry, which aptamers enter the input array, where the trait names come from |
 
 `scripts/check-doc-drift.sh` warns (never blocks) on commits that skip this; it runs
 from `.beads/hooks/pre-commit`, outside the beads-managed fence that beads rewrites.

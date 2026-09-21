@@ -55,6 +55,9 @@ check '^scripts/(munge_rcnv|rcnv_liftover_windows)\.(py|sh)$' '^docs/rcnv-[^/]*\
 check '^wdl/(munge_finngen_finemapping_results|qtl_file)' "$DOC_README" \
     'wdl/munge_finngen_finemapping_results*, wdl/qtl_file.wdl -> README.md (WDL pipeline inputs, the Cromwell examples, output columns)'
 
+check '^scripts/(munge_decode_pqtl|decode_pqtl_phenotypes)\.py$' '^docs/pseudo-credible-sets\.md$' \
+    'scripts/munge_decode_pqtl.py, scripts/decode_pqtl_phenotypes.py -> docs/pseudo-credible-sets.md (step 0 of the deCODE run: per-aptamer file columns, input-array selection, trait names)'
+
 check '^wdl/(create_pseudo_credible_sets|autoreporting)' '^docs/pseudo-credible-sets\.md$' \
     'wdl/create_pseudo_credible_sets*, wdl/autoreporting_*.json -> docs/pseudo-credible-sets.md (thresholds, script defaults vs production flags, output columns, per-dataset table)'
 

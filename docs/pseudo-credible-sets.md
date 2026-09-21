@@ -126,7 +126,12 @@ for every variant, the columns step 2 relies on:
 
 (For non-FinnGen inputs whose columns are named differently, step 2 maps them via
 `column_aliases` — e.g. `#chr`→`#CHR`, `mlog10p`→`all_inv_var_meta_mlogp`,
-`se`→`all_inv_var_meta_sebeta`, `af`→`fg_af_alt`.)
+`se`→`all_inv_var_meta_sebeta`, `af`→`fg_af_alt`. `fg_af_alt` is the one column step 2
+tolerates missing: a sumstat with no allele frequency, such as deCODE, yields a report
+without `af`, and the output's `aaf` is then NA.)
+
+A phenotype with no locus at all gets an empty (0-byte) `.report.out` from the WDL; step 2
+writes a header-only file for it, so such phenotypes may stay in the file-of-filenames.
 
 ---
 
@@ -169,7 +174,9 @@ fine-mapping:
 - `cs_min_r2` — minimum pairwise r² among all members, computed by
   `compute_and_filter_cs_pairwise_r2`, which queries the LD panel per set (singletons get
   1.0). If `--min-r2` is supplied, sets whose minimum pairwise r² falls below it are
-  dropped; the production configs do **not** set `--min-r2`, so this only annotates.
+  dropped; the production configs do **not** set `--min-r2`, so this only annotates. The
+  query maps chromosome `23` back to `X`, the name the panel's file and contig carry; before
+  that mapping every chrX set silently got NA here (44 rows of `EXT_20260610`).
 - HLA region: with `--filter-hla` (default on), among all pseudo CS whose lead falls in
   chr6:25–34 Mb, only the single most significant one is kept; the rest are dropped.
 
@@ -178,9 +185,14 @@ fine-mapping:
 `format_output` emits the standard credible-set schema (see the [outputs section of the
 README](../README.md#outputs)): `#dataset, data_type, trait, trait_original, cell_type,
 chr, pos, ref, alt, mlog10p, beta, se, pip, cs_id, cs_size, cs_min_r2, aaf, most_severe,
-gene_most_severe`. `cs_id` is the lead variant id; chr `X` is mapped to `23`. The
-`collect_results` task merge-sorts the per-trait files, de-duplicates, bgzips, and
-indexes with `tabix -s6 -b7 -e7`.
+gene_most_severe`. `cs_id` is the lead variant id; chr `X` is mapped to `23`.
+`trait_original` is the report's file name with `.report.out` removed — autoreporting
+names the report after the phenotype id it was given, and that id may itself contain dots
+(SomaScan aptamers, `seq.10000.28`) — and `trait` is that id's `phenostring` in the
+`phenotype_json`, or the id itself without one. `data_type` and `cell_type` are `GWAS` and
+`NA` unless `--data-type`/`--cell-type` are passed in `flags`. The `collect_results` task
+merge-sorts the per-trait files, de-duplicates, bgzips, and indexes with
+`tabix -s6 -b7 -e7`.
 
 ---
 
@@ -274,3 +286,84 @@ line, dataset name and report file path, so one run can mix several datasets. Ou
 | `FinnGen_R13`, `FinnGen_R13_UKBB(_labs)`, `FinnGen_R13_MVP_UKBB(_labs)` | FinnGen and meta-analysis pseudo CS; phenotype names from `finngen_r13_pheno_202509.json` |
 | `COVID19_HGI` / `PGC` / `GP2` (external) | bundled external file (`ext`); inputs use `column_aliases` to map munged-sumstat column names to the canonical report columns |
 | `AIH` | the three autoimmune hypothyroidism meta-analysis phenotypes (`AIH`, `AITT1`, `AITT2`) munged by `scripts/munge_aih.py`; run separately from the `ext` bundle because its sumstats carry a different column set, but with the same `column_aliases` — autoreporting names the report columns after the input columns, which are the same `#chr`/`mlog10p`/`se`/`af` |
+| `deCODE_pQTL_2021` | 4,907 SomaScan aptamers, one phenotype each, from `scripts/munge_decode_pqtl.py`; `--data-type pQTL --cell-type plasma`, `trait` = gene symbol via `configs/decode_pqtl_pheno.json`. See [the deCODE pQTL run](#the-decode-pqtl-run) |
+
+---
+
+## The deCODE pQTL run
+
+The deCODE 2021 plasma pQTLs (Ferkingstad et al., 35,559 Icelanders) are the one pseudo-CS
+input that is a QTL study rather than a GWAS, and the one that ships as a single file:
+`gs://finngen-commons/decode/deCODE_pQTLs_NatGen2021_aligned_p0.005.tsv.gz`, every
+aptamer's p < 0.005 rows together, already GRCh38 and aligned to gnomAD `ref`/`alt`. The
+pipeline above is per phenotype, so the run has a step 0.
+
+**Step 0 — one sumstat per aptamer.** `scripts/munge_decode_pqtl.py` streams the file once
+into `<aptamer>.munged.tsv.gz` (`#chr pos ref alt mlog10p beta se`, X as 23), keeping one
+row per variant where the alignment had folded two indel representations onto the same
+gnomAD variant, and `--stage`s the directory to
+`gs://finngen-commons/results_api_data/sumstats/deCODE_pQTL_2021/`. Its `--input-array`
+writes the autoreporting input array with only the aptamers that have at least one row at
+`sign_treshold` (p ≤ 5e-8): an aptamer with none cannot seed a locus, so a shard for it
+would only produce an empty report. `scripts/decode_pqtl_phenotypes.py` writes the
+phenotype-info TSV and the phenotype JSON from the aptamer → gene table the FinnGen
+SomaScan credible sets use, so an aptamer carries the same `trait` in both datasets (the
+seven aptamers that table maps to `NA` keep their id).
+
+**Step 1** is [`wdl/autoreporting_decode.json`](../wdl/autoreporting_decode.json), the AIH
+input with these differences:
+
+| setting | value | why |
+|---|---|---|
+| `extra_columns` | `se` | the delivery has no allele frequency (its source carries only `maf`, which cannot be oriented to `alt`), no rsid and no per-variant `n` worth carrying |
+| `post_process_top_reports.af_col`, `in_fg_col` | `lead_af_alt` | `meta_filter_top.py` raises if its AF column is absent from the top report and the WDL runs it on every shard that had results; `lead_af_alt` is one of the columns the top report always carries (it is NA here), so the top-report post-processing runs and filters nothing. Step 2 reads only `.report.out`, never the top report |
+| `input_array_file`, `phenotype_info_file` | `external_sumstats_input.decode.tsv`, `external_pheno_info.decode.tsv` | from step 0 |
+| `ld_assume_variant1_indexed` | `true` | autoreporting fetches LD for **every** candidate lead (every p ≤ 5e-8 variant) before clumping, and by default reads the whole ±2 Mb window of the panel for each one. A GWAS has tens to hundreds of candidates per phenotype; a cis-pQTL has thousands (median 929 per aptamer, p99 21,565, 11.5M over all aptamers), and a wide fetch costs 30 s to 5 min each, so the extreme aptamers would run for days. The FinnGen R12 panel is indexed by `variant1` position and lists every partner under it, so the 1 bp fetch this flag enables returns the same rows in well under a second (checked on the chr21:46003475 lead: 1,945 partner rows both ways). The flag is an input the WDL did not have; see the autoreporting change |
+
+Everything else — the FinnGen R12 LD panel, `finngen_variants_only`, the thresholds — is
+as for the other external datasets, with the same consequence: an Icelandic study is
+clumped with Finnish LD, so leads whose Icelandic LD partners are absent or unlinked in
+FinnGen become singleton sets (see the LD-panel discussion for the external GWAS). After
+the run, the file-of-filenames for step 2 is the listing of the reports:
+
+```sh
+gsutil ls 'gs://fg-cromwell-4/autoreporting/<run id>/call-report/**/*.report.out' \
+  | awk 'BEGIN{OFS="\t"}{print "deCODE_pQTL_2021", $0}' \
+  | gsutil cp - gs://finngen-commons/results_api_metadata/autoreporting.decode.fofn
+```
+
+(`**` catches the `attempt-2/` directories a preempted shard leaves behind; a shard whose
+first attempt wrote no file has only the retry.)
+
+**Step 2** is [`wdl/create_pseudo_credible_sets.decode.json`](../wdl/create_pseudo_credible_sets.decode.json):
+the `ext` flags plus `--data-type pQTL --cell-type plasma`, the phenotype JSON, and output
+`deCODE_pQTL_2021_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz` under
+`credible_sets/decode_pseudo/`.
+
+Two properties of pQTL sumstats matter for how the thresholds behave:
+
+- the delivery is filtered at p < 0.005 while autoreporting's partner threshold p2 is 0.01,
+  so partners with 0.005 ≤ p < 0.01 are never seen. None of them could have become a
+  pseudo-CS member: membership needs `mlog10p` within 2 of a lead that is at least 7.3, or
+  r² > 0.95 to it, and a variant at r² > 0.95 to a genome-wide-significant lead has an
+  expected χ² above 28;
+- cis-pQTL leads reach `mlog10p` in the tens of thousands (21,686 for `seq.16828.8`,
+  COL6A1, at chr21:46.0 Mb). The dynamic r² threshold `5/χ²` is then far below the
+  panel's 0.01 floor, so the lead's clump takes every variant the panel lists as a partner
+  at all — and **everything it does not list becomes a locus of its own**. Measured on the
+  local rehearsal of `seq.16828.8`: 9,707 candidate leads, 3,948 loci out of clumping, 482
+  after `--finngen-variants-only`, of which 471 on chr21 spread over more than 4 Mb around
+  COL6A1 (228 within 1 Mb of the top lead, 129 at 1–2 Mb, 114 beyond); step 2 turns them
+  into 482 pseudo credible sets, 320 of them singletons, and the second- and third-
+  strongest "independent" leads (`mlog10p` 3,610 and 1,148, 20–50 kb from the top lead)
+  are simply variants the Finnish panel does not list at r² ≥ 0.01 with it. An expected
+  χ² of 5 is reached at r² ≈ 0.00005 to a lead this strong, so the LD shadow of a cis-pQTL
+  extends far below anything an LD panel records, and neither step distinguishes shadow
+  from signal there. Re-enabling step 2's proximity filter (anchors at χ² > 250, ±1 Mb)
+  halves this — 255 sets, 176 singletons, 244 still on chr21 — because leads more than
+  1 Mb from the anchor survive and are not anchors themselves. A pseudo CS at a cis-pQTL
+  must therefore be read as "the top signal"; what to do with the rest is the open design
+  question recorded on the epic (`genetics-results-munge-cbt`), and the full run has not
+  been submitted pending it.
+- the modest aptamers behave like a GWAS: `seq.4876.32` (F9) gave 7 sets, three of them
+  cis at chrX:139.5 Mb with real `cs_min_r2`; `seq.7085.81` (CDSN) 58 sets, 23 singletons.

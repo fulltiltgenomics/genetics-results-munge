@@ -136,6 +136,10 @@ NEEDED_COLUMNS = [
     "fg_af_alt", "most_severe_gene", "most_severe_consequence",
 ]
 
+# columns a report may lack when the sumstat had nothing to fill them from; they are added as
+# null so the output keeps its schema (deCODE pQTL ships no allele frequency, so aaf is NA)
+OPTIONAL_COLUMNS = {"fg_af_alt": pl.Float64}
+
 # default alternate column names found in some input files -> canonical names
 # extra aliases can be merged in per-dataset via --column-aliases
 DEFAULT_COLUMN_ALIASES = {
@@ -208,7 +212,11 @@ def parse_args():
 
 
 def extract_phenotype(filepath: str) -> str:
+    # autoreporting names its report <pheno>.report.out; strip that suffix rather than cut at
+    # the first dot, which turned every dotted phenocode (SomaScan aptamers: seq.10000.28) into "seq"
     basename = os.path.basename(filepath)
+    if basename.endswith(".report.out"):
+        return basename[: -len(".report.out")]
     return basename.split(".")[0]
 
 
@@ -231,6 +239,11 @@ def read_report(filepath: str, extra_aliases: dict | None = None) -> pl.DataFram
         if canon in CANONICAL_DTYPES:
             schema_overrides[src] = CANONICAL_DTYPES[canon]
 
+    # autoreporting touches an empty report when a phenotype has no locus at all
+    if os.path.getsize(filepath) == 0:
+        print(f"warning: {filepath} is empty (no report rows)", file=sys.stderr)
+        return pl.DataFrame(schema=CANONICAL_DTYPES)
+
     # in WDL context, input files are localized by Cromwell
     df = pl.read_csv(
         filepath,
@@ -244,6 +257,11 @@ def read_report(filepath: str, extra_aliases: dict | None = None) -> pl.DataFram
     renames = {alt: canon for alt, canon in aliases.items() if alt in df.columns and canon not in df.columns}
     if renames:
         df = df.rename(renames)
+
+    for col, dtype in OPTIONAL_COLUMNS.items():
+        if col not in df.columns:
+            print(f"warning: {filepath} has no {col} column, filling with null", file=sys.stderr)
+            df = df.with_columns(pl.lit(None, dtype=dtype).alias(col))
 
     missing = [c for c in NEEDED_COLUMNS if c not in df.columns]
     if missing:
@@ -372,6 +390,13 @@ def _query_ld_for_variants(
     max_retries: int = 3, retry_delay: float = 5.0,
 ) -> dict:
     """Query tabix for LD between specific variants, streaming to limit memory use."""
+    # reports code chrX as 23 (chr23_<pos>_<ref>_<alt>) but the panel's file, contig and
+    # variant ids say X; without this every chrX set got cs_min_r2 NA from a tabix failure on
+    # a file that does not exist. Ids are matched in the panel's spelling and returned in the
+    # report's
+    is_x = str(chrom) == "23"
+    chrom = "X" if is_x else str(chrom)
+    panel_ids = {v.replace("chr23_", "chrX_") for v in variant_ids} if is_x else variant_ids
     region = f"{chrom}:{min_pos}-{max_pos}"
     path = ld_panel.format(chr=chrom)
     env = {**os.environ, "GCS_OAUTH_TOKEN": token}
@@ -386,7 +411,9 @@ def _query_ld_for_variants(
         for line in proc.stdout:
             fields = line.split("\t")
             v1, v2 = fields[2], fields[3]
-            if v1 in variant_ids and v2 in variant_ids:
+            if v1 in panel_ids and v2 in panel_ids:
+                if is_x:
+                    v1, v2 = v1.replace("chrX_", "chr23_"), v2.replace("chrX_", "chr23_")
                 r2 = float(fields[5])
                 ld[(v1, v2)] = r2
                 ld[(v2, v1)] = r2
