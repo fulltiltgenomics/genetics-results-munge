@@ -1,5 +1,5 @@
 {
-    "autoreporting.input_array_file": "gs://finngen-commons/results_api_data/sumstats/autoreporting/external_sumstats_input.decode.tsv",
+    "autoreporting.input_array_file": "gs://finngen-commons/results_api_data/sumstats/autoreporting/external_sumstats_input.decode.rerun3.tsv",
     "autoreporting.docker": "europe-west1-docker.pkg.dev/finngen-refinery-dev/fg-refinery-registry/autorep:20260922.2",
     "autoreporting.ld_panel": "gs://r12-data/ld_matrix/finngen_r12_chr{CHROM}_ld.tsv.gz",
     "autoreporting.ld_api": "tabix",

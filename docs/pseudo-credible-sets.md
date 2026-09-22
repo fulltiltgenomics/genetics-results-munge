@@ -323,17 +323,102 @@ input with these differences:
 Everything else — the FinnGen R12 LD panel, `finngen_variants_only`, the thresholds — is
 as for the other external datasets, with the same consequence: an Icelandic study is
 clumped with Finnish LD, so leads whose Icelandic LD partners are absent or unlinked in
-FinnGen become singleton sets (see the LD-panel discussion for the external GWAS). After
-the run, the file-of-filenames for step 2 is the listing of the reports:
+FinnGen become singleton sets (see the LD-panel discussion for the external GWAS). The
+reports do not stay in the Cromwell bucket: step 1 took several submissions (below), so
+`/mnt/disks/data/decode/stage_decode_reports.py <run id> ...` gathers them. For every
+aptamer with a `.report.out` in any run listed (a later run wins), it copies the report and
+its `.top.out` to
+`gs://finngen-commons/results_api_data/sumstats/autoreporting/deCODE_pQTL_2021/`, writes
+the step-2 fofn `gs://finngen-commons/results_api_metadata/autoreporting.decode.fofn`
+from that location, and stages `external_sumstats_input.decode.rerun3.tsv`, the array of
+the aptamers still without a report, which
+[`wdl/autoreporting_decode.rerun3.json`](../wdl/autoreporting_decode.rerun3.json) submits.
+A 0-byte report is a shard that ran and found no locus, and is kept.
 
-```sh
-gsutil ls 'gs://fg-cromwell-4/autoreporting/<run id>/call-report/**/*.report.out' \
-  | awk 'BEGIN{OFS="\t"}{print "deCODE_pQTL_2021", $0}' \
-  | gsutil cp - gs://finngen-commons/results_api_metadata/autoreporting.decode.fofn
-```
+**What the first submission taught.** Run `2f2fafa8` (2026-09-21) launched all 4,844
+shards at once and lost most of them to one mechanism: within the first ten minutes,
+about a hundred shards failed opening a `gs://` file from pysam — the LD panel, gnomAD or
+the annotation — with `Invalid argument`, which htslib returns for an HTTP 4xx other than
+401/403/404 (a wrong token gives `Operation not permitted`; checked against the image), so
+almost certainly 429 from thousands of shards opening the same 23 panel files at the same
+moment. `main.py` retries a failing *fetch* without bound but opens the panel exactly
+once, so the shard exits 1. Cromwell's default failure mode is `NoNewCalls`: from the
+first exit 1 it issued no more attempts, so every shard preempted after that point stayed
+dead, and 4,210 of the 4,844 ended without a return code. Only 524 produced a report. Two
+things are set differently for the rerun:
 
-(`**` catches the `attempt-2/` directories a preempted shard leaves behind; a shard whose
-first attempt wrote no file has only the retry.)
+- [`wdl/autoreporting.cromwell_options.decode.json`](../wdl/autoreporting.cromwell_options.decode.json)
+  sets `workflow_failure_mode` to `ContinueWhilePossible`, and the `report` task runtime in
+  the autoreporting WDL carries `maxRetries: 2`, so a 4xx at startup costs one retry rather
+  than the run. Both are needed together: the second run had `maxRetries` but the default
+  failure mode, and only 5 of its 546 failed shards were retried — the ones that failed
+  before the workflow entered its failing state;
+- the remaining aptamers are resubmitted from a new input array that excludes every
+  aptamer with a report in any earlier run (the staging script above builds it).
+
+**What the second submission taught.** Run `965f9ac8` reran the 4,320 leftovers with the
+narrow fetch. Shards now finished in minutes rather than hours, and the startup 4xx
+recurred on only 23 shards, but 546 of the first 2,122 to finish were OOM-killed at 4 GB
+during the LD prefetch. That image's `ld_grouping` fetched the partners of **every**
+candidate lead at threshold 0 and held all of them until the greedy loop had consumed the
+pile, so memory grew with the candidate count: `monitoring.log` showed about 2.3 GB before
+the prefetch and roughly 0.9 GB more per 1,000 candidates, and no shard above ~1,300
+candidates survived at 4 GB. The `external_sumstats_jk` branch of autoreporting (image
+`autorep:20260610.1`) fetches LD lazily, 500 leads at a time in significance order,
+drops each entry once its lead is processed or consumed, and never fetches a lead that a
+stronger one absorbed as a partner; the narrow fetch is its default, so the WDL input for
+it is gone. Rehearsed locally under a 4 GB cap: `seq.16828.8` (9,707 candidates) peaked at
+1.37 GB with a report identical to the prefetching image's; the heaviest aptamer
+(`seq.2730.58`, 75,660 candidates, 27k of them in the MHC) peaked at 3.4 GB after three
+hours on four shared cores, where the prefetch would have needed on the order of 70 GB,
+and `seq.17692.2` (55,566) at 1.7 GB. A batch of 500 MHC leads is what sets the peak, so
+the `report` task gets 6 GB rather than 4. The config now names that image;
+the leftover array comes from the staging script above. The branch still opened the
+panel once without a retry at that point, so `maxRetries` and the options file stayed.
+
+**What the third submission taught.** Run `f851d0ec` (image `20260610.1`, the full array,
+4 GB, `maxRetries` and the options file) finished 4,421 of 4,838 shards, and 409 of the
+417 failures were again OOM kills during grouping: 97 of them before the first LD batch
+had returned, on any chromosome, on aptamers with as few as 421 candidates. The lazy
+fetch was not the cause. The report command loads the local GWAS catalog (488 MB TSV)
+into pandas as strings **before** grouping, because `main.py` builds the catalog
+annotation up front; measured in the image that frame is 0.94 GB in the parent, and each
+of the four forked LD workers ends up with a private copy of about 0.9 GB, because the
+garbage collector walks the inherited objects and copies their pages. Four workers plus
+the parent is about 4.5 GB on a VM with 3.8 GB. The local rehearsals never saw it because
+they left the catalog out (its allele VCF is unreadable to the VM service account).
+Two changes in the `external_sumstats_jk` working tree, image `autorep:20260922.1`
+(`20260610.1` with `Scripts/` laid over it, recipe in
+`/mnt/disks/data/decode/test/derived_image/`):
+
+- `LocalDB` keeps the catalog path and reads the frame on first query, in the annotation
+  stage after the worker pool is gone;
+- `LD_FETCH_BATCH` 500 → 100: a batch's partner rows exist in the workers, in flight and
+  in the parent at once, and at 500 leads that transient alone reached 2.2 GB on a
+  1,047-lead aptamer.
+
+Measured on `seq.12536.46` (1,047 candidates, killed six times in the cloud) with the
+catalog in the command and a 3 GB cap: the unpatched image was killed at 3.0 GB during
+grouping; the patched image grouped at a 1.0 GB peak and finished at 1.8 GB, the catalog
+stage in a single process. The heaviest aptamer, `seq.2730.58`, finished under the same
+cap at 2.7 GB with the same 1,109 loci as before, so the `report` task keeps 6 GB: the
+4 GB VM has about 2.8 GB left after the OS and the Batch agent. Test suite unchanged: 33
+pass, the same 8 pre-existing failures as the branch tip.
+
+**What the fourth submission taught.** Run `aefa2c90` (image `20260922.1`, the full array,
+6 GB) had no OOM kill at all; its only failures, 72 of the first 2,937 shards, were the
+startup 4xx opens again, all in the first quarter hour, and none was retried. The panel
+open in `TabixLD.__init__` and the annotation and sumstat opens in `load_tabix.py` now go
+through `data_access.db.open_tabix`, which retries a `gs://` open with exponential backoff
+(1 to 32 s, six tries) and fails a local path on the first try; image `autorep:20260922.2`.
+`maxRetries` and the options file stay as a second line.
+
+The submitted WDL also lacked the `ld_assume_variant1_indexed` input (the JSON carried it;
+Cromwell ignores an input the WDL does not declare), so the 524 reports came from wide
+fetches: a median of 65 minutes per shard for a median of 120 candidate leads, and two
+shards with 2,000+ candidates were OOM-killed at 4 GB. The shards that never finished have a
+median of 1,200 candidates. The WDL in the `external_sumstats_only` checkout of
+`~/autoreporting` declares the input.
 
 **Step 2** is [`wdl/create_pseudo_credible_sets.decode.json`](../wdl/create_pseudo_credible_sets.decode.json):
 the `ext` flags plus `--data-type pQTL --cell-type plasma`, the phenotype JSON, and output
@@ -363,7 +448,7 @@ Two properties of pQTL sumstats matter for how the thresholds behave:
   halves this — 255 sets, 176 singletons, 244 still on chr21 — because leads more than
   1 Mb from the anchor survive and are not anchors themselves. A pseudo CS at a cis-pQTL
   must therefore be read as "the top signal"; what to do with the rest is the open design
-  question recorded on the epic (`genetics-results-munge-cbt`), and the full run has not
-  been submitted pending it.
+  question recorded on the epic (`genetics-results-munge-cbt`); step 1 does not depend
+  on it, step 2 does.
 - the modest aptamers behave like a GWAS: `seq.4876.32` (F9) gave 7 sets, three of them
   cis at chrX:139.5 Mb with real `cs_min_r2`; `seq.7085.81` (CDSN) 58 sets, 23 singletons.
