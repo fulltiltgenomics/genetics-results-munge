@@ -224,9 +224,9 @@ merge-sorts the per-trait files, de-duplicates, bgzips, and indexes with
 
 `filter_lead_variants` runs **before** set construction (only when *not* given
 `--no-proximity-filter`) and drops weaker secondary lead loci sitting next to a very
-strong signal. All production configs pass `--no-proximity-filter`, so this step is
-currently **disabled** for every dataset; it is documented here for completeness and in
-case it is ever re-enabled.
+strong signal. Every GWAS config passes `--no-proximity-filter`, so this step is
+**disabled** for those datasets; the deCODE pQTL config is the one that leaves it on (see
+the deCODE section for why).
 
 It operates on the locus leads only (rows where `#variant == locus_id`, deduped). For
 each lead it computes a "strength" statistic from the lead's own association:
@@ -272,10 +272,10 @@ lead would also be removed.
 
 Each dataset has an input JSON in [`wdl/`](../wdl/) named
 `create_pseudo_credible_sets.<dataset>.json`. All current datasets share the same core
-flags — `--no-proximity-filter --mlog10p-diff 2 --r2-to-lead-thres 0.6`,
-`r2_high_ld_thres = 0.95`, `filter_hla = true` — and differ only in the input
-file-of-filenames, the phenotype-name JSON, and (for non-FinnGen inputs) the
-`column_aliases` map. `--dataset` is not in the input JSON: the fofn has two columns per
+flags — `--mlog10p-diff 2 --r2-to-lead-thres 0.6`, `r2_high_ld_thres = 0.95`,
+`filter_hla = true` — and differ in the input file-of-filenames, the phenotype-name JSON,
+(for non-FinnGen inputs) the `column_aliases` map, and whether `--no-proximity-filter` is
+passed: every GWAS config passes it, the deCODE pQTL config does not. `--dataset` is not in the input JSON: the fofn has two columns per
 line, dataset name and report file path, so one run can mix several datasets. Outputs land under
 `gs://finngen-commons/results_api_data/credible_sets/.../` per the matching
 `*.cromwell_options.*.json`, and are loaded into BigQuery by
@@ -446,9 +446,13 @@ Two properties of pQTL sumstats matter for how the thresholds behave:
   extends far below anything an LD panel records, and neither step distinguishes shadow
   from signal there. Re-enabling step 2's proximity filter (anchors at χ² > 250, ±1 Mb)
   halves this — 255 sets, 176 singletons, 244 still on chr21 — because leads more than
-  1 Mb from the anchor survive and are not anchors themselves. A pseudo CS at a cis-pQTL
-  must therefore be read as "the top signal"; what to do with the rest is the open design
-  question recorded on the epic (`genetics-results-munge-cbt`); step 1 does not depend
-  on it, step 2 does.
+  1 Mb from the anchor survive and are not anchors themselves. **Decision (2026-09-22):**
+  the deCODE step-2 config leaves the proximity filter on — the one production config
+  that does — and a pseudo CS at a cis-pQTL is to be read as "the top signal". Secondary
+  sets that survive inside a cis window are limited by the LD panel, not evidence of
+  independent signals; deCODE's own conditional analysis is the source for those. A
+  significance-relative suppression radius and a one-set-per-window rule were considered
+  and rejected: both would invent a rule the panel cannot verify, since the panel is why
+  the shadow exists.
 - the modest aptamers behave like a GWAS: `seq.4876.32` (F9) gave 7 sets, three of them
   cis at chrX:139.5 Mb with real `cs_min_r2`; `seq.7085.81` (CDSN) 58 sets, 23 singletons.
