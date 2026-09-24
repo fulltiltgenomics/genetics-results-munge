@@ -733,10 +733,11 @@ task collect_results {
 
         set -euxo pipefail
 
-        # list input files for sort
-        for f in ~{sep=' ' pseudo_cs_files}; do
-            echo "$f"
-        done | tr '\n' '\0' > merge_these
+        # the file list goes through write_lines rather than an inline for-loop over the array:
+        # under set -x bash traces the whole expanded list on every iteration, which with
+        # 4,844 deCODE inputs was ~0.9 MB of stderr per file, two loops, ~4 h of run time
+        # (run ca52f613, 2026-09-23)
+        tr '\n' '\0' < ~{write_lines(pseudo_cs_files)} > merge_these
 
         # merge-sort by chr(6), pos(7), ref(8), alt(9), trait(3)
         # header lines sort to top via -g treating "chr" as 0; uniq removes duplicates
@@ -746,10 +747,7 @@ task collect_results {
         tabix -s6 -b7 -e7 ~{output_file}
 
         # sanity check row counts
-        n_lines_orig=0
-        for f in ~{sep=' ' pseudo_cs_files}; do
-            n_lines_orig=$((n_lines_orig + $(tail -n+2 "$f" | wc -l)))
-        done
+        n_lines_orig=$(xargs -0 -I{} sh -c 'tail -n+2 "{}" | wc -l' < merge_these | awk '{s+=$1} END{print s+0}')
         n_lines_output=$(zcat ~{output_file} | tail -n+2 | wc -l)
         if [ "$n_lines_orig" -ne "$n_lines_output" ]; then
             echo "ERROR: row count mismatch: expected $n_lines_orig, got $n_lines_output" >&2
