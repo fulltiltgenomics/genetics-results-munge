@@ -62,8 +62,15 @@ def merge(
 # map_from_column = "trait"
 # map_to_column = "gene_name"
 
-data_file = "/mnt/disks/data/eqtl_cat_r8_run/eQTL_Catalogue_R8.tsv"
-gene_mapping_file = "/mnt/disks/data/gencode.v39.annotation.genes.tsv"
+# data_file = "/mnt/disks/data/eqtl_cat_r8_run/eQTL_Catalogue_R8.tsv"
+# gene_mapping_file = "/mnt/disks/data/gencode.v39.annotation.genes.tsv"
+# map_from_column = "trait"
+# map_to_column = "gene_name"
+
+# deCODE pQTL pseudo credible sets: trait is the SomaScan target gene symbol, resolved with
+# the same mapping table as the FinnGen SomaScan sets, whose API entry is gencode 49
+data_file = "/mnt/disks/data/decode/deCODE_pQTL_2021_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
+gene_mapping_file = "/mnt/disks/data/gencode.v49.annotation.genes.tsv"
 map_from_column = "trait"
 map_to_column = "gene_name"
 
