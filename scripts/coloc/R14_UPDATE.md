@@ -2,8 +2,12 @@
 
 How to regenerate the two coloc munged files from the R14 colocalization results:
 
-- `gs://finngen-commons/results_api_data/coloc/coloc.credsets.munged.tsv.gz`
-- `gs://finngen-commons/results_api_data/coloc/colocQC.munged.tsv.gz`
+- `gs://finngen-commons/results_api_data/coloc/finngen_r14_coloc.credsets.munged.tsv.gz`
+- `gs://finngen-commons/results_api_data/coloc/finngen_r14_colocQC.munged.tsv.gz`
+
+These are the names results-api's `coloc.py` profiles and genetics-results-db's
+`load_credsets_coloc.sh` read; the unprefixed `coloc.credsets.munged.tsv.gz` /
+`colocQC.munged.tsv.gz` were the pre-R14 files and are gone from the bucket.
 
 The scripts in `scripts/coloc/` (`munge_coloc_credset_file.{py,sh}`,
 `munge_coloc_file.{py,sh}`, `munge_coloc_file_map_traits.py`) are written for the R14
@@ -87,26 +91,26 @@ SCRIPTS=/home/jkarjala/suite/genetics-results-munge/scripts/coloc
 gcloud storage cp gs://finngen-production-library-green/finngen_R14/finngen_R14_analysis_data/colocalization/coloc.credsets.tsv.gz .
 gcloud storage cp gs://finngen-production-library-green/finngen_R14/finngen_R14_analysis_data/colocalization/colocQC.tsv.gz .
 
-# credible sets  -> coloc.credsets.munged.tsv.gz (+ .tbi)
+# credible sets  -> finngen_r14_coloc.credsets.munged.tsv.gz (+ .tbi)
 zcat coloc.credsets.tsv.gz > coloc.credsets.tsv
-"$SCRIPTS/munge_coloc_credset_file.sh" coloc.credsets.tsv "$META" coloc.credsets.munged.tsv
+"$SCRIPTS/munge_coloc_credset_file.sh" coloc.credsets.tsv "$META" finngen_r14_coloc.credsets.munged.tsv
 
-# QC / H4       -> colocQC.munged.tsv.gz (+ .tbi)
+# QC / H4       -> finngen_r14_colocQC.munged.tsv.gz (+ .tbi)
 zcat colocQC.tsv.gz > colocQC.tsv
-"$SCRIPTS/munge_coloc_file.sh" colocQC.tsv "$META" colocQC.munged.tsv
+"$SCRIPTS/munge_coloc_file.sh" colocQC.tsv "$META" finngen_r14_colocQC.munged.tsv
 ```
 
 The wrappers run the python munge, an awk NA-completeness check on required columns,
 then sort + bgzip + tabix. The QC wrapper also runs the trait gene-name mapping pass
-and writes the final `colocQC.munged.tsv.gz`.
+and writes the final `finngen_r14_colocQC.munged.tsv.gz`.
 
 ## Upload (only when validated)
 
 Do **not** upload until the verification below passes.
 
 ```bash
-gcloud storage cp coloc.credsets.munged.tsv.gz{,.tbi} gs://finngen-commons/results_api_data/coloc/
-gcloud storage cp colocQC.munged.tsv.gz{,.tbi}        gs://finngen-commons/results_api_data/coloc/
+gcloud storage cp finngen_r14_coloc.credsets.munged.tsv.gz{,.tbi} gs://finngen-commons/results_api_data/coloc/
+gcloud storage cp finngen_r14_colocQC.munged.tsv.gz{,.tbi}        gs://finngen-commons/results_api_data/coloc/
 ```
 
 ## Verify
