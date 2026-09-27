@@ -484,7 +484,7 @@ with gencode v49 (the version the API entry declares), writes the `.qtl.tsv.gz` 
 to it that backs `/credible_sets_by_qtl_gene`; 36 trait names stay unmapped (the aptamer-id
 traits, Y-linked genes, alt-contig KIR and HLA-DRB3, a few renamed symbols), and no other
 gencode version does better. The dataset is `decode_pqtl_2021` under the existing `decode`
-resource in `datasets.yaml`, served by results-api's finngen profile (per-aptamer files by
+resource in `datasets.yaml`, served by results-api in both profiles (per-aptamer files by
 `trait_original`, the collected file, the gene-indexed file), loaded by
 `genetics-results-db/scripts/load_pseudo.sh`, and mapped to `decode` in `credible_sets_v`
 by a `deCODE_pQTL%` rule because the lowercase fallback would give `decode_pqtl_2021`.
