@@ -456,3 +456,35 @@ Two properties of pQTL sumstats matter for how the thresholds behave:
   the shadow exists.
 - the modest aptamers behave like a GWAS: `seq.4876.32` (F9) gave 7 sets, three of them
   cis at chrX:139.5 Mb with real `cs_min_r2`; `seq.7085.81` (CDSN) 58 sets, 23 singletons.
+
+**What the step-2 submissions taught.** Run `ec79537b` (2026-09-22) failed on every
+shard with `missing columns ... ['fg_af_alt']`: the WDL it was submitted with was a copy of
+the June version, without the optional-column fill, the `.report.out` suffix strip (every
+aptamer would have been named `seq`) and the chrX panel-id mapping. Compare the `script`
+Cromwell writes into the run's bucket with the repo heredoc before anything else. Run
+`ca52f613` (2026-09-23) then finished all 4,844 shards but crawled in `collect_results`:
+under `set -x` the inline `for f in <array>` loop traced all 4,844 paths on every
+iteration, ~0.9 MB of stderr per file across two loops, and the log agent slowed as the
+file grew (36 files a minute on day one, one every 2.5 minutes on day four), so after four
+days it was still short of 40 % of its second loop. The task now reads the file list from
+`write_lines()` and counts rows with `xargs -0`; run `693eac1e` (2026-09-27) reused all
+4,844 shards from the call cache and its collect step took the three-hour localization
+plus a few minutes.
+
+**Result** (`693eac1e`): 957,736 rows in 130,685 pseudo credible sets (67,013 singletons)
+over 4,808 aptamers and 4,572 distinct gene symbols. The 36 aptamers with a 0-byte
+report have no rows; the seven aptamers with no gene in the mapping keep their id as
+`trait`; `aaf` is null throughout; 37 sets (chr2 near 90 Mb, a cluster on chr11) have
+`cs_min_r2` NA where the panel has no rows, none of them on chrX. COL6A1 has the 255 sets
+the proximity-filter rehearsal predicted, and 3,530 anchor leads have no weaker lead
+within 1 Mb.
+
+**Downstream.** `scripts/create_gene_indexed_qtl_file.py`, pointed at the collected file
+with gencode v49 (the version the API entry declares), writes the `.qtl.tsv.gz` copy next
+to it that backs `/credible_sets_by_qtl_gene`; 36 trait names stay unmapped (the aptamer-id
+traits, Y-linked genes, alt-contig KIR and HLA-DRB3, a few renamed symbols), and no other
+gencode version does better. The dataset is `decode_pqtl_2021` under the existing `decode`
+resource in `datasets.yaml`, served by results-api's finngen profile (per-aptamer files by
+`trait_original`, the collected file, the gene-indexed file), loaded by
+`genetics-results-db/scripts/load_pseudo.sh`, and mapped to `decode` in `credible_sets_v`
+by a `deCODE_pQTL%` rule because the lowercase fallback would give `decode_pqtl_2021`.
