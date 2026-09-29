@@ -90,7 +90,8 @@ parts that got copied across the family and then had to be corrected across it. 
 
 - sumstats and exome/burden: `write_sumstat_output()` / `write_exome_output()` from
   `scripts/sumstat_utils.py`. bgzipped TSV + tabix index, plus a `mlog10p > 4` filtered
-  companion with its own index. Write your own bgzip pipe only where the output's shape
+  companion with its own index (`mlog10p_col=None` skips the companion, for a product that
+  carries no p-value at all — the ASC counts — not for skipping the filter on one that does). Write your own bgzip pipe only where the output's shape
   genuinely differs — rows that never fit one DataFrame, a product that is a directory of
   files rather than one file, or a product that carries no coordinates at all and therefore
   has no index for the shared writer to build — and say which in that script's docstring. Several already do;

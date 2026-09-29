@@ -56,6 +56,12 @@ python3 munge_ibd_supp_variants.py \
 	--n-controls 478363 \
 	--output-dir $GCS/ibd
 
+# --- ASC 2026 autism exome counts (no p-values; three BigQuery-only products) ---
+python3 munge_asc.py \
+	--gene-input /mnt/disks/data/asc/ASC2_gene_results.tsv.bgz \
+	--variant-input /mnt/disks/data/asc/ASC2_variant_results.tsv.bgz \
+	--output-dir gs://finngen-commons/results_api_data/exome_results/asc
+
 # --- Genebass gene burden (needs Hail; see scripts/genebass/) ---
 # writes gene_burden_results.tsv.bgz (unfiltered, unsorted),
 # gene_burden_results.mlog10p_gt4.tsv.gz and gene_burden_results_per_trait/,

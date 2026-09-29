@@ -128,7 +128,7 @@ def write_exome_output(
     df: pl.DataFrame,
     output_path: str,
     tabix_args: list[str],
-    mlog10p_col: str = "mlog10p",
+    mlog10p_col: str | None = "mlog10p",
     mlog10p_threshold: float = 4,
     per_trait_dir: str | None = None,
     trait_col: str = "trait_original",
@@ -139,7 +139,9 @@ def write_exome_output(
         df: DataFrame with final columns
         output_path: local or gs:// path for full results (.tsv.gz)
         tabix_args: tabix -s/-b/-e args, e.g. ["-s2", "-b3", "-e3"] for variants
-        mlog10p_col: column name to filter on
+        mlog10p_col: column name to filter on; None writes no filtered companion, for a
+            product that carries no p-value at all (ASC counts) rather than one whose
+            filter would be empty
         mlog10p_threshold: threshold for filtered file
         per_trait_dir: if given, also write one unfiltered `<trait>.tsv.gz` per
             distinct trait there, so the API can serve the dataset by trait the
@@ -161,14 +163,16 @@ def write_exome_output(
     _write_bgzip_tabix(df, local_full, tabix_args)
     print(f"  wrote {df.height} rows to {output_path}")
 
-    filtered = df.filter(pl.col(mlog10p_col) > mlog10p_threshold)
-    _write_bgzip_tabix(filtered, local_filt, tabix_args)
-    filtered_gcs = output_path.replace(".tsv.gz", filtered_suffix)
-    print(f"  wrote {filtered.height} rows with {mlog10p_col} > {mlog10p_threshold} to {filtered_gcs}")
+    if mlog10p_col is not None:
+        filtered = df.filter(pl.col(mlog10p_col) > mlog10p_threshold)
+        _write_bgzip_tabix(filtered, local_filt, tabix_args)
+        filtered_gcs = output_path.replace(".tsv.gz", filtered_suffix)
+        print(f"  wrote {filtered.height} rows with {mlog10p_col} > {mlog10p_threshold} to {filtered_gcs}")
 
     if is_gcs:
         upload_to_gcs(local_full, output_path)
-        upload_to_gcs(local_filt, filtered_gcs)
+        if mlog10p_col is not None:
+            upload_to_gcs(local_filt, filtered_gcs)
 
     if per_trait_dir:
         _write_per_trait(df, per_trait_dir, tabix_args, trait_col)
