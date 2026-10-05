@@ -63,7 +63,7 @@ scripts/nmr_meta_phenotypes.py \
 | `se` | published `SE`, else `s_trait / sqrt(2 f (1-f) (n + z²))`; **null where neither exists** |
 | `cs_min_r2` | **not available**, always `NA` |
 | `aaf` | published MAF, oriented by the annotation's non-Finnish European AF |
-| `most_severe`, `gene_most_severe` | FinnGen variant annotation, matched on the variant id |
+| `most_severe`, `gene_most_severe` | `NA`; stamped onto the munged files afterwards by `scripts/annotate_resource.sh` |
 
 ## The four things the source does not say, and how each was settled
 
@@ -169,7 +169,9 @@ output. What is *missing* is per-column:
 
 - 5,004 rows (0.13 %) have no `mlog10p`, `beta` or `se`;
 - 14,957 of the 295,015 distinct variants (5.1 %) are outside the FinnGen imputation panel, so
-  they have no `aaf`, `most_severe` or `gene_most_severe`;
+  they have no `aaf`;
+- `most_severe` and `gene_most_severe` are null everywhere until `scripts/annotate_resource.sh`
+  stamps them;
 - `cs_min_r2` is null everywhere.
 
 244 rows repeat a variant within one credible set, which the source also does; `credible_sets_v`

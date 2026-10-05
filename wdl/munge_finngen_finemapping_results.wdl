@@ -14,6 +14,7 @@ workflow munge_finngen_finemapping_results {
         Boolean keep_low_purity_cs
         Boolean keep_first_low_purity_cs
         File? variant_annotation_file
+        Boolean clear_consequence = false
         File? phenotype_json
         String? cell_type
         String output_file
@@ -52,6 +53,9 @@ workflow munge_finngen_finemapping_results {
         variant_annotation_file: {
             help: "Optional location of variant annotation file (tsv file with at least these columns: #variant, most_severe, gene_most_severe)"
         }
+        clear_consequence: {
+            help: "Whether to write most_severe and gene_most_severe as NA, for a resource whose consequence is stamped afterwards by scripts/annotate_resource.sh (default false)"
+        }
         phenotype_json: {
             help: "Optional JSON file with phenotype metadata (array of objects with phenocode and phenostring fields) for mapping trait names"
         }
@@ -79,6 +83,7 @@ workflow munge_finngen_finemapping_results {
         keep_low_purity_cs = keep_low_purity_cs,
         keep_first_low_purity_cs = keep_first_low_purity_cs,
         variant_annotation_file = variant_annotation_file,
+        clear_consequence = clear_consequence,
         phenotype_json = phenotype_json,
         data_types = metadata[0],
         traits = metadata[1],
@@ -125,6 +130,7 @@ task join_and_merge {
         Boolean keep_low_purity_cs
         Boolean keep_first_low_purity_cs
         File? variant_annotation_file
+        Boolean clear_consequence = false
         File? phenotype_json
         String? cell_type
         String output_file
@@ -167,6 +173,9 @@ task join_and_merge {
         }
         variant_annotation_file: {
             help: "Optional location of variant annotation file (tsv file with at least these columns: #variant, most_severe, gene_most_severe)"
+        }
+        clear_consequence: {
+            help: "Whether to write most_severe and gene_most_severe as NA, for a resource whose consequence is stamped afterwards by scripts/annotate_resource.sh (default false)"
         }
         phenotype_json: {
             help: "Optional JSON file with phenotype metadata (array of objects with phenocode and phenostring fields) for mapping trait names"
@@ -368,6 +377,7 @@ task join_and_merge {
             variant_annotation: pl.DataFrame | None = None,
             keep_low_purity_cs: bool = False,
             keep_first_low_purity_cs: bool = False,
+            clear_consequence: bool = False,
         ) -> tuple[pl.DataFrame, pl.DataFrame]:
             snp_df = pl.read_csv(
                 snp_file,
@@ -552,6 +562,11 @@ task join_and_merge {
                     .drop("variant_id")
                 )
 
+            if clear_consequence:
+                # the columns stay so the layout is the one annotate_resource.sh and the readers expect
+                na = pl.lit(None, dtype=pl.Utf8)
+                merged_df = merged_df.with_columns(na.alias("most_severe"), na.alias("gene_most_severe"))
+
             return (
                 # redefine column order after adding trait_original
                 merged_df.select(
@@ -590,6 +605,7 @@ task join_and_merge {
         keep_low_purity_cs = True if "~{keep_low_purity_cs}" == "true" else False
         keep_first_low_purity_cs = True if "~{keep_first_low_purity_cs}" == "true" else False
         variant_annotation_file = "~{variant_annotation_file}" if "~{defined(variant_annotation_file)}" == "true" else None
+        clear_consequence = True if "~{clear_consequence}" == "true" else False
         phenotype_json_file = "~{phenotype_json}" if "~{defined(phenotype_json)}" == "true" else None
 
         if trait_mapping_file is not None:
@@ -644,6 +660,7 @@ task join_and_merge {
                     variant_annotation,
                     keep_low_purity_cs,
                     keep_first_low_purity_cs,
+                    clear_consequence,
                 )
                 if len(null_traits) > 0:
                     null_traits.write_csv(

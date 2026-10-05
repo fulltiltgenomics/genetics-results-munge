@@ -151,8 +151,8 @@ alongside the PGC schizophrenia [pseudo credible sets](#pseudo-credible-sets) un
 resource, as dataset `PGC_SCZ_2022`.
 
 ST11a is on GRCh37 and has no ref/alt alleles, so the GRCh38 locus, alleles and allele frequency
-come from the munged wave 3 summary statistics matched on rsid, and the consequence annotation
-from the FinnGen variant annotation:
+come from the munged wave 3 summary statistics matched on rsid, with the FinnGen variant annotation
+locating the rsids those do not carry:
 
 ```
 scripts/munge_pgc_scz_finemap.sh \
@@ -162,7 +162,8 @@ data/R14_annotated_variants_v0.small.gz \
 data/pgc_scz_finemap
 ```
 
-The output has `NA` in `cs_min_r2` throughout and in `aaf` on chromosome X, and its credible sets
+The output has `NA` in `cs_min_r2` throughout and in `aaf` on chromosome X, `most_severe` and
+`gene_most_severe` are `NA` until `scripts/annotate_resource.sh` stamps them, and its credible sets
 can hold several independent signals because FINEMAP was run with more than one causal variant
 allowed per locus. See [docs/pgc-scz-finemapping.md](docs/pgc-scz-finemapping.md) for the full
 column mapping, the caveats and what is dropped.
@@ -320,4 +321,4 @@ QTL study rather than a GWAS.
 
 ## variant annotation
 
-For FinnGen data, `most_severe` and `gene_most_severe` come from the FinnGen variant annotation joined in the munge, so a variant outside the FinnGen imputation panel has `NA` in both. For the resources that are not FinnGen data the munge writes `NA`, and `scripts/annotate_resource.sh` stamps both columns afterwards from the gnomAD consequence file that `build_gnomad_annotation.py` writes; a variant gnomAD does not hold stays `NA`.
+For FinnGen data, `most_severe` and `gene_most_severe` come from the FinnGen variant annotation joined in the munge, so a variant outside the FinnGen imputation panel has `NA` in both. For the resources that are not FinnGen data the munge writes `NA` (the WDL pipeline does so when its `clear_consequence` input is true, as it is for UKB-PPP), and `scripts/annotate_resource.sh` stamps both columns afterwards from the gnomAD consequence file that `build_gnomad_annotation.py` writes; a variant gnomAD does not hold stays `NA`.

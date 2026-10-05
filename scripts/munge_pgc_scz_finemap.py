@@ -5,7 +5,8 @@ supplementary table ST11a) to the credible set TSV format used by the rest of th
 Input
   --input        ST11a_95_perc_Credible_Sets.tsv, one row per credible set variant, GRCh37
   --sumstats     daner_PGC_SCZ_w3_90_0418b.munged.tsv.gz, the munged wave 3 summary statistics
-  --annotation   FinnGen annotated variants (tabix indexed), for most_severe / gene_most_severe
+  --annotation   FinnGen annotated variants (tabix indexed), for the GRCh38 locus of the rsids
+                 the summary statistics do not carry
 
 Output
   <output_dir>/<dataset>_cs_95.tsv   unsorted, with a header; the shell driver sorts, bgzips
@@ -174,37 +175,6 @@ def read_locus_by_rsid(path: str, rsids: pl.DataFrame) -> pl.DataFrame:
     ).select("chr", "pos", "ref", "alt", "rsid", pl.lit(None, dtype=pl.Float64).alias("af"))
 
 
-def read_annotation(path: str, variants: pl.DataFrame) -> pl.DataFrame:
-    """Fetch the annotation of the given variants with tabix.
-
-    Unlike the rsid fallback above this can use the index: the regions are the credible set
-    positions themselves, so a few thousand single-base lookups replace a full scan.
-    """
-    regions = "\n".join(
-        f"{chrom}\t{pos - 1}\t{pos}"
-        for chrom, pos in variants.select("chr", "pos").unique().sort("chr", "pos").iter_rows()
-    )
-    proc = subprocess.run(
-        ["tabix", "-R", "-", path],
-        input=regions,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    anno = pl.read_csv(
-        io.BytesIO(proc.stdout.encode()),
-        separator="\t",
-        has_header=False,
-        new_columns=annotation_header(path),
-        null_values=["NA"],
-        schema_overrides={"variant": pl.Utf8},
-    ).select(pl.col("variant").alias("variant_id"), "most_severe", "gene_most_severe")
-
-    return anno.join(variants.select("variant_id"), on="variant_id", how="semi").unique(
-        subset="variant_id"
-    )
-
-
 def harmonize(st11a: pl.DataFrame, locus: pl.DataFrame) -> pl.DataFrame:
     """Join ST11a to the resolved GRCh38 loci by rsid and orient the effect on the alt allele.
 
@@ -308,12 +278,8 @@ def main() -> None:
 
     cs = assign_credible_sets(cs)
 
-    print(f"Reading annotation from {args.annotation}...")
-    anno = read_annotation(args.annotation, cs.select("chr", "pos", "variant_id").unique())
-    print(f"  {anno.height} of {cs['variant_id'].n_unique()} variants annotated")
-
     output_path = Path(args.output_dir) / f"{args.dataset}_cs_95.tsv"
-    cs.join(anno, on="variant_id", how="left").with_columns(
+    cs.with_columns(
         pl.lit(args.dataset).alias("dataset"),
         pl.lit("GWAS").alias("data_type"),
         pl.lit(args.trait).alias("trait"),
@@ -324,6 +290,10 @@ def main() -> None:
         # wave 3's own alt allele frequency, the same source the PGC pseudo credible sets use
         _sci("af").alias("aaf"),
         pl.lit(None, dtype=pl.Float64).alias("cs_min_r2"),
+        # consequence is stamped afterwards by annotate_resource.sh; the columns are written
+        # here so the layout is the one that step and the readers expect
+        pl.lit(None, dtype=pl.String).alias("most_severe"),
+        pl.lit(None, dtype=pl.String).alias("gene_most_severe"),
     ).select(OUTPUT_COLUMNS).write_csv(output_path, separator="\t", null_value="NA")
     print(f"wrote {output_path}")
 

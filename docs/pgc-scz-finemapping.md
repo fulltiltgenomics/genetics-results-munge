@@ -28,7 +28,8 @@ scripts/munge_pgc_scz_finemap.sh \
 The three inputs are the supplementary table, the munged wave 3 summary statistics
 (`gs://<bucket>/results_api_data/sumstats/PGC/`, see [`run_sumstats.sh`](../run_sumstats.sh)) and
 a tabix-indexed FinnGen variant annotation
-(`gs://<bucket>/results_api_data/variant_annotations/`). It writes the merged bgzipped and
+(`gs://<bucket>/results_api_data/variant_annotations/`), which locates the rsids the summary
+statistics do not carry. It writes the merged bgzipped and
 tabix-indexed file, the per-trait file under `individual/` and `credible_set_stats.tsv`, in the
 layout the API expects.
 
@@ -45,7 +46,7 @@ layout the API expects.
 | `cs_size` | members surviving the rsid match |
 | `cs_min_r2` | **not available**, always `NA` |
 | `aaf` | wave 3 alt allele frequency; `NA` on chromosome X |
-| `most_severe`, `gene_most_severe` | FinnGen variant annotation, matched on the variant id |
+| `most_severe`, `gene_most_severe` | `NA`; stamped onto the munged files afterwards by `scripts/annotate_resource.sh` |
 
 ST11a is on **GRCh37** and carries no reference/alternative alleles, only an effect and an other
 allele. Rather than a liftover chain, the GRCh38 locus comes from the munged wave 3 summary
@@ -88,9 +89,10 @@ Of the 20766 ST11a rows, **20508 (98.8 %) survive** in all **255** sets:
 - 127 more — chromosome X, plus a handful of autosomal ones — are recovered from the variant
   annotation;
 - 258 have an rsid in neither and are dropped, which trims 36 sets (worst: `rs2532240`, 190 of its
-  1742 members);
-- 20205 of the surviving 20508 get a `most_severe` / `gene_most_severe` annotation; the rest are
-  outside the FinnGen imputation panel.
+  1742 members).
+
+`most_severe` and `gene_most_severe` are `NA` for every row until `scripts/annotate_resource.sh`
+stamps them.
 
 `cs_size` counts the members that survive, not the published set size.
 

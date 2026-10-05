@@ -9,8 +9,8 @@ Input
   --lead-variants  EUR_all_lead_variants.tsv.gz from the companion record
                    (Zenodo 10.5281/zenodo.18377015), the same cohort's published BETA, SE
                    and LOG10P at every genome-wide significant lead variant
-  --annotation     FinnGen annotated variants (tabix indexed), for most_severe /
-                   gene_most_severe and for deciding which allele the published MAF belongs to
+  --annotation     FinnGen annotated variants (tabix indexed), for deciding which allele the
+                   published MAF belongs to
 
 Output
   <output_dir>/<dataset>_cs_95.tsv   unsorted, with a header; the shell driver sorts, bgzips
@@ -132,8 +132,6 @@ ANNOTATION_COLUMNS = [
     "AF",
     "GENOME_enrichment_nfe",
     "EXOME_enrichment_nfe",
-    "most_severe",
-    "gene_most_severe",
 ]
 
 OUTPUT_COLUMNS = [
@@ -456,6 +454,10 @@ def main() -> None:
         # credible sets into 21,923
         pl.len().over("molecular_trait_id", "cs_id").cast(pl.Int32).alias("cs_size"),
         pl.lit(None, dtype=pl.Float64).alias("cs_min_r2"),
+        # consequence is stamped afterwards by annotate_resource.sh; the columns are written
+        # here so the layout is the one that step and the readers expect
+        pl.lit(None, dtype=pl.Utf8).alias("most_severe"),
+        pl.lit(None, dtype=pl.Utf8).alias("gene_most_severe"),
     ).select(OUTPUT_COLUMNS).write_csv(output_path, separator="\t", null_value="NA")
     print(f"wrote {output_path}")
 
