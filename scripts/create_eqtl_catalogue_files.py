@@ -132,11 +132,9 @@ def merge(
     null_traits = merged_df.filter(pl.col("trait").is_null())
 
     if variant_annotation is not None:
-        merged_df = merged_df.drop(
-            [c for c in merged_df.columns if c.endswith("most_severe") or c.startswith("aaf")]
-        )
         merged_df = (
-            merged_df.with_columns(
+            merged_df.drop("aaf")
+            .with_columns(
                 pl.concat_str(
                     [pl.col("chr"), pl.col("pos").cast(pl.Utf8), pl.col("ref"), pl.col("alt")],
                     separator=":",
@@ -145,6 +143,11 @@ def merge(
             .join(variant_annotation, on="variant_id", how="left")
             .drop("variant_id")
         )
+
+    # consequence is stamped afterwards by annotate_resource.sh; the columns are written here
+    # so the layout is the one that step and the readers expect
+    na = pl.lit(None, dtype=pl.Utf8)
+    merged_df = merged_df.with_columns(na.alias("most_severe"), na.alias("gene_most_severe"))
 
     return (
         merged_df.sort("chr", "pos", "ref", "alt", "trait"),
@@ -200,7 +203,7 @@ if __name__ == "__main__":
             pl.scan_csv(variant_annotation_file, separator="\t")
             .rename({"#variant": "variant_id"})
             .with_columns(pl.col("AF").map_elements(lambda x: f"{x:.3e}", return_dtype=pl.Utf8).alias("aaf"))
-            .select("variant_id", "aaf", "most_severe", "gene_most_severe")
+            .select("variant_id", "aaf")
             .collect()
         )
     else:

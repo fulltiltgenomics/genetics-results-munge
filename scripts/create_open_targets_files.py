@@ -3,10 +3,8 @@ Convert an Open Targets credible set release to the credible set TSV format used
 this repository.
 
 Input
-  <data_dir>/credible_set/*.parquet   credible set parquet files of an Open Targets release
-  <variant_annotation_file>           FinnGen annotated variants, needs the columns
-                                      #variant (chr:pos:ref:alt, X as 23), AF, most_severe,
-                                      gene_most_severe
+  <data_dir>/credible_set/*.parquet    credible set parquet files of an Open Targets release
+  <data_dir>/study_metadata/*.parquet  its study table, read for studyId and traitFromSource
 
 Output
   <data_dir>/<dataset>_cs_95.tsv      unsorted, with a header; the shell driver sorts, bgzips
@@ -16,14 +14,23 @@ Only non-FinnGen GWAS credible sets fine-mapped with SuSiE are kept, and of thos
 variants flagged as belonging to the 95 % credible set. The 99 % credible sets are not written
 because the release does not consistently distinguish them from the 95 % ones.
 
+`trait` is the study's traitFromSource made whitespace-free (see `sanitize_trait_name`) followed
+by `_(<studyId>)`, and `trait_original` is the bare studyId. A study's name is not unique - many
+accessions share one - so the accession suffix is what makes `trait` identify a study, and
+consumers cut exactly that suffix to get the name back.
+
+`aaf`, `most_severe` and `gene_most_severe` are written as NA. The release has no allele
+frequency, and consequence is stamped afterwards by `annotate_resource.sh`, so that an
+annotation refresh needs no re-munge.
+
 Each parquet file is converted on its own so that only one file's worth of exploded loci is held
-at a time; the annotation is read once and reduced to the variants actually present in the
-credible sets before the single join.
+at a time.
 """
 
 import glob
 import os
 import sys
+import unicodedata
 
 import numpy as np
 import polars as pl
@@ -106,7 +113,7 @@ def convert_pq_to_df(parquet_path: str) -> pl.DataFrame:
 
     df = df.with_columns(pl.col("variantId").str.split("_").alias("_cpra"))
     return df.with_columns(
-        pl.col("studyId").alias("trait"),
+        pl.col("studyId").alias("trait_original"),
         pl.col("_cpra").list.get(0).replace(CHR_MAP).cast(pl.Int32, strict=False).alias("chr"),
         pl.col("_cpra").list.get(1).cast(pl.Int64, strict=False).alias("pos"),
         pl.col("_cpra").list.get(2).alias("ref"),
@@ -124,7 +131,7 @@ def convert_pq_to_df(parquet_path: str) -> pl.DataFrame:
         pl.len().over("_cs_row").cast(pl.Int32).alias("cs_size"),
         pl.col("purityMinR2").round(4).alias("cs_min_r2"),
     ).select(
-        "trait",
+        "trait_original",
         "chr",
         "pos",
         "ref",
@@ -136,23 +143,63 @@ def convert_pq_to_df(parquet_path: str) -> pl.DataFrame:
         "cs_id",
         "cs_size",
         "cs_min_r2",
-        pl.concat_str("chr", "pos", "ref", "alt", separator=":").alias("variant_id"),
     )
 
 
-def read_annotation(annotation_path: str, variant_ids: pl.DataFrame) -> pl.DataFrame:
-    """Read the variant annotation, keeping only the variants present in the credible sets."""
-    anno = (
-        pl.scan_csv(annotation_path, separator="\t", null_values=["NA"])
-        .rename({"#variant": "variant_id"})
-        .select("variant_id", "AF", "most_severe", "gene_most_severe")
-        .join(variant_ids.lazy(), on="variant_id", how="semi")
-        .collect()
+def sanitize_trait_name(name: str | None) -> str:
+    """Make a study's trait name safe as one TSV field without changing how it reads.
+
+    Whitespace runs become one underscore, control and format characters are dropped, and the
+    result is NFC so that the same name always compares equal. Punctuation and non-ASCII letters
+    are kept: the value is matched by exact string equality downstream, never used as a path.
+    The double quote is the one exception - it is the quote character of the TSV readers and of
+    the BigQuery load, which would take a field starting with it as a quoted field.
+    """
+    if not name:
+        return ""
+    kept = "".join(
+        ch for ch in unicodedata.normalize("NFC", name)
+        # tabs and newlines are control characters, so they go here rather than becoming
+        # underscores below
+        if not unicodedata.category(ch).startswith("C")
     )
-    return anno.with_columns(_sci("AF").alias("aaf")).drop("AF")
+    return "_".join(kept.split()).replace('"', "'")
 
 
-def main(dataset: str, data_dir: str, annotation_path: str) -> None:
+def trait_label(study_id: str, name: str | None) -> str:
+    """`<sanitized name>_(<studyId>)`, or the bare studyId when the study has no usable name."""
+    sanitized = sanitize_trait_name(name)
+    return f"{sanitized}_({study_id})" if sanitized else study_id
+
+
+def read_trait_labels(data_dir: str, study_ids: pl.Series) -> pl.DataFrame:
+    """Map each studyId present in the credible sets to its `trait` value."""
+    files = sorted(glob.glob(os.path.join(data_dir, "study_metadata", "*.parquet")))
+    if not files:
+        sys.exit(f"no parquet files under {data_dir}/study_metadata")
+    names = dict(
+        pl.read_parquet(files, columns=["studyId", "traitFromSource"])
+        .filter(pl.col("studyId").is_in(study_ids.implode()))
+        .iter_rows()
+    )
+    missing = [s for s in study_ids if s not in names]
+    if missing:
+        print(f"{len(missing)} studies are not in the study table, e.g. {missing[:5]}")
+    labels = pl.DataFrame(
+        {
+            "trait_original": study_ids,
+            "trait": [trait_label(s, names.get(s)) for s in study_ids],
+        }
+    )
+    # per-study files are named by trait_original while consumers select by trait, so the two
+    # have to name the same study
+    assert labels["trait_original"].n_unique() == labels.height, "duplicate studyId"
+    assert labels["trait"].n_unique() == labels.height, "trait is not unique per studyId"
+    assert not labels["trait"].str.contains(r"\s").any(), "whitespace left in trait"
+    return labels
+
+
+def main(dataset: str, data_dir: str) -> None:
     files = sorted(glob.glob(os.path.join(data_dir, "credible_set", "*.parquet")))
     if not files:
         sys.exit(f"no parquet files under {data_dir}/credible_set")
@@ -164,30 +211,27 @@ def main(dataset: str, data_dir: str, annotation_path: str) -> None:
 
     cs = pl.concat(frames)
     del frames
+    labels = read_trait_labels(data_dir, cs["trait_original"].unique())
     print(
         f"{cs.height} credible set variants, "
-        f"{cs['trait'].n_unique()} studies, "
+        f"{labels.height} studies, "
         f"{cs['cs_id'].n_unique()} credible sets"
     )
 
-    variant_ids = cs.select("variant_id").unique()
-    anno = read_annotation(annotation_path, variant_ids)
-    print(f"{anno.height} of {variant_ids.height} variants found in the annotation")
-
     output_path = os.path.join(data_dir, f"{dataset}_cs_95.tsv")
-    cs.join(anno, on="variant_id", how="left").with_columns(
+    na = pl.lit(None, dtype=pl.String)
+    cs.join(labels, on="trait_original", how="left").with_columns(
         pl.lit(dataset).alias("dataset"),
         pl.lit("GWAS").alias("data_type"),
-        pl.col("trait").alias("trait_original"),
-        pl.lit(None, dtype=pl.String).alias("cell_type"),
+        na.alias("cell_type"),
+        na.alias("aaf"),
+        na.alias("most_severe"),
+        na.alias("gene_most_severe"),
     ).select(OUTPUT_COLUMNS).write_csv(output_path, separator="\t", null_value="NA")
     print(f"wrote {output_path}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        sys.exit(
-            "usage: python create_open_targets_files.py "
-            "<dataset_name> <data_dir> <variant_annotation_file>"
-        )
-    main(sys.argv[1], sys.argv[2], sys.argv[3])
+    if len(sys.argv) != 3:
+        sys.exit("usage: python create_open_targets_files.py <dataset_name> <data_dir>")
+    main(sys.argv[1], sys.argv[2])

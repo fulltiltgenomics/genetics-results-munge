@@ -15,9 +15,9 @@ def convert_pq_to_json(parquet_path: str, datafile_path: str, output_path: str) 
     """
     studies_in_data = set()
     with gzip.open(datafile_path, "rt") as f:
-        f.readline()
+        study_col = f.readline().rstrip("\n").split("\t").index("trait_original")
         for line in f:
-            studies_in_data.add(line.strip().split("\t")[2])
+            studies_in_data.add(line.rstrip("\n").split("\t")[study_col])
 
     print(f"N data studies: {len(studies_in_data)}")
     print(f"5 data studies: {list(studies_in_data)[:5]}")

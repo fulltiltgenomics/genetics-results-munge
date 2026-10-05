@@ -70,15 +70,21 @@ To run the scripts, make sure you have git, Docker and Google Cloud SDK installe
 
 ### Open Targets
 
-Get Open Targets data files (requester pays bucket - see [Open Targets website](https://platform.opentargets.org/downloads/credible_set/access) for other download options) and publicly available FinnGen variant annotations. The credible set and study parquet files go in their own subdirectories of the data directory:
+Get the credible set and study parquet files of an Open Targets release into their own subdirectories of the data directory. They are on the EBI FTP site and in a requester pays bucket (see the [Open Targets website](https://platform.opentargets.org/downloads/credible_set/access) for other download options):
 
 ```
-# replace [your_google_project_name] with your project name
-BILLING_PROJECT=[your_google_project_name]
 mkdir -p data/credible_set data/study_metadata
-gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/26.06/output/credible_set/*.parquet data/credible_set/
-gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/26.06/output/study/*.parquet data/study_metadata/
-gcloud storage cp gs://finngen-public-data-r13/annotations/finngen_R13_annotated_variants_v0.gz data/
+base=https://ftp.ebi.ac.uk/pub/databases/opentargets/platform/26.09/output
+for pair in credible_set:credible_set study:study_metadata; do
+    src=${pair%%:*}; dst=${pair##*:}
+    curl -s $base/$src/ | grep -oE 'href="[^"]+\.parquet"' | cut -d'"' -f2 \
+    | sed "s#^#$base/$src/#" | xargs -P 4 -n 1 wget -q -c -P data/$dst
+done
+
+# or, replacing [your_google_project_name] with your project name
+BILLING_PROJECT=[your_google_project_name]
+gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/26.09/output/credible_set/*.parquet data/credible_set/
+gcloud storage --billing-project $BILLING_PROJECT cp gs://open-targets-data-releases/26.09/output/study/*.parquet data/study_metadata/
 ```
 
 Run the Docker container you built, mounting the current directory (genetics-results-munge, root of this repository) in it:
@@ -87,29 +93,21 @@ Run the Docker container you built, mounting the current directory (genetics-res
 docker run -v $(pwd):/munge -it genetics-results-munge /bin/bash
 ```
 
-Inside the container, cut the annotation down to the four columns the script reads — `#variant`, `AF`, `most_severe` and `gene_most_severe` — and run the script. The field numbers differ between FinnGen releases, so look them up first:
+Inside the container, run the script:
 
 ```
 cd /munge
 
-zcat data/finngen_R13_annotated_variants_v0.gz | head -1 | tr '\t' '\n' \
-| grep -n -x -E '#variant|AF|most_severe|gene_most_severe'
-
-# for R13 those are fields 1, 293, 1009 and 1010
-zcat data/finngen_R13_annotated_variants_v0.gz | cut -f1,293,1009,1010 | bgzip \
-> data/finngen_R13_annotated_variants_v0.small.gz
-
 scripts/create_open_targets_files.sh \
-Open_Targets_26.06 \
-data \
-data/finngen_R13_annotated_variants_v0.small.gz
+Open_Targets_26.09 \
+data
 ```
 
-Output files are written under `data`. Only non-FinnGen GWAS traits fine-mapped with SuSiE are included in the output files. The 26.06 release needs about 10 GB of RAM and takes roughly 15 minutes; the FinnGen R14 annotation used for the released files is not public, so the public R13 annotation above gives slightly lower `aaf` / `most_severe` coverage.
+Output files are written under `data`. Only non-FinnGen GWAS traits fine-mapped with SuSiE are included in the output files. `aaf`, `most_severe` and `gene_most_severe` are `NA` at this point: the release has no allele frequency, and consequence is stamped onto the munged files afterwards by `scripts/annotate_resource.sh`, which also regenerates the credible set stats that depend on it. The per-study files are named by study accession (`<accession>.SUSIE.munged.tsv`), which is the `trait_original` column.
 
 ### eQTL Catalogue
 
-Get eQTL Catalogue data and trait metadata, and FinnGen variant annotations if you didn't download them already:
+Get eQTL Catalogue data and trait metadata, and the publicly available FinnGen variant annotations, which `aaf` is read from:
 
 ```
 scripts/download_eqtl_catalogue_data_and_trait_metadata.sh
@@ -124,12 +122,16 @@ Run the Docker container you built above, mounting the current directory in it:
 docker run -v $(pwd):/munge -it genetics-results-munge /bin/bash
 ```
 
-Inside the container, select only necessary columns from the variant annotation file to reduce memory use and run the script:
+Inside the container, cut the annotation down to the two columns the script reads, `#variant` and `AF`, and run the script. The field numbers differ between FinnGen releases, so look them up first:
 
 ```
 cd /munge
 
-zcat data/finnge_R12_annotated_variants_v1.gz | cut -f1,1000,1001 | bgzip \
+zcat data/finnge_R12_annotated_variants_v1.gz | head -1 | tr '\t' '\n' \
+| grep -n -x -E '#variant|AF'
+
+# for R12 those are fields 1 and 291
+zcat data/finnge_R12_annotated_variants_v1.gz | cut -f1,291 | bgzip \
 > data/finnge_R12_annotated_variants_v1.small.gz
 
 scripts/create_eqtl_catalogue_files.sh \
@@ -137,6 +139,8 @@ eQTL_Catalogue_R8 \
 data \
 data/finnge_R12_annotated_variants_v1.small.gz
 ```
+
+`most_severe` and `gene_most_severe` are `NA` in the output: consequence is stamped onto the munged files afterwards by `scripts/annotate_resource.sh`.
 
 ### PGC schizophrenia fine-mapping
 
@@ -209,8 +213,12 @@ Credible sets are not the only result type munged here. The scripts below write 
 - rare-CNV dosage sensitivity, gene associations, segments and sliding windows: `munge_rcnv.{py,sh} --product scores` maps the Collins 2022 pHaplo/pTriplo scores from their Gencode v19 symbols to current symbols via the cross-version gene name mapping, falling back to HGNC for the genes Gencode no longer names, and writes the paper's published thresholds into the file as boolean columns. `--product genes` reshapes the same paper's 108 gene-based CNV association BEDs (54 phenotypes x DEL/DUP, 17,263 genes each) into one long table, symbol-resolved through the same functions, keeping the ~65% of rows that carry no meta-analysis as NA rows rather than dropping them. `--product segments` reads the 163 disease-associated segments from the Cell supplement's `mmc3.xlsx` (`Table S3`, the one input with no download URL — place it in the cache dir by hand) and lifts the segment span and every 95% credible interval to GRCh38 with the sliding-window measurement's own liftOver procedure, falling back for an interval that does not lift whole to the two published 200 kb windows that begin and end on its boundaries -- every borrowed window is checked for membership in the published window set, read from the sliding-window BEDs that are therefore a second input to this product (the 10 kb grid is necessary for membership and not sufficient), so the composed coordinate is the one the windows table carries for that window, while lifting the 1 bp endpoints instead would displace a boundary into a paralogous copy of the segmental duplication that flanks it. The GRCh37 pair is kept and GRCh38 is left NULL where a boundary window is itself split, partially deleted, or lifts to a length the shared ±10% filter rejects (6 of the 163 segments on the current chain); its HPO, credible-interval and gene lists stay `;`-joined for the BigQuery loader to split into arrays. `--product windows` streams the same paper's 108 sliding-window BEDs (54 phenotypes x DEL/DUP, the same 267,237 GRCh37 200 kb windows in each) into one long table, lifting the window set once with that same procedure and asserting it reproduces the measurement's 262,357 lifted / 4,880 dropped windows exactly; unlike the gene product it drops the rows whose meta-analysis produced no estimate, because the window set is fixed and a missing row already means "no estimate". The lifted windows are not a regular grid -- adjacent pairs can reorder in GRCh38 and not all keep a 200 kb width -- so `window_start_grch37`/`window_end_grch37` ride along and no consumer should derive a step or a width from the GRCh38 pair; see [docs/rcnv-sliding-windows.md](docs/rcnv-sliding-windows.md) for the liftOver measurement itself and the width distribution. Neither `scores` nor `genes` adds coordinates: the source has none, so those outputs are build-independent; none of the four needs a tabix index. `--product` is there because the same Zenodo record ships one more product (the gene feature matrix); that one is not implemented. See [docs/rcnv-dosage-sensitivity.md](docs/rcnv-dosage-sensitivity.md).
 - curated gene-disease associations: `munge_gene_disease.{py,sh}` with `--product gencc` or `--product monarch` downloads the source and writes a TSV named after its version, so publishing never overwrites the file the deployments are still reading. GenCC is passed through unchanged — the round trip exists to fail here rather than in the API when the export stops parsing. Monarch concatenates the KG's causal and non-causal gene-disease exports, keeps `predicate` so the two stay distinguishable downstream, drops the non-gene, non-human and negated rows, and collapses the verbatim duplicates the sources carry. Neither output has coordinates, so neither is bgzipped or tabixed: the results-api reads the plain TSV once at startup. See [docs/gene-disease-associations.md](docs/gene-disease-associations.md).
 - rsID lookup: `build_gnomad_rsid_index.py` turns the gnomAD v4 sites file into the `rs`-pseudo-contig tabix file that results-api's `/rsid/variants` (the `lookup_variants_by_rsid` tool) queries by rs number. It emits one row per (rsID, allele) — one rsID can name several alt alleles, and the previous build's one-row-per-rsID layout resolved a multi-allelic rsID to whichever alt sorted first, often an allele with no carriers — and drops an allele filtered `AC0` only when the same rsID has an observed one. Rows must be sorted by rs number for the index, and the input is ~800M rows, so it partitions into rs-number buckets on disk and merges them; peak disk is about the gzip size of the exploded rows plus the output. `--upload` copies the result to a bucket directory, under a new name: results-api treats the served file as immutable and caches its index per path.
+- gnomAD annotation: `build_gnomad_annotation.py` streams the position-sorted gnomAD genomes+exomes sites file (or one genomes and one exomes file, merged by position) into two bgzip + tabix outputs: the sites file deduplicated to one row per variant, and a `chr pos ref alt most_severe gene_most_severe` consequence file for stream-merging against credible-set files. The header docstring states which row of a genome/exome pair survives, the chromosome coding and the inputs it refuses. Tests: `cd scripts && python -m pytest test_build_gnomad_annotation.py`.
 - expression: `munge_gtex.py` (GTEx v10 median TPM, written both wide and one row per gene and tissue) and `munge_hpa.py` (HPA immunohistochemistry).
 - gene-indexed QTL credible sets: `create_gene_indexed_qtl_file.py` for datasets whose QTL trait is a gene (the caQTL and peak-to-gene variants have their own sections above).
+
+- consequence stamping: `annotate_consequence.py` overwrites `most_severe` and `gene_most_severe` of an already served credible set file from the consequence file that `build_gnomad_annotation.py` writes, leaving every other byte of every row as it was, so an annotation refresh needs no re-munge. `--mode merge` is for the variant-sorted combined and per-trait files, `--mode lookup` for the gene-indexed `*.qtl.tsv.gz` copies, `--clear` writes `NA` to both columns, and `--verify ORIGINAL STAMPED` checks that nothing else changed. A bgzip input gets a bgzip output indexed with the settings read from the input's own index. Its header docstring has the guards and how the consequence file is read.
+- stamping a whole resource: `annotate_resource.sh` runs `annotate_consequence.py` over every object under a served resource's prefix (combined file, gene-indexed QTL copies, per-trait files), regenerates the credible set stats from the stamped rows, and writes the result under a new prefix, never over a served path. It refuses an object it cannot classify, and checks before uploading that the original stats are reproduced from the original rows and that nothing outside the two annotation columns changed. `--dry-run` prints the classification; the header docstring of `annotate_resource.py` is the reference.
 - BRaVa phenotype metadata: `brava_phenotypes.py` builds the pheweb-shaped JSON (`phenocode`, `phenostring`, `category`, `num_cases`/`num_controls` or `num_samples`) for the BRaVa exome-wide rare variant meta-analysis, one entry per (phenotype, stratum) that has a gene burden result file — the listing of `gs://daly-genetics-results/raw/brava/gene/` decides which, because the strata a phenotype has depend on its case counts. Descriptions, sex and per-biobank counts come from the preprint's supplementary workbook, downloaded by default. Every count is summed from the per-biobank tables so a phenotype's strata add up to its meta-analysis; Table S4 reproducing Table S6 exactly is the gate that proves the summing right, and Table S5's repeated rows are dropped even though that puts the quantitative sample sizes up to 30% below the published Table S7 totals — the deduplicated Height EUR sum is 710,271 against a largest per-variant NS of 710,270, and the raw sum is 920,670. `--check` prints a sample of the output beside those per-variant NS/NC maxima and never fails on it; `--stage` uploads to `gs://daly-genetics-results/mapping_files/brava_pheno.json`.
 - gene and trait metadata helpers: `gencode_to_gene_pos_tsv.py` (GENCODE GFF3 to a gene position TSV, given a release URL), `gencode_to_exon_tsv_gff.py` (the same GFF3 to one row per exon — exon and coding bounds, plus the Ensembl-canonical and MANE Select flags — which the API filters to canonical to draw gene models; the chromosome encoding matches the gene position TSV so the two join on `chrom`), `create_gene_name_mapping_across_gencode_versions.py` (the cross-version `ensg -> name` table the API reads; its version list must match `gencode_versions` in the API's `genes.py`, and the output file name carries those versions) and `kanta_metadata_to_json.py`.
 
@@ -279,14 +287,19 @@ pip                 posterior inclusion probability
 cs_id               credible set id
 cs_size             credible set size
 cs_min_r2           minimum LD r2 between variants in the credible set
-aaf                 alternative allele frequency, joined from the variant annotation file
+aaf                 alternative allele frequency, joined from the variant annotation file;
+                    NA for Open Targets, whose release has no per-variant frequency
                     (the fine-mapping results only have MAF, so the WDL pipeline leaves MAF
                     here when run without a variant annotation file)
 most_severe         most severe variant consequence (VEP)
 gene_most_severe    gene of most severe consequence
 ```
 
-For GWAS results, the `trait` and `trait_original` columns are the same and contain the phenotype code of the trait. For QTL results, `trait` contains the gene name while `trait_original` contains the original QTL trait name depending on the dataset, e.g. ENSG gene id.
+`trait` is the name a trait is shown and selected by, `trait_original` the identifier it has at its source. What that means depends on the resource:
+
+- FinnGen-format fine-mapping (the WDL pipeline): `trait_original` is the phenotype code. With a phenotype metadata file `trait` is the phenostring with spaces replaced by underscores, falling back to the code for a phenotype the file does not name; without one both columns are the code.
+- Open Targets: `trait_original` is the study accession and `trait` is the study's `traitFromSource` followed by `_(<accession>)`, e.g. `Type_2_diabetes_(GCST004602)`. Many accessions share one trait name, so the suffix is what makes `trait` identify a study. Whitespace in the name becomes underscores and double quotes become single quotes; other punctuation and non-ASCII letters are kept as the source has them.
+- QTL results: `trait` contains the gene name while `trait_original` contains the original QTL trait name depending on the dataset, e.g. ENSG gene id.
 
 For eQTL Catalogue, the `trait_original` column contains the QTL trait name and quantification method separated by `|`, e.g. `ENSG00000272211|ge`. Similarly, for eQTL Catalogue, the `cell_type` column contains the name of the cell or tissue and condition separated by `|`, e.g. `plasmacytoid_dendritic_cell|naive`. See [eQTL Catalogue metadata](https://github.com/eQTL-Catalogue/eQTL-Catalogue-resources/blob/master/data_tables/dataset_metadata.tsv) for metadata on the studies in eQTL Catalogue.
 
@@ -307,4 +320,4 @@ QTL study rather than a GWAS.
 
 ## variant annotation
 
-Currently `most_severe` and `gene_most_severe` annotations come from FinnGen variant annotation. This means that variants not present in FinnGen imputation panel have `NA` in the `most_severe` and `gene_most_severe` columns. We're working on more comprehensive variant annotation.
+For FinnGen data, `most_severe` and `gene_most_severe` come from the FinnGen variant annotation joined in the munge, so a variant outside the FinnGen imputation panel has `NA` in both. For the resources that are not FinnGen data the munge writes `NA`, and `scripts/annotate_resource.sh` stamps both columns afterwards from the gnomAD consequence file that `build_gnomad_annotation.py` writes; a variant gnomAD does not hold stays `NA`.
