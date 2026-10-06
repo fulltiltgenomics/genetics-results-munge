@@ -2,8 +2,8 @@
 """Download the gene set collections the sandbox's enrichment analyses are built from, guard
 them against unlicensable sets, and write them with a manifest into a new versioned directory.
 
-This is the download stage only. Gene ID harmonisation and the parquet bundle are a later stage
-(docs/gene-sets.md).
+This is the download stage only. Gene id harmonisation, the parquet bundle and staging are
+gene_set_bundle.py (docs/gene-sets.md).
 
 Sources (input), and nothing else -- the list is `MSIGDB_COLLECTIONS` plus Reactome:
   MSigDB  https://data.broadinstitute.org/gsea-msigdb/msigdb/release/<release>/
