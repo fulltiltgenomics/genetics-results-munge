@@ -25,7 +25,7 @@ Licences come from `LICENCES`, committed here per (source, upstream release) and
 the downloaded data; a release with no entry there refuses to build. c5.hpo carries the HPO's own
 terms as `LicenseRef-HPO`, not MSigDB's CC BY 4.0.
 
-Staging (off by default): this script never uploads.
+This script never uploads; staging is `build_gene_sets.sh --stage`, through gene_set_bundle.py.
 """
 
 import argparse
@@ -186,6 +186,9 @@ def check_gmt(path: Path, collection: str) -> int:
 
 
 def refused_source_in_url(url: str) -> bool:
+    # a substring match anywhere in the URL: a permitted set whose name merely contains KEGG
+    # (e.g. a pathway named after one) would be refused too. Fail-closed, so it surfaces as
+    # a refused build, never as a leak.
     upper = url.upper()
     return any(source in upper for source in REFUSED_SOURCES)
 
