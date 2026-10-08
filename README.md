@@ -10,6 +10,7 @@ Fine-mapping results from FinnGen, Open Targets and eQTL Catalogue are processed
 - [WDL pipeline](#wdl-pipeline)
 - [scripts](#scripts)
   - [Open Targets](#open-targets)
+  - [Open Targets QTL](#open-targets-qtl)
   - [eQTL Catalogue](#eqtl-catalogue)
   - [PGC schizophrenia fine-mapping](#pgc-schizophrenia-fine-mapping)
   - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
@@ -104,6 +105,20 @@ data
 ```
 
 Output files are written under `data`. Only non-FinnGen GWAS traits fine-mapped with SuSiE are included in the output files. `aaf`, `most_severe` and `gene_most_severe` are `NA` at this point: the release has no allele frequency, and consequence is stamped onto the munged files afterwards by `scripts/annotate_resource.sh`, which also regenerates the credible set stats that depend on it. The per-study files are named by study accession (`<accession>.SUSIE.munged.tsv`), which is the `trait_original` column.
+
+### Open Targets QTL
+
+`scripts/create_open_targets_qtl_files.sh` munges the QTL credible sets of the same release into files of their own, kept apart from the GWAS ones: the GTEx v10 (eQTL, transcript usage and sQTL) and IBDverse (single-cell eQTL) projects. The release's other QTL projects are eQTL Catalogue studies, which come from eQTL Catalogue itself (see below). The projects are listed in `PROJECTS` in `scripts/create_open_targets_qtl_files.py`.
+
+It reads the same `credible_set` and `study_metadata` directories as the GWAS script, the GTEx tissue labels from [metadata/eqtl_catalogue_studies.tsv](metadata/eqtl_catalogue_studies.tsv), and eQTL Catalogue's Ensembl 105 gene metadata for gene names, which it downloads into the data directory when missing:
+
+```
+scripts/create_open_targets_qtl_files.sh \
+Open_Targets_QTL_26.09 \
+data
+```
+
+A study of the release is one molecular trait in one tissue, so the per-study files are instead split per project, tissue or cell type and quantification method, e.g. `GTEx_v10_lung_ge.SUSIE.munged.tsv` or `IBDverse_CD4+_CRM_ge.SUSIE.munged.tsv` under `data/opentargets_qtl_per_study/`. Unlike eQTL Catalogue it writes no credible set stats: nothing reads them for this dataset, and per gene they come to more than a million files. The merged file is `data/Open_Targets_QTL_26.09_credible_sets.tsv.gz`. The columns are filled as for eQTL Catalogue (see [outputs](#outputs)). The script appends to the per-study files, so it refuses to run over a directory that already has them. As for the GWAS files, `aaf`, `most_severe` and `gene_most_severe` are `NA` until `scripts/annotate_resource.sh` stamps them.
 
 ### eQTL Catalogue
 
@@ -267,7 +282,7 @@ export into one gzip temp file per trait and then sorts each one on its own
 
 ## outputs
 
-Both the WDL pipeline and the credible set scripts give output text files: 1) an uncompressed file for each trait or study, and 2) a bgzip-compressed tabixed file including all traits or studies. They also write per-trait credible set statistics (`*.stats.json` plus an aggregate `credible_set_stats.tsv`, see [scripts/credible_set_stats.py](scripts/credible_set_stats.py)). With `create_qtl_file = true` the WDL pipeline additionally writes a gene-indexed copy of the merged file (`*.qtl.tsv.gz`, indexed on the trait's gene locus) for the API's QTL gene lookups.
+Both the WDL pipeline and the credible set scripts give output text files: 1) an uncompressed file for each trait or study, and 2) a bgzip-compressed tabixed file including all traits or studies. They also write per-trait credible set statistics (`*.stats.json` plus an aggregate `credible_set_stats.tsv`, see [scripts/credible_set_stats.py](scripts/credible_set_stats.py)), except for [Open Targets QTL](#open-targets-qtl). With `create_qtl_file = true` the WDL pipeline additionally writes a gene-indexed copy of the merged file (`*.qtl.tsv.gz`, indexed on the trait's gene locus) for the API's QTL gene lookups.
 
 Columns in all output files:
 
@@ -302,9 +317,9 @@ gene_most_severe    gene of most severe consequence
 - Open Targets: `trait_original` is the study accession and `trait` is the study's `traitFromSource` followed by `_(<accession>)`, e.g. `Type_2_diabetes_(GCST004602)`. Many accessions share one trait name, so the suffix is what makes `trait` identify a study. Whitespace in the name becomes underscores and double quotes become single quotes; other punctuation and non-ASCII letters are kept as the source has them.
 - QTL results: `trait` contains the gene name while `trait_original` contains the original QTL trait name depending on the dataset, e.g. ENSG gene id.
 
-For eQTL Catalogue, the `trait_original` column contains the QTL trait name and quantification method separated by `|`, e.g. `ENSG00000272211|ge`. Similarly, for eQTL Catalogue, the `cell_type` column contains the name of the cell or tissue and condition separated by `|`, e.g. `plasmacytoid_dendritic_cell|naive`. See [eQTL Catalogue metadata](https://github.com/eQTL-Catalogue/eQTL-Catalogue-resources/blob/master/data_tables/dataset_metadata.tsv) for metadata on the studies in eQTL Catalogue.
+For eQTL Catalogue and Open Targets QTL, the `trait_original` column contains the QTL trait name and quantification method separated by `|`, e.g. `ENSG00000272211|ge`, and the `cell_type` column contains the name of the cell or tissue and condition separated by `|`, e.g. `plasmacytoid_dendritic_cell|naive`. The quantification method decides `data_type`: `ge`, `exon`, `tx` and `txrev` are eQTL, `leafcutter` and `majiq` sQTL. Open Targets QTL GTEx tissues carry the eQTL Catalogue tissue label of the same sample group, so GTEx v10 and the GTEx v8 studies of eQTL Catalogue have the same `cell_type`, e.g. `adipose|naive` for subcutaneous adipose. See [eQTL Catalogue metadata](https://github.com/eQTL-Catalogue/eQTL-Catalogue-resources/blob/master/data_tables/dataset_metadata.tsv) for metadata on the studies in eQTL Catalogue.
 
-For Open Targets, `mlog10p` is set for about half of the variants: the release carries a per-variant p-value for some studies, and for the rest only the lead variant gets one, from the credible set level p-value. Every credible set has at least one variant with `mlog10p`. No Open Targets variants have an `se` value.
+For Open Targets, `mlog10p` is set for about half of the variants: the release carries a per-variant p-value for some studies, and for the rest only the lead variant gets one, from the credible set level p-value. Every credible set has at least one variant with `mlog10p`. No Open Targets variants have an `se` value. This is about the GWAS credible sets only: in the Open Targets QTL files every variant has `mlog10p`, `beta` and `se`. Their `cs_min_r2` is `NA`: the release has no credible set purity for any QTL study.
 
 There are no spaces in the output files and missing values are represented with `NA`.
 

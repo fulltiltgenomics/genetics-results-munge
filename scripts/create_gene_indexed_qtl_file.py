@@ -67,6 +67,13 @@ def merge(
 # map_from_column = "trait"
 # map_to_column = "gene_name"
 
+# Open Targets QTL: gene names come from the same Ensembl 105 (GENCODE v39) metadata as
+# eQTL Catalogue's; run on the consequence-stamped file
+# data_file = "/mnt/disks/data/nigb/open_targets_qtl_26.09/Open_Targets_QTL_26.09_credible_sets.tsv.gz"
+# gene_mapping_file = "/mnt/disks/data/gencode.v39.annotation.genes.tsv"
+# map_from_column = "trait"
+# map_to_column = "gene_name"
+
 # deCODE pQTL pseudo credible sets: trait is the SomaScan target gene symbol, resolved with
 # the same mapping table as the FinnGen SomaScan sets, whose API entry is gencode 49
 data_file = "/mnt/disks/data/decode/deCODE_pQTL_2021_pseudo_credible_sets.mlog10p_2.r2_0.6.tsv.gz"
