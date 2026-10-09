@@ -12,6 +12,8 @@ Input
 Output, under <data_dir>/opentargets_qtl_per_study/
   <sub-study>.SUSIE.munged.tsv               one file per project x tissue/cell type x
                                              quantification method, sorted by position
+and <data_dir>/<dataset_name>_substudies.tsv  one row per sub-study with its sample size, the
+                                             dataset's metadata_file in configs/datasets.yaml
 
 No credible set stats are written, unlike the eQTL Catalogue munge: per gene they come to more
 than a million stats.json files and hours of compute here and twice more in annotate_resource.sh,
@@ -53,7 +55,7 @@ PROJECTS = {
     "OTAR2057_IBDverse": ("OTAR2057_IBDverse", "IBDverse"),
 }
 
-STUDY_COLUMNS = ["studyId", "projectId", "geneId", "traitFromSource", "condition"]
+STUDY_COLUMNS = ["studyId", "projectId", "geneId", "traitFromSource", "condition", "nSamples"]
 
 PARQUET_COLUMNS = [
     "studyLocusId",
@@ -109,7 +111,8 @@ def file_safe(name: str) -> str:
 
 
 def read_studies(data_dir: str, tissue_labels: dict[str, str], gene_names: pl.DataFrame) -> pl.DataFrame:
-    """One row per kept study: studyId -> sub-study, data_type, trait, trait_original, cell_type."""
+    """One row per kept study: studyId -> sub-study, data_type, trait, trait_original, cell_type,
+    n_samples."""
     files = sorted(glob.glob(os.path.join(data_dir, "study_metadata", "*.parquet")))
     if not files:
         sys.exit(f"no parquet files under {data_dir}/study_metadata")
@@ -152,8 +155,18 @@ def read_studies(data_dir: str, tissue_labels: dict[str, str], gene_names: pl.Da
             # symbol-less genes keep their gene id, as in the eQTL Catalogue munge
             pl.coalesce("gene_name", "geneId").alias("trait"),
             pl.concat_str(["traitFromSource", "quant"], separator="|").alias("trait_original"),
+            pl.col("nSamples").alias("n_samples"),
         )
     )
+
+
+def write_substudy_metadata(studies: pl.DataFrame, path: str) -> None:
+    """One row per sub-study: the per-file sample sizes results-api summarises for the dataset."""
+    substudies = studies.select("substudy", "cell_type", "data_type", "n_samples").unique().sort("substudy")
+    # the release states a sample size per molecular trait study; a sub-study whose studies
+    # disagree would have no single size to report
+    assert substudies["substudy"].is_unique().all(), "sub-study with more than one sample size"
+    substudies.write_csv(path, separator="\t", null_value="NA")
 
 
 def read_gene_names(path: str) -> pl.DataFrame:
@@ -246,6 +259,7 @@ def main(dataset: str, data_dir: str) -> None:
         gtex_tissue_labels(EQTL_CATALOGUE_STUDIES),
         read_gene_names(os.path.join(data_dir, "gene_counts_Ensembl_105_phenotype_metadata.tsv.gz")),
     )
+    write_substudy_metadata(studies, os.path.join(data_dir, f"{dataset}_substudies.tsv"))
     print(
         f"{studies.height} studies in {studies['substudy'].n_unique()} sub-studies, "
         f"{studies.filter(pl.col('trait').str.starts_with('ENSG')).height} without a gene name"

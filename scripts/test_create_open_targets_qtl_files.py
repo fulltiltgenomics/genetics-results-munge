@@ -89,6 +89,7 @@ def release(tmp_path, monkeypatch):
             "geneId": ["ENSG00000000001", "ENSG00000000001", "ENSG00000000002", "ENSG00000000001", None],
             "traitFromSource": ["ENSG00000000001", "1:100:200:clu_1_+", "ENSG00000000002", "ENSG00000000001", "Height"],
             "condition": ["naive", "naive", "naive", "naive", None],
+            "nSamples": [581, 581, 339, 84, 1000],
         }
     ).write_parquet(tmp_path / "study_metadata" / "part-0.parquet")
 
@@ -178,6 +179,13 @@ def test_end_to_end(release):
 
     # no stats: nothing reads them for this dataset
     assert sorted(p.name for p in out.iterdir()) == files
+
+    substudies = _read(release / "Open_Targets_QTL_26.09_substudies.tsv")
+    assert substudies.rows() == [
+        ("GTEx_v10_adipose_subcutaneous_ge", "adipose|naive", "eQTL", "581"),
+        ("GTEx_v10_adipose_subcutaneous_leafcutter", "adipose|naive", "sQTL", "581"),
+        ("IBDverse_CD4+_CRM_ge", "CD4+_CRM|naive", "eQTL", "339"),
+    ]
 
 
 def test_rerun_over_existing_output_refuses(release):
