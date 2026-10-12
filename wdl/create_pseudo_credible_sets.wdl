@@ -385,7 +385,7 @@ def filter_lead_variants(
 
 
 def _query_ld_for_variants(
-    ld_panel: str, chrom: str, min_pos: int, max_pos: int, token: str,
+    ld_panel: str, chrom: str, min_pos: int, max_pos: int,
     variant_ids: set[str],
     max_retries: int = 3, retry_delay: float = 5.0,
 ) -> dict:
@@ -399,9 +399,22 @@ def _query_ld_for_variants(
     panel_ids = {v.replace("chr23_", "chrX_") for v in variant_ids} if is_x else variant_ids
     region = f"{chrom}:{min_pos}-{max_pos}"
     path = ld_panel.format(chr=chrom)
-    env = {**os.environ, "GCS_OAUTH_TOKEN": token}
 
     for attempt in range(1, max_retries + 1):
+        # the metadata server caches its token, so one fetched once per run can expire
+        # mid-phenotype on the long quantitative traits; fetch per attempt so a retry
+        # never reuses an expired one
+        try:
+            env = {**os.environ, "GCS_OAUTH_TOKEN": _get_gce_access_token()}
+        except (OSError, KeyError, ValueError) as exc:
+            print(
+                f"warning: metadata token fetch failed for {region} "
+                f"(attempt {attempt}/{max_retries}): {exc}",
+                file=sys.stderr,
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay * attempt)
+            continue
         proc = subprocess.Popen(
             ["tabix", path, region],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -427,6 +440,7 @@ def _query_ld_for_variants(
         )
         if attempt < max_retries:
             time.sleep(retry_delay * attempt)
+    print(f"error: LD lookup exhausted for {region}", file=sys.stderr)
     return {}
 
 
@@ -440,8 +454,6 @@ def compute_and_filter_cs_pairwise_r2(
     If min_r2 is given, also drop CSes where any variant pair has r2 < min_r2.
     """
     from itertools import combinations
-
-    token = _get_gce_access_token()
 
     # group CSes by chromosome; only check multi-variant CSes
     cs_info = []
@@ -465,7 +477,7 @@ def compute_and_filter_cs_pairwise_r2(
     failed_cs_ids = set()
     for cs in cs_info:
         ld = _query_ld_for_variants(
-            ld_panel, cs["chr"], cs["min_pos"], cs["max_pos"], token,
+            ld_panel, cs["chr"], cs["min_pos"], cs["max_pos"],
             variant_ids=cs["variants"],
         )
         pair_min = None
