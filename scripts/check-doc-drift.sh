@@ -64,6 +64,9 @@ check '^scripts/(munge_decode_pqtl|decode_pqtl_phenotypes)\.py$' '^docs/pseudo-c
 check '^wdl/(create_pseudo_credible_sets|autoreporting)' '^docs/pseudo-credible-sets\.md$' \
     'wdl/create_pseudo_credible_sets*, wdl/autoreporting_*.json -> docs/pseudo-credible-sets.md (thresholds, script defaults vs production flags, output columns, per-dataset table)'
 
+check '^scripts/r14_meta_phenotypes\.py$' '^docs/r14-meta-serving\.md$' \
+    'scripts/r14_meta_phenotypes.py -> docs/r14-meta-serving.md (which keys are omitted for quantitative traits, the contributing_cohorts naming, header-derived cohort presence and the TSV/header disagreement result)'
+
 if [ "$found" -eq 1 ]; then
     printf '\n  Update the doc in this commit, or note why it does not apply.\n' >&2
     printf '  Not blocking. Mappings live in CLAUDE.md > Documentation ownership.\n\n' >&2
