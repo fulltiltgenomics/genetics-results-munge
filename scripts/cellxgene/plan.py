@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """CELLxGENE planner: which datasets still need aggregating, and on what machine.
 
-    plan.py --out plan.json [--run-id ID] [--approve-large]
+    plan.py --out plan.json [--run-id ID] [--approve-large] [--bucket B] [--root cellxgene]
             [--max-datasets 200] [--max-gb 300] [--listing listing.json]
 
 Reads the curation API listing, keeps what `aggregate.py` would process, and subtracts the
-datasets whose `_SUCCESS.json` already exists under
-`gs://<bucket>/cellxgene/agg/v<FORMAT_VERSION>/<dataset_version_id>/`. The completed set
-comes from one prefix listing, not a probe per dataset. `driver.py` consumes the JSON.
+datasets whose `_SUCCESS.json` or `_REJECTED.json` already exists under
+`gs://<bucket>/<root>/agg/v<FORMAT_VERSION>/<dataset_version_id>/`. Both sets come from one
+prefix listing, not a probe per dataset. `driver.py` consumes the JSON.
+
+`_REJECTED.json` is written by the driver's task when `aggregate.py` exits 3: that version is
+done-not-retried — out of the items and the breaker totals, listed under `rejected`. Retrying
+one means deleting its marker (a new FORMAT_VERSION starts a fresh prefix, so it retries all).
 
 In scope: organism Homo sapiens (NCBITaxon:9606), `primary_cell_count` > 0 (a dataset with no primary cells
 never enters the plan, so it is not downloaded), an H5AD asset, and at least one assay in
@@ -31,7 +35,8 @@ Plan JSON
         cell_count, primary_cell_count, est_nnz, machine_class,
         assays[]: {ontology_term_id, label} of the allowed assays present
     superseded[]: dataset_id, dataset_version_id (done, now stale), current_dataset_version_id
-    totals: listed, in_scope, done, todo, todo_bytes, todo_gb, by_machine_class
+    rejected[]: dataset_id, dataset_version_id of in-scope listed versions with `_REJECTED.json`
+    totals: listed, in_scope, done, rejected, todo, todo_bytes, todo_gb, by_machine_class
         {class: {datasets, gb}}, superseded, skipped_no_primary
     breaker: tripped, max_datasets, max_gb, approved
 
@@ -50,12 +55,13 @@ import aggregate  # noqa: E402
 
 API_URL = "https://api.cellxgene.cziscience.com/curation/v1/datasets"
 BUCKET = "daly-expression-data"
-AGG_ROOT = "cellxgene/agg"
+ROOT = "cellxgene"
 STANDARD, HIGHMEM = "e2-standard-2", "e2-highmem-2"
 HIGHMEM_NNZ = 5e9
 HIGHMEM_CELLS = 3_000_000
 BREAKER_EXIT = 4
 MARKER = "_SUCCESS.json"
+REJECTED = "_REJECTED.json"
 HUMAN_TAXON = "NCBITaxon:9606"
 
 
@@ -64,8 +70,8 @@ def fetch_listing(url=API_URL):
         return json.load(r)
 
 
-def agg_prefix(fmt=aggregate.FORMAT_VERSION):
-    return f"{AGG_ROOT}/v{fmt}/"
+def agg_prefix(fmt=aggregate.FORMAT_VERSION, root=ROOT):
+    return f"{root.strip('/')}/agg/v{fmt}/"
 
 
 def _client():
@@ -78,16 +84,24 @@ def _client():
         return storage.Client(project="_")
 
 
-def list_done(bucket=BUCKET, fmt=aggregate.FORMAT_VERSION):
-    """dataset_version_ids with a completion marker, from a single prefix listing."""
-    prefix = agg_prefix(fmt)
-    blobs = _client().list_blobs(bucket, prefix=prefix)
-    return {n.split("/")[-2] for n in (b.name for b in blobs)
-            if n.endswith("/" + MARKER) and n.count("/") == prefix.count("/") + 1}
+def list_markers(bucket=BUCKET, fmt=aggregate.FORMAT_VERSION, root=ROOT, client=None):
+    """{marker name: dataset_version_ids carrying it}, from a single prefix listing."""
+    prefix = agg_prefix(fmt, root)
+    out = {MARKER: set(), REJECTED: set()}
+    for n in (b.name for b in (client or _client()).list_blobs(bucket, prefix=prefix)):
+        name = n.rsplit("/", 1)[-1]
+        if name in out and n.count("/") == prefix.count("/") + 1:
+            out[name].add(n.split("/")[-2])
+    return out
 
 
-def read_marker_dataset_id(version_id, bucket=BUCKET, fmt=aggregate.FORMAT_VERSION, client=None):
-    blob = (client or _client()).bucket(bucket).blob(f"{agg_prefix(fmt)}{version_id}/{MARKER}")
+def list_done(bucket=BUCKET, fmt=aggregate.FORMAT_VERSION, root=ROOT, client=None):
+    """dataset_version_ids with a completion marker."""
+    return list_markers(bucket, fmt, root, client)[MARKER]
+
+
+def read_marker_dataset_id(version_id, bucket=BUCKET, fmt=aggregate.FORMAT_VERSION, client=None, root=ROOT):
+    blob = (client or _client()).bucket(bucket).blob(f"{agg_prefix(fmt, root)}{version_id}/{MARKER}")
     return json.loads(blob.download_as_bytes()).get("dataset_id")
 
 
@@ -123,8 +137,11 @@ def machine_class(est_nnz, cell_count, nnz_limit=HIGHMEM_NNZ, cells_limit=HIGHME
 
 
 def build_plan(listing, done, superseded_dataset_ids=None, run_id=None, max_datasets=200,
-               max_gb=300.0, approved=False, fmt=aggregate.FORMAT_VERSION):
-    """superseded_dataset_ids: done version id -> dataset_id, for done ids not in the listing."""
+               max_gb=300.0, approved=False, fmt=aggregate.FORMAT_VERSION, rejected=(),
+               bucket=BUCKET, root=ROOT):
+    """superseded_dataset_ids: done version id -> dataset_id, for done ids not in the listing.
+    rejected: version ids with `_REJECTED.json`; never planned, never counted by the breaker."""
+    rejected = set(rejected) - set(done)
     in_scope, skipped = [], {}
     for ds in listing:
         item, why = classify(ds)
@@ -132,7 +149,10 @@ def build_plan(listing, done, superseded_dataset_ids=None, run_id=None, max_data
             in_scope.append(item)
         else:
             skipped[why] = skipped.get(why, 0) + 1
-    items = sorted((i for i in in_scope if i["dataset_version_id"] not in done),
+    rejected_items = sorted(({"dataset_id": i["dataset_id"], "dataset_version_id": i["dataset_version_id"]}
+                             for i in in_scope if i["dataset_version_id"] in rejected),
+                            key=lambda r: r["dataset_version_id"])
+    items = sorted((i for i in in_scope if i["dataset_version_id"] not in done | rejected),
                    key=lambda i: (-i["est_nnz"], i["dataset_version_id"]))
     current = {ds["dataset_id"]: ds["dataset_version_id"] for ds in listing}
     superseded = sorted(
@@ -151,10 +171,11 @@ def build_plan(listing, done, superseded_dataset_ids=None, run_id=None, max_data
         "run_id": run_id or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "aggregation_format_version": fmt,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-        "listing_url": API_URL, "agg_prefix": f"gs://{BUCKET}/{agg_prefix(fmt)}",
-        "items": items, "superseded": superseded,
+        "listing_url": API_URL, "agg_prefix": f"gs://{bucket}/{agg_prefix(fmt, root)}",
+        "items": items, "superseded": superseded, "rejected": rejected_items,
         "totals": {"listed": len(listing), "in_scope": len(in_scope),
-                   "done": len(in_scope) - len(items), "todo": len(items),
+                   "done": len(in_scope) - len(items) - len(rejected_items),
+                   "rejected": len(rejected_items), "todo": len(items),
                    "todo_bytes": todo_bytes, "todo_gb": round(todo_bytes / 1e9, 3),
                    "by_machine_class": by_class, "superseded": len(superseded),
                    "skipped_no_primary": skipped.get("no_primary", 0)},
@@ -166,7 +187,8 @@ def build_plan(listing, done, superseded_dataset_ids=None, run_id=None, max_data
 def summary(plan):
     t, b = plan["totals"], plan["breaker"]
     lines = [f"run {plan['run_id']}: {t['todo']} to do of {t['in_scope']} in scope "
-             f"({t['done']} done), {t['todo_gb']:.1f} GB, {t['superseded']} superseded"]
+             f"({t['done']} done, {t['rejected']} rejected earlier), {t['todo_gb']:.1f} GB, "
+             f"{t['superseded']} superseded"]
     lines += [f"  {c}: {v['datasets']} datasets, {v['gb']:.1f} GB"
               for c, v in sorted(t["by_machine_class"].items())]
     if b["tripped"] and not b["approved"]:
@@ -180,6 +202,7 @@ def main(argv=None):
     p.add_argument("--out", required=True)
     p.add_argument("--run-id")
     p.add_argument("--bucket", default=BUCKET)
+    p.add_argument("--root", default=ROOT, help="bucket prefix above agg/; cellxgene-staging for rehearsals")
     p.add_argument("--listing", help="read this saved API listing instead of calling the API")
     p.add_argument("--max-datasets", type=int, default=200)
     p.add_argument("--max-gb", type=float, default=300.0)
@@ -191,11 +214,13 @@ def main(argv=None):
                 listing = json.load(fh)
         else:
             listing = fetch_listing()
-        done = list_done(a.bucket)
+        markers = list_markers(a.bucket, root=a.root)
+        done = markers[MARKER]
         listed = {ds["dataset_version_id"] for ds in listing}
         client = _client() if done - listed else None
-        stale = {v: read_marker_dataset_id(v, a.bucket, client=client) for v in sorted(done - listed)}
-        plan = build_plan(listing, done, stale, a.run_id, a.max_datasets, a.max_gb, a.approve_large)
+        stale = {v: read_marker_dataset_id(v, a.bucket, client=client, root=a.root) for v in sorted(done - listed)}
+        plan = build_plan(listing, done, stale, a.run_id, a.max_datasets, a.max_gb, a.approve_large,
+                          rejected=markers[REJECTED], bucket=a.bucket, root=a.root)
     except Exception as e:
         print(f"plan.py: {type(e).__name__}: {e}", file=sys.stderr)
         return 2

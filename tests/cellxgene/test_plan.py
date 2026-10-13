@@ -95,8 +95,8 @@ def test_breaker_trips_on_count_or_size_unless_approved():
 
 
 def _run(tmp_path, monkeypatch, extra, done=()):
-    monkeypatch.setattr(plan, "list_done", lambda bucket: set(done))
-    monkeypatch.setattr(plan, "read_marker_dataset_id", lambda v, b, client=None: None)
+    monkeypatch.setattr(plan, "list_markers", lambda bucket, **kw: {plan.MARKER: set(done), plan.REJECTED: set()})
+    monkeypatch.setattr(plan, "read_marker_dataset_id", lambda v, b, client=None, root=None: None)
     out = tmp_path / "plan.json"
     code = plan.main(["--listing", os.path.join(HERE, "listing_fixture.json"), "--out", str(out)] + extra)
     return code, json.loads(out.read_text())
@@ -113,17 +113,18 @@ def test_main_exit_codes(tmp_path, monkeypatch):
 
 def test_main_reports_done_ids_missing_from_listing(tmp_path, monkeypatch):
     seen = []
-    monkeypatch.setattr(plan, "read_marker_dataset_id", lambda v, b, client=None: seen.append(v) or "d")
+    monkeypatch.setattr(plan, "read_marker_dataset_id", lambda v, b, client=None, root=None: seen.append(v) or "d")
     monkeypatch.setattr(plan, "_client", lambda: object())
-    monkeypatch.setattr(plan, "list_done", lambda bucket: {"orphan", HUMAN[0]["dataset_version_id"]})
+    monkeypatch.setattr(plan, "list_markers", lambda bucket, **kw: {
+        plan.MARKER: {"orphan", HUMAN[0]["dataset_version_id"]}, plan.REJECTED: set()})
     plan.main(["--listing", os.path.join(HERE, "listing_fixture.json"), "--out", str(tmp_path / "p.json")])
     assert seen == ["orphan"]
 
 
 def test_main_exits_2_on_error(tmp_path, monkeypatch):
-    def boom(bucket):
+    def boom(bucket, **kw):
         raise RuntimeError("no gcs")
-    monkeypatch.setattr(plan, "list_done", boom)
+    monkeypatch.setattr(plan, "list_markers", boom)
     assert plan.main(["--listing", os.path.join(HERE, "listing_fixture.json"),
                       "--out", str(tmp_path / "p.json")]) == 2
 
@@ -134,3 +135,26 @@ def test_empty_listing_never_reports_superseded():
     other = LISTING[1]
     p = plan.build_plan(truncated, set(), {"old": other["dataset_id"]})
     assert p["superseded"] == []
+
+
+def test_rejected_is_done_not_retried_and_outside_the_breaker():
+    vids = [i["dataset_version_id"] for i in plan.build_plan(LISTING, set())["items"]]
+    p = plan.build_plan(LISTING, set(), rejected={vids[0]}, max_datasets=len(vids) - 1, max_gb=1e9)
+    assert vids[0] not in _ids(p["items"]) and not p["breaker"]["tripped"]
+    assert [r["dataset_version_id"] for r in p["rejected"]] == [vids[0]]
+    assert p["totals"]["rejected"] == 1 and p["totals"]["done"] == 0
+    assert p["totals"]["todo"] == len(vids) - 1
+
+
+def test_list_markers_and_root_reach_the_plan():
+    names = ["r/agg/v1/a/_SUCCESS.json", "r/agg/v1/b/_REJECTED.json", "r/agg/v1/c/groups.parquet",
+             "r/agg/v1/d/sub/_SUCCESS.json"]
+
+    class C:
+        def list_blobs(self, bucket, prefix):
+            assert (bucket, prefix) == ("bk", "r/agg/v1/")
+            return [type("B", (), {"name": n}) for n in names]
+    m = plan.list_markers("bk", fmt=1, root="r", client=C())
+    assert m == {plan.MARKER: {"a"}, plan.REJECTED: {"b"}}
+    assert plan.build_plan(LISTING, set(), bucket="bk", root="r")["agg_prefix"] == \
+        f"gs://bk/r/agg/v{plan.aggregate.FORMAT_VERSION}/"
