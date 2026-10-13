@@ -238,6 +238,9 @@ def read_report(filepath: str, extra_aliases: dict | None = None) -> pl.DataFram
     for src, canon in aliases.items():
         if canon in CANONICAL_DTYPES:
             schema_overrides[src] = CANONICAL_DTYPES[canon]
+    # n_INFO_gt_0_6 is the share of imputation batches with INFO > 0.6, almost always exactly 0 or 1,
+    # so inference sees an integer column until the first fraction and then aborts
+    schema_overrides["n_INFO_gt_0_6"] = pl.Float64
 
     # autoreporting touches an empty report when a phenotype has no locus at all
     if os.path.getsize(filepath) == 0:
