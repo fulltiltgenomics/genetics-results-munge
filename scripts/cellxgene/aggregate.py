@@ -84,7 +84,8 @@ SPATIAL_ASSAYS = {"EFO:0022857": "Visium Spatial Gene Expression V1", "EFO:00300
 # RNA expression assays seen in human CELLxGENE datasets with primary cells (curation API,
 # 2026-10-13). Deliberately absent: methylation (snmC-Seq2 EFO:0030027, snm3C-seq
 # EFO:0022492, mCT-seq EFO:0030060) and chromatin (10x scATAC-seq EFO:0030007), whose
-# matrices are not transcript counts
+# matrices are not transcript counts. Also absent: BD Rhapsody Targeted mRNA (EFO:0700004), a
+# gene panel whose CP10k is not comparable with whole-transcriptome assays (user ruling 2026-10-13)
 RNA_ASSAYS = {
     "EFO:0008679": "CEL-seq", "EFO:0008722": "Drop-seq", "EFO:0008780": "inDrop",
     "EFO:0008796": "MARS-seq", "EFO:0008853": "Patch-seq", "EFO:0008877": "Quartz-seq",
@@ -100,7 +101,7 @@ RNA_ASSAYS = {
     "EFO:0030003": "10x 3' transcription profiling", "EFO:0030004": "10x 5' transcription profiling",
     "EFO:0030019": "Seq-Well S3", "EFO:0030026": "sci-Plex", "EFO:0030028": "sci-RNA-seq3",
     "EFO:0030059": "10x multiome", "EFO:0030074": "SORT-seq", "EFO:0030080": "10x transcription profiling",
-    "EFO:0700003": "BD Rhapsody Whole Transcriptome Analysis", "EFO:0700004": "BD Rhapsody Targeted mRNA",
+    "EFO:0700003": "BD Rhapsody Whole Transcriptome Analysis",
     "EFO:0700010": "TruDrop", "EFO:0700011": "GEXSCOPE technology", "EFO:0700016": "Smart-seq v4",
     "EFO:0900000": "particle-templated instant partition sequencing", "EFO:0900001": "Asteria scRNA-seq kit",
     "EFO:0900002": "HIVE CLX Single-Cell RNAseq Solution", "EFO:0920087": "10x Next GEM Flex v1",

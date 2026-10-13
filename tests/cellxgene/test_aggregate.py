@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 import aggregate as agg  # noqa: E402
 
 V3, VISIUM, SNMC, UNKNOWN = "EFO:0009922", "EFO:0022857", "EFO:0030027", "EFO:9999999"
+BD_WTA, BD_TARGETED = "EFO:0700003", "EFO:0700004"
 N_CELLS, N_GENES = 400, 30
 NONPRIMARY_ONLY, NEVER = 1, 2  # gene columns with special expression patterns
 GENE_IDS = [f"ENSG{i:011d}" for i in range(N_GENES)]
@@ -74,7 +75,7 @@ def make_dataset(seed=0):
         "tissue_type": rng.choice(["tissue", "organoid"], N_CELLS),
         "cell_type_ontology_term_id": rng.choice(["CL:0000236", "CL:0000084", "CL:0000576"], N_CELLS),
         "disease_ontology_term_id": rng.choice(["PATO:0000461", "MONDO:0005015"], N_CELLS),
-        "assay_ontology_term_id": rng.choice([V3, V3, VISIUM, SNMC, UNKNOWN], N_CELLS),
+        "assay_ontology_term_id": rng.choice([V3, V3, VISIUM, SNMC, UNKNOWN, BD_WTA, BD_TARGETED], N_CELLS),
         "suspension_type": rng.choice(["cell", "nucleus"], N_CELLS),
         "donor_id": rng.choice([f"donor{i}" for i in range(5)], N_CELLS),
         "is_primary_data": rng.random(N_CELLS) < 0.8,
@@ -218,11 +219,13 @@ def test_assay_allow_list(tmp_path, data):
     obs, counts = data
     out = run(tmp_path, write_h5ad(tmp_path / "d.h5ad", obs, counts))
     groups, *_, succ = read_out(out)
-    assert set(groups.assay_ontology_term_id) == {V3, VISIUM}
+    assert set(groups.assay_ontology_term_id) == {V3, VISIUM, BD_WTA}
     assert groups.spatial.eq(groups.assay_ontology_term_id == VISIUM).all()
     prim = obs["is_primary_data"]
     assert succ["cells_assay_excluded"] == {
-        a: int((prim & (obs["assay_ontology_term_id"] == a)).sum()) for a in (SNMC, UNKNOWN)}
+        a: int((prim & (obs["assay_ontology_term_id"] == a)).sum()) for a in (SNMC, UNKNOWN, BD_TARGETED)}
+    assert succ["cells_assay_excluded"][BD_TARGETED] > 0
+    assert BD_TARGETED not in agg.ASSAYS and BD_WTA in agg.ASSAYS
     assert SNMC not in agg.ASSAYS and VISIUM in agg.ASSAYS and "EFO:0030062" in agg.SPATIAL_ASSAYS
 
 
