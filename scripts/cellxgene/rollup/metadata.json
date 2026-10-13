@@ -1,0 +1,42 @@
+{
+  "cellxgene_schema_version": "7.1.0",
+  "cellxgene_ontology_guide": "1.11.1",
+  "ontologies": {
+    "CL": "v2026-03-26",
+    "UBERON": "v2026-04-01",
+    "CVCL": "55.0"
+  },
+  "cl_obo": {
+    "url": "https://github.com/obophenotype/cell-ontology/releases/download/v2026-03-26/cl-basic.obo",
+    "data_version": "cl/releases/2026-03-26/cl-basic.owl",
+    "sha256": "8b1cd2daacc8abd9a877596d759aa348f39da37bb78ce7f3c8da36c854b8f8b0"
+  },
+  "listing": {
+    "url": "https://api.cellxgene.cziscience.com/curation/v1/datasets",
+    "sha256": "bf0146737c15a92b0d3588a1338fa30b9ecfc606d3bbad238760d3ad953e1ca2",
+    "n_datasets": 2240,
+    "n_work_list": 1047,
+    "filter": "human, primary_cell_count > 0, no methylation (snmC*/methyl*) assay"
+  },
+  "inputs_sha256": {
+    "cell_type_targets.tsv": "064fd3261f61771f8a3b89a9922cebf2bd4b0651eaae450cd6e1280d3fda52a1",
+    "pins.tsv": "8bd8028b280d2cf7c8cf92de0cf5d576a4d78afefb48622d3b7a16779c6bd45d"
+  },
+  "n_targets": 105,
+  "n_pins": 8,
+  "cell_type_rule": "most specific is_a ancestor-or-self in cell_type_targets.tsv (part_of and develops_from not followed); ties by target-file order; pins.tsv overrides; no target -> self",
+  "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an ancestor-or-self (guide closure, is_a + part_of); else self; CL and CVCL tissues -> self",
+  "cell_type_methods": {
+    "ancestor": 767,
+    "no_target": 96,
+    "pin": 8,
+    "pin_descendant": 4,
+    "self": 104,
+    "unknown": 1
+  },
+  "tissue_methods": {
+    "cell_culture_self": 15,
+    "no_tissue_general": 26,
+    "tissue_general": 530
+  }
+}
