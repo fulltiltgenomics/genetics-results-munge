@@ -480,6 +480,21 @@ report have no rows; the seven aptamers with no gene in the mapping keep their i
 the proximity-filter rehearsal predicted, and 3,530 anchor leads have no weaker lead
 within 1 Mb.
 
+**Counting signals (2026-10-13).** The LD shadow is not confined to the giant cis-pQTLs.
+Only 26,904 of the 130,685 sets have a lead that is the strongest of its aptamer within
+±2 Mb (autoreporting's `locus_width_kb`), a median of 4 per aptamer against Ferkingstad's
+3.7 primary associations; 27 % of those are singletons, against 58 % of the 103,781 sets that
+sit next to a stronger lead. The likely mechanism, not yet checked against the
+`.report.out` files: a variant joins at most one clump (`overlap = false`), so the stronger
+clump has already taken the weaker lead's partners, and the weaker lead is left as a
+singleton with pip 0.99. The p < 0.005 input filter plays no part: every candidate lead is in it, and a
+partner it drops could have been neither a lead nor a member. Rather than add a rule to
+step 2, which the Finnish panel could not verify (see the 2026-09-22 decision above),
+genetics-results-db serves the flag as the view `decode_pqtl_signals_v` (`window_top`, plus
+the stronger lead a non-top set sits next to). Consumers count signals with it. The cut
+is not a test of independence: 206 window tops lie 2–5 Mb from a lead of the same aptamer
+at `mlog10p` ≥ 1000, where the shadow outruns the window.
+
 **Downstream.** `scripts/create_gene_indexed_qtl_file.py`, pointed at the collected file
 with gencode v49 (the version the API entry declares), writes the `.qtl.tsv.gz` copy next
 to it that backs `/credible_sets_by_qtl_gene`; 36 trait names stay unmapped (the aptamer-id

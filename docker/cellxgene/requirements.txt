@@ -1,0 +1,16 @@
+# the numeric stack is pinned to the same versions as the repo-root requirements.txt
+numpy==2.3.2
+pandas==2.3.2
+polars==1.32.3
+pyarrow==21.0.0
+scipy==1.16.1
+# imported by scripts/cellxgene/*.py (aggregate, plan, publish, rollup)
+h5py==3.16.0
+requests==2.34.2
+google-cloud-storage==3.17.0
+# genetics-results-db's load_data.py, run by the driver's load step (scripts/cellxgene/load_cellxgene.sh)
+google-cloud-bigquery==3.43.0
+cellxgene-ontology-guide==1.11.1
+# not imported yet: the driver (driver.py) submits and polls Batch jobs
+google-cloud-batch==0.22.4
+pytest==8.4.2

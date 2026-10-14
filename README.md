@@ -20,6 +20,7 @@ Fine-mapping results from FinnGen, Open Targets and eQTL Catalogue are processed
 - [outputs](#outputs)
   - [pseudo credible sets](#pseudo-credible-sets)
 - [variant annotation](#variant-annotation)
+- [CELLxGENE cell-type expression release](#cellxgene-cell-type-expression-release)
 
 ## Docker image
 
@@ -339,3 +340,19 @@ QTL study rather than a GWAS.
 ## variant annotation
 
 For FinnGen data, `most_severe` and `gene_most_severe` come from the FinnGen variant annotation joined in the munge, so a variant outside the FinnGen imputation panel has `NA` in both. For the resources that are not FinnGen data the munge writes `NA` (the WDL pipeline does so when its `clear_consequence` input is true, as it is for UKB-PPP), and `scripts/annotate_resource.sh` stamps both columns afterwards from the gnomAD consequence file that `build_gnomad_annotation.py` writes; a variant gnomAD does not hold stays `NA`.
+
+## CELLxGENE cell-type expression release
+
+`scripts/cellxgene/publish.py` reduces the per-dataset worker outputs (`aggregate.py`) to a release: a
+pooled normal-tissue summary and a per-dataset table, each as a gene-point tabix file and a BigQuery
+load file, plus `measured_genes.tsv.gz` and `manifest.json` (every file's sha256). Its header
+docstring holds the rules and thresholds; the `*_COLUMNS` constants are the column definitions.
+
+- the **primary** metric is the cell-level `mean_log1p_cp10k`, with `frac_expressing` beside it;
+  these are what rank cell types
+- `donor_pseudobulk_mean_cp10k` is **secondary**: the donor-pseudobulk mean (per-donor CP10k
+  averaged over donors), NA unless the group has 3 or more donors (`donor_pseudobulk_n_donors`)
+- the per-dataset table has rows only where some cell expressed the gene; a missing row is 0 when
+  `measured_genes.tsv.gz` lists the gene for that dataset, and "not measured" otherwise
+- a gs:// `--agg` needs `--datasets` / `--datasets-file`, the dataset_version_ids to publish, so
+  superseded versions left in the prefix are never read

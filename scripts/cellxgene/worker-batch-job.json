@@ -1,0 +1,46 @@
+{
+  "taskGroups": [
+    {
+      "taskCount": 0,
+      "parallelism": 0,
+      "taskSpec": {
+        "runnables": [
+          {
+            "container": {
+              "imageUri": "",
+              "entrypoint": "python",
+              "commands": ["/app/scripts/cellxgene/driver.py", "task"]
+            }
+          }
+        ],
+        "computeResource": {"cpuMilli": 2000, "memoryMib": 0},
+        "maxRetryCount": 3,
+        "maxRunDuration": "",
+        "lifecyclePolicies": [
+          {"action": "FAIL_TASK", "actionCondition": {"exitCodes": [3]}}
+        ]
+      }
+    }
+  ],
+  "allocationPolicy": {
+    "location": {"allowedLocations": ["regions/us-central1"]},
+    "instances": [
+      {"policy": {"machineType": "", "provisioningModel": "SPOT", "bootDisk": {"type": "pd-balanced", "sizeGb": "30"}}}
+    ],
+    "network": {
+      "networkInterfaces": [
+        {
+          "network": "projects/daly-finngenie/global/networks/expression-batch-network",
+          "subnetwork": "projects/daly-finngenie/regions/us-central1/subnetworks/expression-batch-subnet",
+          "noExternalIpAddress": false
+        }
+      ]
+    },
+    "serviceAccount": {
+      "email": "expression-batch-worker@daly-finngenie.iam.gserviceaccount.com",
+      "scopes": ["https://www.googleapis.com/auth/cloud-platform"]
+    }
+  },
+  "labels": {"purpose": "expression-data", "component": "cellxgene-worker"},
+  "logsPolicy": {"destination": "CLOUD_LOGGING"}
+}

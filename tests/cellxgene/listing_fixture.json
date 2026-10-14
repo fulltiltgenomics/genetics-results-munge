@@ -1,0 +1,234 @@
+[
+ {
+  "assay": [
+   {
+    "label": "10x 3' v2",
+    "ontology_term_id": "EFO:0009899"
+   },
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 5247323203,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/21a0c6d5-658c-434e-a479-1e51504aec5c.h5ad"
+   }
+  ],
+  "cell_count": 543012,
+  "collection_id": "f6ea32cb-a10e-46ba-ba39-38d469c9cade",
+  "dataset_id": "440da0a0-f321-4f40-9080-bb04031681e5",
+  "dataset_version_id": "21a0c6d5-658c-434e-a479-1e51504aec5c",
+  "mean_genes_per_cell": 2136.2408307735373,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 543012,
+  "title": "Fresh ex vivo myeloid single cell RNA-seq from human prefrontal cortex"
+ },
+ {
+  "assay": [
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   },
+   {
+    "label": "10x 3' v4",
+    "ontology_term_id": "EFO:0022604"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 3054425328,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/a43d1b30-44d6-403d-b0fb-e5502d3f47cd.h5ad"
+   }
+  ],
+  "cell_count": 190706,
+  "collection_id": "2317da21-e990-4002-85e2-b75f94f78403",
+  "dataset_id": "228438db-5728-4e10-b660-56a54d9a24dd",
+  "dataset_version_id": "a43d1b30-44d6-403d-b0fb-e5502d3f47cd",
+  "mean_genes_per_cell": 3258.845846486214,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 190706,
+  "title": "Single-cell RNA-seq of the human bone marrow hematopoietic and niche compartments from healthy and patients with Clonal Hematopoiesis of Indeterminate Potential (CHIP)"
+ },
+ {
+  "assay": [
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 335715225,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/8e0fcb64-735c-4fcb-a74b-12a3518683d1.h5ad"
+   }
+  ],
+  "cell_count": 32900,
+  "collection_id": "9a71db9e-687f-41f0-b88e-544eb1314ef6",
+  "dataset_id": "0bbf93aa-2d3a-420f-95a1-26fe384024cb",
+  "dataset_version_id": "8e0fcb64-735c-4fcb-a74b-12a3518683d1",
+  "mean_genes_per_cell": 1921.0094832826749,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 32900,
+  "title": "Human liver cells (enriched for immune cells)"
+ },
+ {
+  "assay": [
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 36092176654,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/0e853475-e298-4b09-881a-ed0b60d5a8c9.h5ad"
+   }
+  ],
+  "cell_count": 4140453,
+  "collection_id": "84ce6837-548d-4a1f-919f-0bc0d9a3952f",
+  "dataset_id": "37a17b78-4864-4a42-b67b-31c00962795a",
+  "dataset_version_id": "0e853475-e298-4b09-881a-ed0b60d5a8c9",
+  "mean_genes_per_cell": 3767.3897650812605,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 4140453,
+  "title": "MSSM_Cohort"
+ },
+ {
+  "assay": [
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 865001453,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/e6509f9c-0a3d-463f-bfa0-a6e368d78c37.h5ad"
+   }
+  ],
+  "cell_count": 53119,
+  "collection_id": "460007a7-e893-4fc9-8b84-b52679b4561e",
+  "dataset_id": "55d66f2a-5c28-4425-bc15-b93ff65cb2ea",
+  "dataset_version_id": "e6509f9c-0a3d-463f-bfa0-a6e368d78c37",
+  "mean_genes_per_cell": 3436.7164479753005,
+  "organism": [
+   {
+    "label": "Mus musculus",
+    "ontology_term_id": "NCBITaxon:10090"
+   }
+  ],
+  "primary_cell_count": 53119,
+  "title": "Transcriptomic signatures of mouse ovarian aging and estropausal transition at single-cell resolution"
+ },
+ {
+  "assay": [
+   {
+    "label": "10x 3' v3",
+    "ontology_term_id": "EFO:0009922"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 3009424703,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/44e42474-0297-463b-92b0-4b47decf699e.h5ad"
+   }
+  ],
+  "cell_count": 289279,
+  "collection_id": "f6ea32cb-a10e-46ba-ba39-38d469c9cade",
+  "dataset_id": "09642770-9a4c-4fe6-9f45-67e1249adc33",
+  "dataset_version_id": "44e42474-0297-463b-92b0-4b47decf699e",
+  "mean_genes_per_cell": 2282.972656155476,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 0,
+  "title": "Frozen in silico sorted myeloid single nuclei RNA-seq from human prefrontal cortex"
+ },
+ {
+  "assay": [
+   {
+    "label": "snmC-Seq2",
+    "ontology_term_id": "EFO:0030027"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 17974608711,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/8dff3d88-0e0c-40e9-b9e1-e4b500a21c87.h5ad"
+   }
+  ],
+  "cell_count": 175387,
+  "collection_id": "fdebfda9-bb9a-4b4b-97e5-651097ea07b0",
+  "dataset_id": "f0939ae1-0877-42b2-bc0e-3249a42c2c0f",
+  "dataset_version_id": "8dff3d88-0e0c-40e9-b9e1-e4b500a21c87",
+  "mean_genes_per_cell": 59273.0,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 175387,
+  "title": "DNA methylation of brain cells -- CG methylation of Inhibitory and Subcortical Neurons (snmC-seq)"
+ },
+ {
+  "assay": [
+   {
+    "label": "Visium Spatial Gene Expression V1",
+    "ontology_term_id": "EFO:0022857"
+   }
+  ],
+  "assets": [
+   {
+    "filesize": 647261155,
+    "filetype": "H5AD",
+    "url": "https://datasets.cellxgene.cziscience.com/c7aa20ed-5838-4b24-9fcc-69851e705975.h5ad"
+   }
+  ],
+  "cell_count": 4992,
+  "collection_id": "f4774e03-b5a7-473b-99d6-eeb80592c5db",
+  "dataset_id": "fc124cd3-f4f6-47d8-85c7-f5fa77ad9ab4",
+  "dataset_version_id": "c7aa20ed-5838-4b24-9fcc-69851e705975",
+  "mean_genes_per_cell": 685.3078926282051,
+  "organism": [
+   {
+    "label": "Homo sapiens",
+    "ontology_term_id": "NCBITaxon:9606"
+   }
+  ],
+  "primary_cell_count": 4992,
+  "title": "Visium Spatial of Human muscle in Dystrophinopathies_8"
+ }
+]
