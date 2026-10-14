@@ -92,7 +92,8 @@ from peak_utils import TabixIndex  # noqa: E402
 RELEASE_FORMAT_VERSION = 1
 NORMAL = "PATO:0000461"
 MIN_CELLS, MIN_DONORS, MIN_PB_DONORS = 50, 3, 3
-GENCODE_URI = "gs://daly-genetics-results/mapping_files/gencode.v49.annotation.genes.tsv"
+# lives in the expression bucket because the driver service account has no access to the results bucket
+GENCODE_URI = "gs://daly-expression-data/cellxgene/ref/gencode.v49.annotation.genes.tsv"
 GENE_POINT_INDEX = TabixIndex(["-s", "2", "-b", "3", "-e", "3"], "POINT: tabix -s2 -b3 -e3 (gene_start)")
 LABELS = ["tissue", "cell_type", "disease", "assay"]
 
