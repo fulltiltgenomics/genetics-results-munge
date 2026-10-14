@@ -43,7 +43,8 @@ Rules
 - per-dataset grain: every group of every dataset (any disease, tissue_type, assay), with the
   rolled-up cell type and tissue_general alongside the native terms. SPARSE: only genes with
   n_expressing >= 1 in the group have a row, as in the worker's output. A gene with no row is 0
-  if `measured_genes.tsv.gz` lists it for that dataset, else not measured (NA)
+  if `measured_genes.tsv.gz` lists it for that dataset, else not measured (NA). That reading holds only for
+  a dataset with at least one group passing the thresholds above; a fully suppressed dataset says nothing about the gene
 
 Outputs in `<out>/<release-date>/`, built in a fresh directory and moved into place (replacing
 any earlier run of that date); gs:// is built in `--workdir` and uploaded, manifest last. A
@@ -51,11 +52,13 @@ any earlier run of that date); gs:// is built in `--workdir` and uploaded, manif
 unless `--force-remote-genes`
 - `summary.tsv.gz`, `per_dataset.tsv.gz`: bgzipped, sorted by (chrom, gene_start), point-indexed
   `tabix -s2 -b3 -e3` on gene_start like GTEx. chrom is the GENCODE file's own numeric coding
-- `bq/summary.tsv.gz`, `bq/per_dataset.tsv.gz`, `bq/groups.tsv.gz`, `bq/datasets.tsv`: BigQuery
-  load files (gzip, header row, empty = NULL). The per-dataset grain carries integer
+- `bq/summary/<chrom>.tsv.gz`, `bq/per_dataset/<chrom>.tsv.gz` (one shard per chromosome, each
+  with its header; manifest `bq_shards` lists every shard with its rows), `bq/groups.tsv.gz`,
+  `bq/datasets.tsv`: BigQuery load files (gzip, header row, empty = NULL). The per-dataset grain carries integer
   `dataset_key` and `group_key` into `groups` and `datasets` instead of repeating the labels
 - `measured_genes.tsv.gz`: (dataset_version_id, v49 gene_id) for every gene a dataset measured
-  (`measured` in its genes.parquet) that maps to v49; read from the worker output, no H5AD
+  (`measured` in its genes.parquet) that maps to v49; read from the worker output, no H5AD.
+  `bq/measured_genes.tsv.gz` is the same list for BigQuery, keyed by chrom and `dataset_key`
 - `manifest.json`: release, inputs, roll-up checksums, gencode drop counts, thresholds, row
   counts, and every other file's bytes and sha256. Each output's column list is the `*_COLUMNS` constant below
 
@@ -108,6 +111,7 @@ PER_DATASET_COLUMNS = GENE_COLUMNS + ["source_gene_id"] + GROUP_COLUMNS + METRIC
 BQ_PER_DATASET_COLUMNS = ["chrom", "gene_start", "gene_id", "gene_name", "dataset_key", "group_key",
                           *METRIC_COLUMNS]
 BQ_GROUP_COLUMNS = ["group_key", "dataset_key", "dataset_version_id", *GROUP_COLUMNS]
+BQ_MEASURED_COLUMNS = ["chrom", "gene_start", "gene_id", "gene_name", "dataset_key"]
 DATASET_COLUMNS = ["dataset_key", "dataset_id", "dataset_version_id", "collection_id",
                    "collection_name", "title", "collection_doi", "citation", "cells_kept",
                    "n_groups", "n_genes", "n_genes_measured", "n_genes_mapped"]
@@ -455,20 +459,29 @@ class Release:
         os.makedirs(f"{local}/bq", exist_ok=True)
         self.cols = {"summary": (SUMMARY_COLUMNS, SUMMARY_COLUMNS), "per_dataset": (PER_DATASET_COLUMNS, BQ_PER_DATASET_COLUMNS)}
         self.tab = {k: Pipe(BGZIP, f"{local}/{k}.tsv.gz", "#" + "\t".join(c[0]) + "\n") for k, c in self.cols.items()}
-        self.bq = {k: Pipe(GZIP, f"{local}/bq/{k}.tsv.gz", "\t".join(c[1]) + "\n") for k, c in self.cols.items()}
         self.rows = {k: 0 for k in self.cols}
+        # BigQuery refuses a gzip CSV over 4 GB, which a full per_dataset file passes several
+        # times over, so its BigQuery copy is one file per chromosome (summary too, as its
+        # upper bound reaches 4 GB); the loader stages every shard the manifest lists
+        self.shards = {k: {} for k in self.cols}
 
-    def append(self, kind, df):
+    def append(self, kind, df, chrom):
         tab, bqc = self.cols[kind]
         df = fmt(df)
         df.select(tab).write_csv(self.tab[kind].proc.stdin, separator="\t", include_header=False, null_value="NA")
-        df.select(bqc).write_csv(self.bq[kind].proc.stdin, separator="\t", include_header=False, null_value="")
+        name = f"bq/{kind}/{chrom}.tsv.gz"
+        if name in self.shards[kind]:
+            raise SystemExit(f"{name} written twice")
+        os.makedirs(f"{self.local}/bq/{kind}", exist_ok=True)
+        shard = Pipe(GZIP, f"{self.local}/{name}", "\t".join(bqc) + "\n")
+        df.select(bqc).write_csv(shard.proc.stdin, separator="\t", include_header=False, null_value="")
+        shard.close()
+        self.shards[kind][name] = df.height
         self.rows[kind] += df.height
 
     def close(self):
         for k in self.cols:
             self.tab[k].close()
-            self.bq[k].close()
             subprocess.run(["tabix", "-f"] + GENE_POINT_INDEX.args + [f"{self.local}/{k}.tsv.gz"], check=True)
 
 
@@ -545,8 +558,8 @@ def run(a):
         if r is None:
             continue
         summary, pdr, prof = r
-        rel.append("summary", summary)
-        rel.append("per_dataset", pdr)
+        rel.append("summary", summary, c)
+        rel.append("per_dataset", pdr, c)
         if a.marker_panel:
             profiles.append(prof)
             summaries.append(summary)
@@ -569,6 +582,13 @@ def run(a):
         "gene_id").sort("dataset_version_id", "gene_id").write_csv(
         measured.proc.stdin, separator="\t", include_header=False)
     measured.close()
+    # the same list keyed for BigQuery: chrom to partition on, the gene's coordinates and
+    # symbol so a view can name a measured gene that has no expression row
+    bq_measured = inp.map.join(inp.gencode, on="gidx", suffix="_v49").select(
+        pl.col("chrom_v49").alias("chrom"), *BQ_MEASURED_COLUMNS[1:]).sort("chrom", "gene_start", "gene_id", "dataset_key")
+    pipe = Pipe(GZIP, f"{local}/bq/measured_genes.tsv.gz", "\t".join(BQ_MEASURED_COLUMNS) + "\n")
+    bq_measured.write_csv(pipe.proc.stdin, separator="\t", include_header=False, null_value="")
+    pipe.close()
     datasets_table(inp, listing).write_csv(f"{local}/bq/datasets.tsv", separator="\t", null_value="")
 
     unmatched = sorted(set().union(*(set(s["unmatched"]) for s in inp.gene_stats)))
@@ -589,7 +609,9 @@ def run(a):
                        "summary_include_spatial": a.summary_include_spatial},
         "genes_mode": {"requested": a.genes.split(","), "not_in_gencode": missing} if a.genes else None,
         "rows": {**rel.rows, "groups": inp.groups.height, "datasets": len(names),
+                 "measured_genes": bq_measured.height,
                  "summary_rows_defined": inp.rows.height},
+        "bq_shards": rel.shards,
         "files": {}, "index": GENE_POINT_INDEX.label,
     }
     panel = marker_panel(pl.concat(profiles), pl.concat(summaries), a, local) if a.marker_panel else None

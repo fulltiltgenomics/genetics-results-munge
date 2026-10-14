@@ -204,8 +204,13 @@ def test_deterministic_and_genes_mode(inputs):
     g = rg.parent / (rg.name + "-genes-mode")
     full = read(a / "summary.tsv.gz")
     assert read(g / "summary.tsv.gz").equals(full[full.gene_name == "GENEA"].reset_index(drop=True))
-    with gzip.open(a / "bq" / "per_dataset.tsv.gz", "rt") as fh:
-        assert fh.readline().rstrip("\n").split("\t") == publish.BQ_PER_DATASET_COLUMNS
+    shards = json.loads((a / "manifest.json").read_text())["bq_shards"]
+    for kind, cols in (("per_dataset", publish.BQ_PER_DATASET_COLUMNS), ("summary", publish.SUMMARY_COLUMNS)):
+        assert shards[kind] and sum(shards[kind].values()) == json.loads((a / "manifest.json").read_text())["rows"][kind]
+        for name, n in shards[kind].items():
+            with gzip.open(a / name, "rt") as fh:
+                assert fh.readline().rstrip("\n").split("\t") == cols
+                assert sum(1 for _ in fh) == n
 
 
 def test_group_keys_unique_with_noncontiguous_ids(inputs):
@@ -220,7 +225,7 @@ def test_group_keys_unique_with_noncontiguous_ids(inputs):
     rel = run(tmp_path, agg, gencode, "rel", "--min-cells", "1", "--min-donors", "1")
     g = pd.read_csv(rel / "bq" / "groups.tsv.gz", sep="\t")
     assert g.group_key.is_unique and len(g) == 6
-    p = pd.read_csv(rel / "bq" / "per_dataset.tsv.gz", sep="\t")
+    p = pd.concat(pd.read_csv(f, sep="\t") for f in sorted((rel / "bq" / "per_dataset").glob("*.tsv.gz")))
     assert not p.duplicated(["gene_id", "group_key"]).any()
     assert (p.merge(g, on="group_key").dataset_key_x == p.merge(g, on="group_key").dataset_key_y).all()
 
@@ -249,7 +254,18 @@ def test_measured_genes_list(inputs):
     got = {d: set(x.str.split(".").str[0]) for d, x in m.groupby("dataset_version_id").gene_id}
     # B has no G2 in var, C has it with measured false; unmapped and spike-in features never listed
     assert got == {"dsA": {G1, G2, G3}, "dsB": {G1, G3}, "dsC": {G1}}
-    assert "measured_genes.tsv.gz" in json.loads((rel / "manifest.json").read_text())["files"]
+    manifest = json.loads((rel / "manifest.json").read_text())
+    assert "measured_genes.tsv.gz" in manifest["files"]
+    # the BigQuery copy: same pairs, keyed by dataset_key, with the gene's chrom and symbol
+    bq = pd.read_csv(rel / "bq" / "measured_genes.tsv.gz", sep="\t")
+    assert list(bq.columns) == publish.BQ_MEASURED_COLUMNS
+    assert len(bq) == len(m) == manifest["rows"]["measured_genes"]
+    keys = pd.read_csv(rel / "bq" / "datasets.tsv", sep="\t").set_index("dataset_key").dataset_version_id
+    assert set(zip(bq.dataset_key.map(keys), bq.gene_id)) == set(zip(m.dataset_version_id, m.gene_id))
+    per = pd.concat(pd.read_csv(f, sep="\t") for f in sorted((rel / "bq" / "per_dataset").glob("*.tsv.gz")))
+    coords = per.drop_duplicates("gene_id").set_index("gene_id")[["chrom", "gene_start", "gene_name"]]
+    joined = bq.join(coords, on="gene_id", rsuffix="_pd", how="inner")
+    assert len(joined) and (joined.chrom == joined.chrom_pd).all() and (joined.gene_name == joined.gene_name_pd).all()
 
 
 class FakeBlob:

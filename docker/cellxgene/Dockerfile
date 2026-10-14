@@ -1,6 +1,7 @@
 # cellxgene pipeline image: worker (aggregate.py), planner (plan.py), publisher (publish.py)
-# and driver (driver.py). Build with the repo root as context:
-#   docker build -f docker/cellxgene/Dockerfile .
+# and driver (driver.py). Build with the repo root as context and a genetics-results-db checkout
+# as the named context `db` (the driver's load step runs that repo's BigQuery loader):
+#   docker build -f docker/cellxgene/Dockerfile --build-context db=../genetics-results-db .
 # WORKER_IMAGE_DIGEST is deliberately not set here: a digest cannot be known before the image
 # is pushed. The driver must set it on every job from the pushed digest; aggregate.py records
 # it in _SUCCESS.json.
@@ -33,6 +34,12 @@ WORKDIR /app
 COPY scripts/sumstat_utils.py scripts/
 COPY scripts/cellxgene scripts/cellxgene
 COPY tests/cellxgene tests/cellxgene
+
+# only what db's load_cellxgene.sh runs; scripts/cellxgene/load_cellxgene.sh finds it here
+COPY --from=db --chmod=755 scripts/load_cellxgene.sh /opt/genetics-results-db/scripts/
+COPY --from=db scripts/load_data.py /opt/genetics-results-db/scripts/
+COPY --from=db scripts/lib/common.sh /opt/genetics-results-db/scripts/lib/
+ENV GENETICS_RESULTS_DB=/opt/genetics-results-db
 
 RUN useradd --uid 10001 --create-home worker
 USER worker
