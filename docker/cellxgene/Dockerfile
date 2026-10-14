@@ -29,9 +29,10 @@ RUN apt-get update \
 COPY docker/cellxgene/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
-# rollup.py imports sumstat_utils from the parent of its own directory
+# rollup.py and publish.py put scripts/ on sys.path for sumstat_utils and peak_utils (which
+# itself imports sumstat_utils); every other import is stdlib, a pip package or scripts/cellxgene
 WORKDIR /app
-COPY scripts/sumstat_utils.py scripts/
+COPY scripts/sumstat_utils.py scripts/peak_utils.py scripts/
 COPY scripts/cellxgene scripts/cellxgene
 COPY tests/cellxgene tests/cellxgene
 
@@ -40,6 +41,11 @@ COPY --from=db --chmod=755 scripts/load_cellxgene.sh /opt/genetics-results-db/sc
 COPY --from=db scripts/load_data.py /opt/genetics-results-db/scripts/
 COPY --from=db scripts/lib/common.sh /opt/genetics-results-db/scripts/lib/
 ENV GENETICS_RESULTS_DB=/opt/genetics-results-db
+
+# a missing module or dependency fails the build, not the first real run. --help runs argparse
+# before any network or credential use; the loader is run by path as load_cellxgene.sh does
+RUN for s in driver publish plan aggregate rollup; do python scripts/cellxgene/$s.py --help >/dev/null || exit 1; done \
+    && python /opt/genetics-results-db/scripts/load_data.py --help >/dev/null
 
 RUN useradd --uid 10001 --create-home worker
 USER worker
