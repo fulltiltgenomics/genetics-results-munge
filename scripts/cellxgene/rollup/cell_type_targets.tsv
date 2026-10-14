@@ -1,0 +1,119 @@
+# roll-up targets for cell_type_ontology_term_id; read by rollup.py, which fails on an id
+# not in the pinned CL release or a label that differs from it. Each native term rolls up to
+# its most specific is_a ancestor-or-self in this list; when several are equally specific
+# (none is an ancestor of another) the one listed FIRST wins, so row order is a decision.
+# row order: lineage-specific targets first, then generic ones (ciliated cell, myeloid cell,
+# ... epithelial cell), so a term under both a lineage and a generic or feature-defined class
+# rolls up to the lineage. Two orderings break that on purpose: endocrine cell sits just before
+# neuron, because CL puts neuroendocrine cells (pulmonary, prostate, chromaffin, adrenal
+# medulla type I) under both and they are secretory epithelial-derived cells, not neurons; and
+# conventional precedes plasmacytoid dendritic cell because CL puts CD141-positive myeloid
+# dendritic cell (cDC1) under both
+# origin: panel = expected term of the proving_ground.py marker panel; proving_ground_broad =
+# its EXTRA_ROLLUP competitors; extended = added here for lineage coverage
+term_id	label	lineage	origin
+CL:0000084	T cell	immune	panel
+CL:0000236	B cell	immune	panel
+CL:0000786	plasma cell	immune	panel
+CL:0001065	innate lymphoid cell	immune	extended
+CL:0000623	natural killer cell	immune	panel
+CL:0000576	monocyte	immune	panel
+CL:0000235	macrophage	immune	panel
+CL:0000129	microglial cell	immune	extended
+CL:0000990	conventional dendritic cell	immune	extended
+CL:0000784	plasmacytoid dendritic cell	immune	panel
+CL:0000451	dendritic cell	immune	proving_ground_broad
+CL:0000097	mast cell	immune	panel
+CL:0000775	neutrophil	immune	extended
+CL:0000771	eosinophil	immune	extended
+CL:0000767	basophil	immune	extended
+CL:0000094	granulocyte	immune	proving_ground_broad
+CL:0000092	osteoclast	immune	extended
+CL:0000037	hematopoietic stem cell	blood	extended
+CL:0000556	megakaryocyte	blood	extended
+CL:0000233	platelet	blood	panel
+CL:0000765	erythroblast	blood	extended
+CL:0000232	erythrocyte	blood	panel
+CL:0000182	hepatocyte	epithelial	panel
+CL:1000488	cholangiocyte	epithelial	extended
+CL:0002063	pulmonary alveolar type 2 cell	epithelial	panel
+CL:0002062	pulmonary alveolar type 1 cell	epithelial	panel
+CL:0000158	club cell	epithelial	extended
+CL:0005006	ionocyte	epithelial	extended
+CL:0000160	goblet cell	epithelial	panel
+CL:0000646	basal cell	epithelial	panel
+CL:0000312	keratinocyte	epithelial	extended
+CL:0000584	enterocyte	epithelial	extended
+CL:0000510	paneth cell	epithelial	extended
+CL:0002204	tuft cell	epithelial	extended
+CL:0000162	parietal cell	epithelial	extended
+CL:0000155	peptic cell	epithelial	extended
+CL:0002064	pancreatic acinar cell	epithelial	panel
+CL:0002079	pancreatic ductal cell	epithelial	extended
+CL:0000653	podocyte	epithelial	extended
+CL:0002306	epithelial cell of proximal tubule	epithelial	extended
+CL:0002518	kidney epithelial cell	epithelial	extended
+CL:0002326	luminal epithelial cell of mammary gland	epithelial	extended
+CL:0000185	myoepithelial cell	epithelial	extended
+CL:0000077	mesothelial cell	epithelial	extended
+CL:0002586	retinal pigment epithelial cell	epithelial	extended
+CL:0000169	type B pancreatic cell	endocrine	panel
+CL:0000171	pancreatic A cell	endocrine	panel
+CL:0000173	pancreatic D cell	endocrine	extended
+CL:0002275	pancreatic PP cell	endocrine	extended
+CL:0000164	enteroendocrine cell	endocrine	extended
+CL:0002258	thyroid follicular cell	endocrine	extended
+CL:0002138	endothelial cell of lymphatic vessel	endothelial	extended
+CL:0000115	endothelial cell	endothelial	panel
+CL:0000632	hepatic stellate cell	stromal	extended
+CL:0000057	fibroblast	stromal	panel
+CL:0000669	pericyte	stromal	proving_ground_broad
+CL:0000136	adipocyte	stromal	extended
+CL:0000138	chondrocyte	stromal	extended
+CL:0000062	osteoblast	stromal	extended
+CL:0000134	mesenchymal stem cell	stromal	extended
+CL:0000148	melanocyte	stromal	extended
+CL:0000192	smooth muscle cell	muscle	panel
+CL:0000746	cardiac muscle cell	muscle	extended
+CL:0008002	skeletal muscle fiber	muscle	extended
+CL:0000594	skeletal muscle satellite cell	muscle	extended
+CL:0000679	glutamatergic neuron	neural	extended
+CL:0000617	GABAergic neuron	neural	extended
+CL:0000604	retinal rod cell	neural	extended
+CL:0000573	retinal cone cell	neural	extended
+CL:0000210	photoreceptor cell	neural	extended
+CL:0000748	retinal bipolar neuron	neural	extended
+CL:0000561	amacrine cell	neural	extended
+CL:0000740	retinal ganglion cell	neural	extended
+CL:0000745	retina horizontal cell	neural	extended
+CL:0000163	endocrine cell	endocrine	extended
+CL:0000540	neuron	neural	panel
+CL:0000128	oligodendrocyte	neural	panel
+CL:0002453	oligodendrocyte precursor cell	neural	extended
+CL:0000127	astrocyte	neural	panel
+CL:0000636	Mueller cell	neural	extended
+CL:0000681	radial glial cell	neural	extended
+CL:0000065	ependymal cell	neural	extended
+CL:0002573	Schwann cell	neural	extended
+CL:0011020	neural progenitor cell	neural	extended
+CL:0000020	spermatogonium	germ_reproductive	extended
+CL:0000017	spermatocyte	germ_reproductive	extended
+CL:0000018	spermatid	germ_reproductive	extended
+CL:0000023	oocyte	germ_reproductive	extended
+CL:0000586	germ cell	germ_reproductive	extended
+CL:0000216	Sertoli cell	germ_reproductive	extended
+CL:0000178	Leydig cell	germ_reproductive	extended
+CL:0000501	granulosa cell	germ_reproductive	extended
+CL:0000525	syncytiotrophoblast cell	germ_reproductive	extended
+CL:0008036	extravillous trophoblast	germ_reproductive	extended
+CL:0000351	trophoblast cell	germ_reproductive	extended
+CL:0000064	ciliated cell	epithelial	extended
+CL:0000763	myeloid cell	immune	extended
+CL:0000542	lymphocyte	immune	extended
+CL:0000738	leukocyte	immune	extended
+CL:0000988	hematopoietic cell	blood	extended
+CL:0000187	muscle cell	muscle	extended
+CL:0002320	connective tissue cell	stromal	extended
+CL:0000499	stromal cell	stromal	extended
+CL:0000125	glial cell	neural	proving_ground_broad
+CL:0000066	epithelial cell	epithelial	proving_ground_broad
