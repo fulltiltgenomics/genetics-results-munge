@@ -33,7 +33,9 @@ Rules
   n_cells >= `--min-cells` (50) and n_donors >= `--min-donors` (3), counted per gene among
   measuring datasets. Rows below are dropped, not shown as NA
 - summary: groups with disease `PATO:0000461` (normal), tissue_type `tissue`, cell type not
-  `unknown`, and not a spatial assay (a Visium spot is not a cell; `--summary-include-spatial`
+  `unknown`, not `summary_excluded` in the roll-up table (a native label coarser than the target
+  list, such as 'leukocyte', whose pooled row would outrank the finer types it contains; see
+  rollup.py), and not a spatial assay (a Visium spot is not a cell; `--summary-include-spatial`
   admits them), pooled across datasets at (rolled-up cell type, tissue_general). n_donors is
   the sum over datasets of distinct donor_ids, so a donor published in two datasets counts twice
 - tau (Yanai 2005) per gene on the cell-type profile: mean log1p CP10k pooled over all summary
@@ -179,7 +181,7 @@ def load_gencode(path):
 def load_rollups(rollup_dir):
     ct = pl.read_csv(f"{rollup_dir}/cell_type_rollup.tsv", separator="\t", infer_schema_length=0).select(
         "cell_type_ontology_term_id", pl.col("rollup_term_id").alias("ct_r_id"),
-        pl.col("rollup_label").alias("ct_r_label"))
+        pl.col("rollup_label").alias("ct_r_label"), (pl.col("summary_excluded") == "true").alias("ct_excluded"))
     ti = pl.read_csv(f"{rollup_dir}/tissue_rollup.tsv", separator="\t", infer_schema_length=0).select(
         "tissue_ontology_term_id", pl.col("tissue_general_ontology_term_id").alias("tg_id"),
         pl.col("tissue_general").alias("tg_label"))
@@ -260,6 +262,8 @@ class Inputs:
             emit=(pl.col("n_cells") >= a.min_cells) & (pl.col("n_donors") >= a.min_donors),
             summary=(pl.col("disease_ontology_term_id") == NORMAL) & (pl.col("tissue_type") == "tissue")
             & (pl.col("cell_type_ontology_term_id") != "unknown")
+            # a native term missing from the roll-up table is not excluded: nothing says it is coarse
+            & ~pl.col("ct_excluded").fill_null(False)
             & (pl.lit(a.summary_include_spatial) | ~pl.col("spatial")))
         # summary row = (rolled-up cell type, tissue_general); ct = the cell-type level used for tau
         el = g.filter("summary")
@@ -274,6 +278,13 @@ class Inputs:
                    on=["cell_type_rollup_ontology_term_id", "tissue_general_ontology_term_id"], how="left")
         g = g.with_columns(pl.when("summary").then(pl.col("row")).alias("row"),
                            pl.when("summary").then(pl.col("ct")).alias("ct"))
+        ex = g.filter(pl.col("ct_excluded").fill_null(False) & (pl.col("disease_ontology_term_id") == NORMAL)
+                      & (pl.col("tissue_type") == "tissue"))
+        self.excluded = {r["cell_type_ontology_term_id"]: {"cell_type": r["cell_type"], "groups": r["groups"],
+                                                           "n_cells": r["n_cells"]}
+                         for r in ex.group_by("cell_type_ontology_term_id").agg(
+                             pl.col("cell_type").first(), groups=pl.len(), n_cells=pl.col("n_cells").sum()).sort(
+                             "cell_type_ontology_term_id").iter_rows(named=True)}
         self.groups, self.gd, self.map = g, gd, pl.concat(maps)
         # per (dataset, level key): cells, distinct donors, donor libraries for the pseudobulk
         gdl = gd.join(g.filter("summary").select("dataset_key", "group", "row", "ct", "n_cells"),
@@ -592,6 +603,10 @@ def run(a):
     pipe.close()
     datasets_table(inp, listing).write_csv(f"{local}/bq/datasets.tsv", separator="\t", null_value="")
 
+    rollup_meta = {}
+    if os.path.exists(f"{a.rollup_dir}/metadata.json"):
+        with open(f"{a.rollup_dir}/metadata.json") as fh:
+            rollup_meta = json.load(fh)
     unmatched = sorted(set().union(*(set(s["unmatched"]) for s in inp.gene_stats)))
     manifest = {
         "release_date": a.release_date, "release_format_version": RELEASE_FORMAT_VERSION,
@@ -601,6 +616,9 @@ def run(a):
                           ("cell_type_rollup.tsv", "tissue_rollup.tsv", "metadata.json")
                           if os.path.exists(f"{a.rollup_dir}/{n}")},
         "rollup_unmapped": inp.unmapped,
+        # normal tissue groups left out of the summary as coarser than the target list; still per-dataset
+        "summary_excluded": {"broad_targets": rollup_meta.get("broad_targets"),
+                             "rule": rollup_meta.get("summary_excluded_rule"), "cell_types": inp.excluded},
         "gencode": {"source": a.gencode, "sha256": sha256(gencode_path),
                     "dropped_no_v49_match": len(unmatched), "dropped_ids": unmatched[:1000],
                     "dropped_non_ensembl_features": sum(s["non_ensembl"] for s in inp.gene_stats),

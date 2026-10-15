@@ -150,6 +150,27 @@ def test_pseudobulk_needs_three_donors(inputs):
     assert b.donor_pseudobulk_mean_cp10k.item() == pytest.approx(30)
 
 
+def test_coarse_native_type_is_left_out_of_the_summary_only(inputs):
+    tmp_path, agg, gencode = inputs
+    leuk, pro_b = "CL:0000738", "CL:0000826"   # leukocyte (excluded); pro-B cell -> hematopoietic cell (kept)
+    hema = "CL:0000988"
+    don = [("d1", 1000), ("d2", 1000), ("d3", 1000)]
+    write_dataset(agg, "dsD", [(leuk, NORMAL, 100), (pro_b, NORMAL, 100)], {0: don, 1: don}, [G1],
+                  [(0, G1, 100, 500), (1, G1, 10, 10)], [])
+    rel = run(*inputs)
+    s = read(rel / "summary.tsv.gz")
+    assert leuk not in set(s.cell_type_rollup_ontology_term_id)
+    assert summary_row(s, G1, hema).n_cells == 100
+    # the fine fibroblast row is what it is without dsD (see test_pooling_na_versus_zero_and_rollup)
+    r = summary_row(s, G1)
+    assert (r.n_cells, r.n_datasets, r.mean_log1p_cp10k) == (460, 3, pytest.approx(round(220 / 460, 4)))
+    p = read(rel / "per_dataset.tsv.gz")
+    assert leuk in set(p[p.dataset_id == "id-dsD"].cell_type_ontology_term_id)
+    m = json.loads((rel / "manifest.json").read_text())["summary_excluded"]
+    assert m["cell_types"] == {leuk: {"cell_type": leuk, "groups": 1, "n_cells": 100}}
+    assert leuk in m["broad_targets"] and m["rule"]
+
+
 def test_suppression(inputs):
     rel = run(*inputs)
     p = read(rel / "per_dataset.tsv.gz")

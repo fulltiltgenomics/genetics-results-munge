@@ -20,11 +20,24 @@
   },
   "inputs_sha256": {
     "cell_type_targets.tsv": "064fd3261f61771f8a3b89a9922cebf2bd4b0651eaae450cd6e1280d3fda52a1",
-    "pins.tsv": "8bd8028b280d2cf7c8cf92de0cf5d576a4d78afefb48622d3b7a16779c6bd45d"
+    "pins.tsv": "8bd8028b280d2cf7c8cf92de0cf5d576a4d78afefb48622d3b7a16779c6bd45d",
+    "broad_targets.tsv": "827a471aefc0b56542c7499ba17926b35b0212b7bd4fb9d7a207c57e8052fd75"
   },
   "n_targets": 105,
   "n_pins": 8,
+  "broad_targets": [
+    "CL:0000988",
+    "CL:0000738",
+    "CL:0000763",
+    "CL:0000542",
+    "CL:0000066",
+    "CL:0002320",
+    "CL:0000187",
+    "CL:0000125"
+  ],
   "cell_type_rule": "most specific is_a ancestor-or-self in cell_type_targets.tsv (part_of and develops_from not followed); ties by target-file order; pins.tsv overrides; no target -> self",
+  "summary_excluded_rule": "native term that rolls up to a target in broad_targets.tsv and is an is_a ancestor-or-self of another target; no_target terms are never excluded; left out of the cross-dataset summary only",
+  "n_summary_excluded": 35,
   "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an ancestor-or-self (guide closure, is_a + part_of); else self; CL and CVCL tissues -> self",
   "cell_type_methods": {
     "ancestor": 767,
