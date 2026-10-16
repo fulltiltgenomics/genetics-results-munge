@@ -20,8 +20,8 @@ Inputs
   mix is_a with part_of and expose no edge types), labels and UBERON ancestry from the guide
 
 Cell type rule
-- is_a only, from `cl-basic.obo` (which carries the reasoner-inferred is_a closure). part_of
-  and develops_from are not followed: part_of puts cells under anatomical structures rather
+- is_a only, from `cl-basic.obo` (which carries reasoned direct is_a edges; the traversal makes
+  them transitive). part_of and develops_from are not followed: part_of puts cells under anatomical structures rather
   than broader cell types, and develops_from would pool a cell with its precursor
 - each term maps to its most specific is_a ancestor-or-self in the target list; equally
   specific candidates are broken by target-file order and the losers are kept in
@@ -181,9 +181,9 @@ class CellTypeRollup:
         """(roll-up term, method, other equally specific candidates)."""
         if term == UNKNOWN:
             return UNKNOWN, "unknown", []
-        # obsolete terms are not followed through replaced_by/consider: the work list has none
-        # today, and a schema-valid dataset cannot carry one, so a hit here means the listing
-        # and the pinned CL release have drifted apart
+        # obsolete terms are not followed through replaced_by/consider: a schema-valid dataset
+        # cannot carry one, so a hit here means the listing and the pinned CL release have
+        # drifted apart
         if term not in self.parents or term in self.obsolete:
             return term, "not_in_ontology", []
         anc = self.ancestors(term)
@@ -311,7 +311,8 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
         "broad_targets": broad,
         "cell_type_rule": "most specific is_a ancestor-or-self in cell_type_targets.tsv (part_of and "
                           "develops_from not followed); ties by target-file order; pins.tsv overrides; "
-                          "no target -> self",
+                          "no target -> self; a term absent from or obsolete in the pinned CL release -> self "
+                          "(method not_in_ontology)",
         "summary_excluded_rule": "native term that rolls up to a target in broad_targets.tsv and is an is_a "
                                  "ancestor-or-self of another target; no_target terms are never excluded; "
                                  "left out of the cross-dataset summary only",

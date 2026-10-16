@@ -35,7 +35,7 @@
     "CL:0000187",
     "CL:0000125"
   ],
-  "cell_type_rule": "most specific is_a ancestor-or-self in cell_type_targets.tsv (part_of and develops_from not followed); ties by target-file order; pins.tsv overrides; no target -> self",
+  "cell_type_rule": "most specific is_a ancestor-or-self in cell_type_targets.tsv (part_of and develops_from not followed); ties by target-file order; pins.tsv overrides; no target -> self; a term absent from or obsolete in the pinned CL release -> self (method not_in_ontology)",
   "summary_excluded_rule": "native term that rolls up to a target in broad_targets.tsv and is an is_a ancestor-or-self of another target; no_target terms are never excluded; left out of the cross-dataset summary only",
   "n_summary_excluded": 35,
   "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an ancestor-or-self (guide closure, is_a + part_of); else self; CL and CVCL tissues -> self",

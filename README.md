@@ -70,6 +70,8 @@ There are scripts to munge data from Open Targets and eQTL Catalogue to the same
 
 To run the scripts, make sure you have git, Docker and Google Cloud SDK installed, and a [Docker image created](#docker-image).
 
+The single-cell expression pipeline in `scripts/cellxgene/` (planner, worker, roll-up, publisher, driver) is separate from these and is described under [CELLxGENE cell-type expression release](#cellxgene-cell-type-expression-release).
+
 ### Open Targets
 
 Get the credible set and study parquet files of an Open Targets release into their own subdirectories of the data directory. They are on the EBI FTP site and in a requester pays bucket (see the [Open Targets website](https://platform.opentargets.org/downloads/credible_set/access) for other download options):
@@ -351,7 +353,7 @@ docstring holds the rules and thresholds; the `*_COLUMNS` constants are the colu
 - the **primary** metric is the cell-level `mean_log1p_cp10k`, with `frac_expressing` beside it;
   these are what rank cell types
 - `donor_pseudobulk_mean_cp10k` is **secondary**: the donor-pseudobulk mean (per-donor CP10k
-  averaged over donors), NA unless the group has 3 or more donors (`donor_pseudobulk_n_donors`)
+  averaged over donors), NA unless at least `--min-pseudobulk-donors` donors with a nonzero library (default 3) contribute; `donor_pseudobulk_n_donors` counts them
 - the per-dataset table has rows only where some cell expressed the gene; a missing row is 0 when
   `measured_genes.tsv.gz` lists the gene for that dataset, and "not measured" otherwise
 - a gs:// `--agg` needs `--datasets` / `--datasets-file`, the dataset_version_ids to publish, so

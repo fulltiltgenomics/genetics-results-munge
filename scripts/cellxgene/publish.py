@@ -48,9 +48,10 @@ Rules
   if `measured_genes.tsv.gz` lists it for that dataset, else not measured (NA). That reading holds only for
   a dataset with at least one group passing the thresholds above; a fully suppressed dataset says nothing about the gene
 
-Outputs in `<out>/<release-date>/`, built in a fresh directory and moved into place (replacing
-any earlier run of that date); gs:// is built in `--workdir` and uploaded, manifest last. A
-`--genes` run writes to `<out>/<release-date>/genes-mode/` instead and refuses a gs:// `--out`
+Outputs in `<out>/<release-date>/`, built in a fresh directory and moved into place (a local
+`--out` replaces any earlier run of that date, and a failed local run leaves its `.<date>-*`
+directory behind); gs:// is built in `--workdir` and uploaded, manifest last. A
+`--genes` run writes to `<out>/<release-date>-genes-mode/` instead and refuses a gs:// `--out`
 unless `--force-remote-genes`
 - `summary.tsv.gz`, `per_dataset.tsv.gz`: bgzipped, sorted by (chrom, gene_start), point-indexed
   `tabix -s2 -b3 -e3` on gene_start like GTEx. chrom is the GENCODE file's own numeric coding
