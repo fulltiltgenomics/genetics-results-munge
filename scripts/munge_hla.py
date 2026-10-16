@@ -20,9 +20,8 @@ Two artifacts come out, because the data has two query axes:
      allele, which no per-phenotype file can answer)
 
 Phenotype scope: only phenocodes present in the R14 core phenotype metadata are kept.
-The source ships ~96 extra ``_WIDE`` endpoints that have no entry in
-``finngen_r14_pheno.json``; without metadata they would surface in the API as traits
-with no name, case count or category, so they are dropped (see --pheno-metadata).
+Without metadata a trait would surface in the API with no name, case count or category,
+so a source endpoint ``finngen_r14_pheno.json`` lacks is dropped (see --pheno-metadata).
 """
 
 import argparse

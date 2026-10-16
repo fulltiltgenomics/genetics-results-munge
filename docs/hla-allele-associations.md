@@ -45,13 +45,13 @@ cost of duplicating 187 values across 507k rows.
 qctool writes a block of `#`-prefixed provenance lines before the header, so the sidecar
 parser skips to the first non-comment line rather than reading line 1 as the header.
 
-**3. Phenotypes without release metadata are dropped.** The source ships more endpoints
-than the release phenotype metadata JSON describes — 2,808 versus 2,716 for R14. The 96
-extras are all `_WIDE` variants of endpoints that are themselves present. Serving them
-would surface traits in the API with no name, case count or category, so they are
-filtered out. 2,712 phenotypes survive; 4 core endpoints (`AB1_EBV`,
-`AB1_PNEUMOCYSTOSIS`, `AB1_SYPHILIS`, `C3_ASTROCYTOMA_WIDE`) have no HLA run at all and
-are reported by the script.
+**3. Phenotypes without release metadata are dropped.** A phenocode the release
+phenotype metadata JSON lacks would surface in the API as a trait with no name, case count
+or category, so the script drops it and reports the count. With `finngen_r14_pheno.json`
+built from the release's own `pheno_n` TSV (`r14_core_phenotypes.py`) every HLA source
+endpoint has metadata and all 2,808 survive; 5 of the release's 2,813 endpoints
+(`AB1_EBV`, `AB1_LYME_WIDE`, `AB1_PNEUMOCYSTOSIS`, `AB1_SYPHILIS`, `C3_ASTROCYTOMA_WIDE`)
+have no HLA run at all and are reported by the script.
 
 **4. Case/control allele frequencies are optional.** Quantitative endpoints (BMI, height,
 Kanta labs) have no `af_alt_cases`/`af_alt_controls` columns, exactly as in the core

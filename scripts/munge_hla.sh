@@ -4,8 +4,8 @@
 # publish both to the finngen and daly buckets.
 #
 # Source: the release `hla/` directory in the FinnGen green library. Set SOURCE to point at a
-#   different release. The phenotype metadata JSON decides which phenocodes survive: the source
-#   ships ~96 extra _WIDE endpoints with no R14 metadata and those are dropped.
+#   different release. The phenotype metadata JSON decides which phenocodes survive: a source
+#   endpoint it lacks is dropped (none, with the JSON built from the release pheno_n TSV).
 #
 # Run inside the genetics-results-munge Docker image (htslib bgzip/tabix available).
 # Staging to GCS is OFF by default; pass --stage explicitly only when ready to publish.
