@@ -1,0 +1,19 @@
+# roll-up targets that are lineage-level umbrellas; read by rollup.py, which fails on a term
+# that is not in cell_type_targets.tsv, whose label differs from the CL release, or that is not
+# an is_a ancestor of another target. A native cell type that rolls up to one of these AND is
+# itself an is_a ancestor-or-self of some other target (it is coarser than the target list:
+# 'leukocyte', 'myeloid leukocyte', 'erythroid lineage cell') is left out of the cross-dataset
+# summary; a native type with nothing finer in the target list (pro-B cell, urothelial cell)
+# still pools there. A native term with no target ('neural cell', 'stem cell') is never left out,
+# even when it sits above targets.
+# A target that is an ancestor of other targets but is the natural resolution of many datasets
+# (e.g. endothelial cell, macrophage, neuron, stromal cell) is deliberately not listed.
+term_id	label	reason
+CL:0000988	hematopoietic cell	the whole blood and immune system; spans the lymphoid, myeloid, erythroid and megakaryocyte lineages
+CL:0000738	leukocyte	every immune cell; in the 19-dataset rehearsal a 'leukocyte' group outranked T cell for CD3E, CD3D and CD8A
+CL:0000763	myeloid cell	pools monocytes, macrophages, granulocytes, mast cells and the erythroid/megakaryocyte lineage; in the rehearsal a 'myeloid cell' group outranked monocyte for CD14 and macrophage for C1QA
+CL:0000542	lymphocyte	pools T, B, plasma, NK and innate lymphoid cells
+CL:0000066	epithelial cell	every epithelium, from hepatocytes to alveolar, islet and kidney cells
+CL:0002320	connective tissue cell	pools fibroblasts, pericytes, adipocytes, chondrocytes, osteoblasts and mesenchymal stem cells
+CL:0000187	muscle cell	pools smooth, cardiac and skeletal muscle, three unrelated expression programmes
+CL:0000125	glial cell	pools microglia (an immune lineage) with astrocytes, oligodendrocytes and Schwann cells

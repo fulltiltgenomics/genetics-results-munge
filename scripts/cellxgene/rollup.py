@@ -12,16 +12,16 @@ Inputs
 - the curation API listing (`--listing`, or fetched with `--download` into `--cache-dir`). The
   work list is the cost model's: human, `primary_cell_count > 0`, methylation assays excluded.
   Only the dataset-level `cell_type` and `tissue` term lists are read
-- `rollup/cell_type_targets.tsv` and `rollup/pins.tsv`, both hand-curated and reviewed. Every
-  id must exist in the pinned CL release with exactly the label written there, so a typo fails
-  the build instead of silently becoming a target nobody rolls up to
+- `rollup/cell_type_targets.tsv`, `rollup/pins.tsv` and `rollup/broad_targets.tsv`, all
+  hand-curated and reviewed. Every id must exist in the pinned CL release with exactly the label
+  written there, so a typo fails the build instead of silently becoming a target nobody rolls up to
 - ontologies, pinned by the installed `cellxgene-ontology-guide` for the listing's schema
   version: CL ancestry from that CL release's `cl-basic.obo` (the guide's own ancestor sets
   mix is_a with part_of and expose no edge types), labels and UBERON ancestry from the guide
 
 Cell type rule
-- is_a only, from `cl-basic.obo` (which carries the reasoner-inferred is_a closure). part_of
-  and develops_from are not followed: part_of puts cells under anatomical structures rather
+- is_a only, from `cl-basic.obo` (which carries reasoned direct is_a edges; the traversal makes
+  them transitive). part_of and develops_from are not followed: part_of puts cells under anatomical structures rather
   than broader cell types, and develops_from would pool a cell with its precursor
 - each term maps to its most specific is_a ancestor-or-self in the target list; equally
   specific candidates are broken by target-file order and the losers are kept in
@@ -31,6 +31,18 @@ Cell type rule
 - a term with no target ancestor maps to itself (`no_target`), as does a term absent from the
   release; `unknown` stays `unknown`. Mapping to itself rather than to a catch-all "cell" keeps
   such groups distinct instead of pooling unrelated cells
+
+Summary exclusion (`summary_excluded` in `cell_type_rollup.tsv`; publish.py leaves these
+native terms out of the cross-dataset summary and keeps them in the per-dataset grain): a native
+term that rolls up to a target listed in `broad_targets.tsv` and is itself an is_a
+ancestor-or-self of another target. Such a label is coarser than the target list, so its pooled
+row would compete with the finer types it contains. A term with no target (`no_target`) stays
+in even when it sits above targets ('neural cell'): the exclusion is limited to the reviewed
+umbrellas, and leaving those out did not change the marker panel in the rehearsal. The
+curated list is needed because being an ancestor of another target is not enough: endothelial
+cell, macrophage and neuron are ancestors of targets too, yet are the resolution most datasets
+label at. Matching on the native term rather than the roll-up keeps a type that merely has no
+finer target (pro-B cell -> hematopoietic cell) in the summary.
 
 Tissue rule: CELLxGENE Census's own (`TissueMapper.get_high_level_tissue` in the census
 builder): the first term of the guide's curated `tissue_general` list that is an
@@ -105,6 +117,21 @@ def read_targets(path, labels):
     return ids
 
 
+def read_broad(path, labels, ct):
+    rows = _read_tsv(path)
+    for r in rows:
+        t = r["term_id"]
+        problems = [p for p, bad in (
+            ("empty reason", not r["reason"].strip()),
+            (f"label is {labels.get(t)!r} in the release", labels.get(t) != r["label"]),
+            ("not in the target list", t not in ct.rank),
+            ("not an is_a ancestor of another target", not ct.finer_targets(t, t)),
+            ("listed twice", [x["term_id"] for x in rows].count(t) > 1)) if bad]
+        if problems:
+            raise SystemExit(f"{path}: {t}: {'; '.join(problems)}")
+    return [r["term_id"] for r in rows]
+
+
 def read_pins(path, labels, targets):
     pins = {}
     for r in _read_tsv(path):
@@ -138,6 +165,14 @@ class CellTypeRollup:
             self._anc[term] = out
         return self._anc[term]
 
+    def finer_targets(self, term, own=None):
+        """Targets other than `own` that `term` is an is_a ancestor-or-self of."""
+        return [t for t in self.targets if t != own and term in self.ancestors(t)]
+
+    def summary_excluded(self, term, rollup, method, broad):
+        return (method in ("self", "ancestor", "pin", "pin_descendant") and rollup in broad
+                and bool(self.finer_targets(term, rollup)))
+
     def _most_specific(self, cands):
         best = [t for t in cands if not any(o != t and t in self.ancestors(o) for o in cands)]
         return sorted(best, key=lambda t: self.rank.get(t, -1))
@@ -146,9 +181,9 @@ class CellTypeRollup:
         """(roll-up term, method, other equally specific candidates)."""
         if term == UNKNOWN:
             return UNKNOWN, "unknown", []
-        # obsolete terms are not followed through replaced_by/consider: the work list has none
-        # today, and a schema-valid dataset cannot carry one, so a hit here means the listing
-        # and the pinned CL release have drifted apart
+        # obsolete terms are not followed through replaced_by/consider: a schema-valid dataset
+        # cannot carry one, so a hit here means the listing and the pinned CL release have
+        # drifted apart
         if term not in self.parents or term in self.obsolete:
             return term, "not_in_ontology", []
         anc = self.ancestors(term)
@@ -196,7 +231,10 @@ def write_tsv(path, header, rows):
         w.writerows(rows)
 
 
-def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pins_path=HERE / "pins.tsv"):
+def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pins_path=HERE / "pins.tsv",
+          broad_path=None):
+    # beside the targets by default, so a test's synthetic targets get their own list
+    broad_path = broad_path or Path(targets_path).parent / "broad_targets.tsv"
     from cellxgene_ontology_guide.curated_ontology_term_lists import (
         get_curated_ontology_term_list,
     )
@@ -218,13 +256,15 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
     targets = read_targets(targets_path, labels)
     pins = read_pins(pins_path, labels, targets)
     ct = CellTypeRollup(parents, labels, obsolete, targets, pins)
+    broad = read_broad(broad_path, labels, ct)
 
     listed_ct = {c["ontology_term_id"]: c["label"] for x in work for c in x["cell_type"]}
     ct_rows = []
     for term in sorted(listed_ct):
         tgt, method, others = ct.map(term)
         ct_rows.append([term, labels.get(term, listed_ct[term]), tgt,
-                        labels.get(tgt, listed_ct.get(tgt, tgt)), method, ";".join(others)])
+                        labels.get(tgt, listed_ct.get(tgt, tgt)), method, ";".join(others),
+                        str(ct.summary_excluded(term, tgt, method, broad)).lower()])
 
     listed_ts, ts_types = {}, {}
     for x in work:
@@ -246,7 +286,7 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
 
     out.mkdir(parents=True, exist_ok=True)
     write_tsv(out / "cell_type_rollup.tsv", ["cell_type_ontology_term_id", "cell_type", "rollup_term_id",
-              "rollup_label", "method", "other_candidates"], ct_rows)
+              "rollup_label", "method", "other_candidates", "summary_excluded"], ct_rows)
     write_tsv(out / "tissue_rollup.tsv", ["tissue_ontology_term_id", "tissue", "tissue_types",
               "tissue_general_ontology_term_id", "tissue_general", "method"], ts_rows)
 
@@ -265,12 +305,18 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
         "listing": {"url": LISTING_URL, "sha256": sha256(listing), "n_datasets": len(datasets),
                     "n_work_list": len(work),
                     "filter": "human, primary_cell_count > 0, no methylation (snmC*/methyl*) assay"},
-        "inputs_sha256": {p.name: sha256(p) for p in (targets_path, pins_path)},
+        "inputs_sha256": {p.name: sha256(p) for p in map(Path, (targets_path, pins_path, broad_path))},
         "n_targets": len(targets),
         "n_pins": len(pins),
+        "broad_targets": broad,
         "cell_type_rule": "most specific is_a ancestor-or-self in cell_type_targets.tsv (part_of and "
                           "develops_from not followed); ties by target-file order; pins.tsv overrides; "
-                          "no target -> self",
+                          "no target -> self; a term absent from or obsolete in the pinned CL release -> self "
+                          "(method not_in_ontology)",
+        "summary_excluded_rule": "native term that rolls up to a target in broad_targets.tsv and is an is_a "
+                                 "ancestor-or-self of another target; no_target terms are never excluded; "
+                                 "left out of the cross-dataset summary only",
+        "n_summary_excluded": sum(r[6] == "true" for r in ct_rows),
         "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an "
                        "ancestor-or-self (guide closure, is_a + part_of); else self; CL and CVCL "
                        "tissues -> self",

@@ -203,6 +203,9 @@ class Layout:
     def rejected(self, vid):
         return f"{self.agg(vid)}/{plan.REJECTED}"
 
+    # raw/ is keyed by dataset_version_id only, not by FORMAT_VERSION like the aggregates: after a
+    # format bump, a stricter check that rejects a version deletes the raw of a version that
+    # succeeded under the old format (recoverable while CZI still serves that version)
     def raw(self, vid):
         return f"{self.root}/raw/{vid}.h5ad"
 
@@ -443,6 +446,8 @@ def outcomes(bkt, lay, run_id, items, done, rejected):
 
 def mark_superseded(bkt, lay, superseded, done, clock=now):
     """customTime=now on the old raw file, only after its replacement has a marker."""
+    # only versions with a _SUCCESS marker are ever retired here: the raw file of a version that
+    # failed (rather than was rejected) and was later superseded stays until someone deletes it
     res = []
     for s in superseded:
         old, new = s["dataset_version_id"], s["current_dataset_version_id"]
@@ -485,6 +490,8 @@ def publish_inputs(in_scope, image_digest, publish_cmd, rollup_dir=HERE / "rollu
             "image": image_digest, "publish_cmd": publish_cmd}
 
 
+# raising here releases the lock but does not cancel the Batch worker jobs already submitted;
+# they run on to their own end, and the next driver run finds their markers
 def _sigterm(signum, frame):
     raise SystemExit(128 + signum)
 

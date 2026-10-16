@@ -146,7 +146,7 @@ Prices read from the Cloud Billing Catalog API (`cloudbilling.googleapis.com/v1/
 ## What surprised me
 
 1. **The largest file is not the slowest.** Time follows nnz, not bytes: the 53 GB SEA-AD file has 7.9 B nnz and took 21 min;
-   MSSM (36 GB, 15.6 B nnz) took 33.5 min. The 8 h threshold is missed by ~15x even single-threaded.
+   MSSM (36 GB, 15.6 B nnz) took 33.5 min. The 8 h threshold is beaten by ~15x even single-threaded.
 2. **Memory is tiny.** Peak RSS 5.4 GB on the heaviest dataset (3 GB of it the dense group x donor accumulator), under 2 GB
    everywhere else. Processing is single-threaded, so the planned e2-highmem-4 and n2-highmem-8 classes buy idle cores
    and unused RAM; every dataset measured fits an e2-standard-2 (8 GB) or e2-highmem-2.

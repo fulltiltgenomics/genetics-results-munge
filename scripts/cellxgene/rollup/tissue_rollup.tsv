@@ -1,0 +1,572 @@
+tissue_ontology_term_id	tissue	tissue_types	tissue_general_ontology_term_id	tissue_general	method
+CL:0000082	epithelial cell of lung	primary cell culture	CL:0000082	epithelial cell of lung	cell_culture_self
+CL:0000084	T cell	primary cell culture	CL:0000084	T cell	cell_culture_self
+CL:0000115	endothelial cell	primary cell culture	CL:0000115	endothelial cell	cell_culture_self
+CL:0000351	trophoblast cell	primary cell culture	CL:0000351	trophoblast cell	cell_culture_self
+CL:0002322	embryonic stem cell	primary cell culture	CL:0002322	embryonic stem cell	cell_culture_self
+CL:0002328	bronchial epithelial cell	primary cell culture	CL:0002328	bronchial epithelial cell	cell_culture_self
+CL:0002334	preadipocyte	primary cell culture	CL:0002334	preadipocyte	cell_culture_self
+CL:0002335	brown preadipocyte	primary cell culture	CL:0002335	brown preadipocyte	cell_culture_self
+CL:0002586	retinal pigment epithelial cell	primary cell culture	CL:0002586	retinal pigment epithelial cell	cell_culture_self
+CL:0002633	respiratory basal cell	primary cell culture	CL:0002633	respiratory basal cell	cell_culture_self
+CVCL_0004	K-562	cell line	CVCL_0004	K-562	cell_culture_self
+CVCL_0023	A-549	cell line	CVCL_0023	A-549	cell_culture_self
+CVCL_0031	MCF-7	cell line	CVCL_0031	MCF-7	cell_culture_self
+CVCL_0060	NCI-H1299	cell line	CVCL_0060	NCI-H1299	cell_culture_self
+CVCL_0609	Calu-3	cell line	CVCL_0609	Calu-3	cell_culture_self
+UBERON:0000002	uterine cervix	tissue	UBERON:0000995	uterus	tissue_general
+UBERON:0000004	nose	tissue	UBERON:0000004	nose	tissue_general
+UBERON:0000006	islet of Langerhans	tissue	UBERON:0001264	pancreas	tissue_general
+UBERON:0000014	zone of skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0000016	endocrine pancreas	tissue	UBERON:0001264	pancreas	tissue_general
+UBERON:0000017	exocrine pancreas	tissue	UBERON:0001264	pancreas	tissue_general
+UBERON:0000029	lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0000033	head	tissue	UBERON:0000033	head	no_tissue_general
+UBERON:0000044	dorsal root ganglion	tissue	UBERON:0001016	nervous system	tissue_general
+UBERON:0000053	macula lutea	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0000056	ureter	organoid,tissue	UBERON:0000056	ureter	tissue_general
+UBERON:0000059	large intestine	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0000080	mesonephros	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0000088	trophoblast	organoid	UBERON:0000922	embryo	tissue_general
+UBERON:0000115	lung epithelium	organoid	UBERON:0002048	lung	tissue_general
+UBERON:0000117	respiratory tube	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0000160	intestine	organoid,tissue	UBERON:0000160	intestine	tissue_general
+UBERON:0000167	oral cavity	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0000175	pleural effusion	tissue	UBERON:0001087	pleural fluid	tissue_general
+UBERON:0000178	blood	tissue	UBERON:0000178	blood	tissue_general
+UBERON:0000204	ventral part of telencephalon	organoid	UBERON:0000955	brain	tissue_general
+UBERON:0000310	breast	tissue	UBERON:0000310	breast	tissue_general
+UBERON:0000314	cecum mucosa	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0000317	colonic mucosa	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0000320	duodenal mucosa	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0000328	gut wall	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0000331	ileal mucosa	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0000344	mucosa	tissue	UBERON:0000344	mucosa	tissue_general
+UBERON:0000362	renal medulla	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0000397	colonic epithelium	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0000399	jejunal mucosa	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0000400	jejunal epithelium	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0000403	scalp	tissue	UBERON:0000403	scalp	no_tissue_general
+UBERON:0000410	bronchial mucosa	tissue	UBERON:0000344	mucosa	tissue_general
+UBERON:0000411	visual cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0000451	prefrontal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0000453	decidua basalis	tissue	UBERON:0001987	placenta	tissue_general
+UBERON:0000454	cerebral subcortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0000473	testis	tissue	UBERON:0000473	testis	tissue_general
+UBERON:0000916	abdomen	tissue	UBERON:0000916	abdomen	tissue_general
+UBERON:0000922	embryo	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0000941	cranial nerve II	tissue	UBERON:0001017	central nervous system	tissue_general
+UBERON:0000945	stomach	organoid,tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0000947	aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0000948	heart	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0000955	brain	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0000956	cerebral cortex	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0000964	cornea	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0000965	lens of camera-type eye	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0000966	retina	organoid,tissue	UBERON:0000970	eye	tissue_general
+UBERON:0000970	eye	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0000974	neck	tissue	UBERON:0000974	neck	no_tissue_general
+UBERON:0000977	pleura	tissue	UBERON:0000977	pleura	tissue_general
+UBERON:0000988	pons	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0000991	gonad	tissue	UBERON:0000990	reproductive system	tissue_general
+UBERON:0000992	ovary	tissue	UBERON:0000992	ovary	tissue_general
+UBERON:0000995	uterus	tissue	UBERON:0000995	uterus	tissue_general
+UBERON:0001003	skin epidermis	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001005	respiratory airway	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0001013	adipose tissue	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0001040	yolk sac	tissue	UBERON:0001040	yolk sac	no_tissue_general
+UBERON:0001043	esophagus	tissue	UBERON:0001043	esophagus	tissue_general
+UBERON:0001046	hindgut	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0001049	neural tube	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0001051	hypopharynx	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0001052	rectum	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0001068	skin of back	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001072	inferior vena cava	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001085	skin of trunk	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001087	pleural fluid	tissue	UBERON:0001087	pleural fluid	tissue_general
+UBERON:0001090	synovial fluid	tissue	UBERON:0001090	synovial fluid	no_tissue_general
+UBERON:0001097	axillary lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0001103	diaphragm	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001111	intercostal muscle	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001114	right lobe of liver	tissue	UBERON:0002107	liver	tissue_general
+UBERON:0001115	left lobe of liver	tissue	UBERON:0002107	liver	tissue_general
+UBERON:0001117	caudate lobe of liver	tissue	UBERON:0002107	liver	tissue_general
+UBERON:0001134	skeletal muscle tissue	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001153	caecum	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0001154	vermiform appendix	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0001155	colon	organoid,tissue	UBERON:0001155	colon	tissue_general
+UBERON:0001156	ascending colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0001157	transverse colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0001158	descending colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0001159	sigmoid colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0001161	body of stomach	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001162	cardia of stomach	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001165	pyloric antrum	organoid,tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001166	pylorus	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001174	common bile duct	organoid	UBERON:0001007	digestive system	tissue_general
+UBERON:0001199	mucosa of stomach	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001203	muscularis mucosae of stomach	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001224	renal pelvis	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0001225	cortex of kidney	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0001228	renal papilla	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0001238	lamina propria of small intestine	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0001242	intestinal mucosa	organoid	UBERON:0000160	intestine	tissue_general
+UBERON:0001255	urinary bladder	organoid,tissue	UBERON:0001255	urinary bladder	tissue_general
+UBERON:0001258	neck of urinary bladder	tissue	UBERON:0001255	urinary bladder	tissue_general
+UBERON:0001264	pancreas	organoid,tissue	UBERON:0001264	pancreas	tissue_general
+UBERON:0001275	pubis	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0001276	epithelium of stomach	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0001295	endometrium	organoid,tissue	UBERON:0000995	uterus	tissue_general
+UBERON:0001296	myometrium	tissue	UBERON:0000995	uterus	tissue_general
+UBERON:0001300	scrotum	organoid	UBERON:0000990	reproductive system	tissue_general
+UBERON:0001301	epididymis	tissue	UBERON:0000990	reproductive system	tissue_general
+UBERON:0001348	brown adipose tissue	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0001359	cerebrospinal fluid	tissue	UBERON:0001359	cerebrospinal fluid	no_tissue_general
+UBERON:0001366	parietal peritoneum	tissue	UBERON:0000916	abdomen	tissue_general
+UBERON:0001377	quadriceps femoris	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001379	vastus lateralis	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001384	primary motor cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001385	tibialis anterior	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001388	gastrocnemius	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001416	skin of abdomen	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001417	skin of neck	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001443	chest	tissue	UBERON:0001443	chest	no_tissue_general
+UBERON:0001459	skin of external ear	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001471	skin of prepuce of penis	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001483	skin of shoulder	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001496	ascending aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001508	arch of aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001510	skin of knee	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001511	skin of leg	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001513	skin of pes	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001514	descending aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001515	thoracic aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001516	abdominal aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001542	inguinal lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0001554	skin of hip	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001621	coronary artery	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0001625	right coronary artery	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0001626	left coronary artery	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0001630	muscle organ	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0001637	artery	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001638	vein	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0001684	mandible	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0001707	nasal cavity	tissue	UBERON:0000004	nose	tissue_general
+UBERON:0001711	eyelid	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001723	tongue	tissue	UBERON:0001723	tongue	tissue_general
+UBERON:0001728	nasopharynx	organoid,tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0001729	oropharynx	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0001733	soft palate	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0001736	submandibular gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0001737	larynx	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0001754	dental pulp	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0001758	periodontium	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0001768	uvea	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001769	iris	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001772	corneal epithelium	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001773	sclera	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001775	ciliary body	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001776	optic choroid	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001777	substantia propria of cornea	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001782	pigmented layer of retina	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001783	optic disc	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001786	fovea centralis	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001801	anterior segment of eyeball	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001802	posterior segment of eyeball	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001811	conjunctiva	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001817	lacrimal gland	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001828	gingiva	tissue	UBERON:0000344	mucosa	tissue_general
+UBERON:0001830	minor salivary gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0001831	parotid gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0001832	sublingual gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0001836	saliva	tissue	UBERON:0001836	saliva	tissue_general
+UBERON:0001851	cortex	tissue	UBERON:0001851	cortex	no_tissue_general
+UBERON:0001853	utricle of membranous labyrinth	tissue	UBERON:0000010	peripheral nervous system	tissue_general
+UBERON:0001868	skin of chest	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0001869	cerebral hemisphere	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001870	frontal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001871	temporal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001872	parietal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001873	caudate nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001874	putamen	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001875	globus pallidus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001876	amygdala	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001880	bed nucleus of stria terminalis	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001882	nucleus accumbens	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001885	dentate gyrus of hippocampal formation	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001886	choroid plexus	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001890	forebrain	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001891	midbrain	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001893	telencephalon	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001894	diencephalon	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001895	metencephalon	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001896	medulla oblongata	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001897	dorsal plus ventral thalamus	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001898	hypothalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001899	epithalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001901	epithelium of trachea	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0001902	epithelium of small intestine	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0001906	subthalamic nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001911	mammary gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0001913	milk	tissue	UBERON:0001913	milk	no_tissue_general
+UBERON:0001926	lateral geniculate body	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001927	medial geniculate body	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001928	preoptic area	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001929	supraoptic nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001932	arcuate nucleus of hypothalamus	organoid	UBERON:0000955	brain	tissue_general
+UBERON:0001943	midbrain tegmentum	organoid	UBERON:0000955	brain	tissue_general
+UBERON:0001944	pretectal region	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001947	red nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001950	neocortex	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001965	substantia nigra pars compacta	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0001976	epithelium of esophagus	tissue	UBERON:0001043	esophagus	tissue_general
+UBERON:0001985	corneal endothelium	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0001987	placenta	organoid,tissue	UBERON:0001987	placenta	tissue_general
+UBERON:0001997	olfactory epithelium	tissue	UBERON:0000004	nose	tissue_general
+UBERON:0002012	pulmonary artery	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0002021	occipital lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002023	claustrum of brain	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002028	hindbrain	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002037	cerebellum	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002038	substantia nigra	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002041	terminal bronchus	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0002046	thyroid gland	organoid,tissue	UBERON:0002368	endocrine gland	tissue_general
+UBERON:0002048	lung	organoid,tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002049	vasculature	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0002060	femoral artery	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0002067	dermis	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0002078	right cardiac atrium	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002079	left cardiac atrium	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002080	heart right ventricle	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002081	cardiac atrium	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002082	cardiac ventricle	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002084	heart left ventricle	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002094	interventricular septum	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002097	skin of body	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0002098	apex of heart	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002101	limb	tissue	UBERON:0002101	limb	no_tissue_general
+UBERON:0002102	forelimb	tissue	UBERON:0002102	forelimb	no_tissue_general
+UBERON:0002103	hindlimb	tissue	UBERON:0002103	hindlimb	no_tissue_general
+UBERON:0002106	spleen	tissue	UBERON:0002106	spleen	tissue_general
+UBERON:0002107	liver	organoid,tissue	UBERON:0002107	liver	tissue_general
+UBERON:0002108	small intestine	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0002110	gallbladder	organoid,tissue	UBERON:0002110	gallbladder	tissue_general
+UBERON:0002113	kidney	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0002114	duodenum	organoid,tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0002115	jejunum	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0002116	ileum	organoid,tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0002118	right ovary	tissue	UBERON:0000992	ovary	tissue_general
+UBERON:0002119	left ovary	tissue	UBERON:0000992	ovary	tissue_general
+UBERON:0002127	inferior olivary complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002129	cerebellar cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002130	cerebellar nuclear complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002132	dentate nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002143	dorsal tegmental nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002151	pontine nuclear group	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002167	right lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002168	left lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002169	alveolar sac	organoid	UBERON:0002048	lung	tissue_general
+UBERON:0002170	upper lobe of right lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002171	lower lobe of right lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002174	middle lobe of right lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002178	left main bronchus	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0002184	segmental bronchus	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002185	bronchus	organoid,tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0002190	subcutaneous adipose tissue	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0002206	mammillary body	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002228	rib	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0002240	spinal cord	tissue	UBERON:0002240	spinal cord	tissue_general
+UBERON:0002266	anterior olfactory nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002272	medial zone of hypothalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002294	biliary system	organoid	UBERON:0001007	digestive system	tissue_general
+UBERON:0002299	alveolus of lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0002314	midbrain tectum	organoid,tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002317	white matter of cerebellum	tissue	UBERON:0001017	central nervous system	tissue_general
+UBERON:0002340	epithelium of main bronchus	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0002351	sinoatrial node	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002352	atrioventricular node	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0002358	peritoneum	tissue	UBERON:0000916	abdomen	tissue_general
+UBERON:0002360	meninx	tissue	UBERON:0001017	central nervous system	tissue_general
+UBERON:0002367	prostate gland	organoid,tissue	UBERON:0002367	prostate gland	tissue_general
+UBERON:0002369	adrenal gland	tissue	UBERON:0002369	adrenal gland	tissue_general
+UBERON:0002370	thymus	organoid,tissue	UBERON:0002368	endocrine gland	tissue_general
+UBERON:0002371	bone marrow	organoid,tissue	UBERON:0002371	bone marrow	tissue_general
+UBERON:0002372	tonsil	tissue	UBERON:0002405	immune system	tissue_general
+UBERON:0002378	muscle of abdomen	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0002382	rectus abdominis muscle	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0002385	muscle tissue	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0002420	basal ganglion	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002421	hippocampal formation	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002427	arm skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0002429	cervical lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0002435	striatum	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002436	primary visual cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002450	decidua	tissue	UBERON:0001987	placenta	tissue_general
+UBERON:0002463	muscle of posterior compartment of hindlimb stylopod	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0002474	cerebellar peduncular complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002477	medial globus pallidus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002484	bone marrow cavity	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0002509	mesenteric lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0002573	pontine reticular formation	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002630	body of caudate nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002637	ventral anterior nucleus of thalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002657	posterior parahippocampal gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002661	superior frontal gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002663	septal nuclear complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002686	angular gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002728	entorhinal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002733	intralaminar nuclear group	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002736	lateral nuclear group of thalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002739	medial dorsal nucleus of thalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002743	basal forebrain	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002751	inferior temporal gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002756	anterior cingulate gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002769	superior temporal gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002771	middle temporal gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002788	anterior nuclear group	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002792	lumbar spinal cord	tissue	UBERON:0002240	spinal cord	tissue_general
+UBERON:0002802	left parietal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002803	right parietal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002807	right occipital lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002808	left temporal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002809	right temporal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002810	right frontal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002811	left frontal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002822	macula lutea proper	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0002870	dorsal motor nucleus of vagus nerve	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002883	central amygdaloid nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002885	accessory basal amygdaloid nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002886	lateral amygdaloid nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002967	cingulate gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002972	centromedian nucleus of thalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002981	pulvinar nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002983	lateral posterior nucleus of thalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0002998	inferior frontal gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003017	substantia innominata	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003023	pontine tegmentum	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003027	cingulate cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003072	optic cup	organoid	UBERON:0003072	optic cup	no_tissue_general
+UBERON:0003105	dorsal lateral plate region	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0003126	trachea	tissue	UBERON:0001004	respiratory system	tissue_general
+UBERON:0003216	hard palate	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0003346	mucosa of rectum	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0003354	epithelium of rectum	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0003403	skin of forearm	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0003517	kidney blood vessel	tissue	UBERON:0002113	kidney	tissue_general
+UBERON:0003532	hindlimb skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0003544	brain white matter	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003547	brain meninx	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003548	forebrain meninges	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003584	mammary gland connective tissue	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0003594	pelvis connective tissue	tissue	UBERON:0003594	pelvis connective tissue	no_tissue_general
+UBERON:0003679	mouth floor	tissue	UBERON:0001007	digestive system	tissue_general
+UBERON:0003688	omentum	tissue	UBERON:0003688	omentum	tissue_general
+UBERON:0003697	abdominal wall	tissue	UBERON:0000916	abdomen	tissue_general
+UBERON:0003701	calcaneal tendon	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0003704	intrahepatic bile duct	organoid	UBERON:0002107	liver	tissue_general
+UBERON:0003837	thoracic segment connective tissue	tissue	UBERON:0003837	thoracic segment connective tissue	no_tissue_general
+UBERON:0003876	hippocampal field	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0003889	fallopian tube	tissue	UBERON:0003889	fallopian tube	tissue_general
+UBERON:0003902	retinal neural layer	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0003911	choroid plexus epithelium	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0004023	ganglionic eminence	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0004024	medial ganglionic eminence	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0004025	lateral ganglionic eminence	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0004026	caudal ganglionic eminence	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0004070	cerebellum vermis lobule	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0004088	orbital region	tissue	UBERON:0004088	orbital region	no_tissue_general
+UBERON:0004122	genitourinary system	tissue	UBERON:0004122	genitourinary system	no_tissue_general
+UBERON:0004145	outflow tract	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0004167	orbitofrontal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0004222	stomach smooth muscle	tissue	UBERON:0000945	stomach	tissue_general
+UBERON:0004262	upper leg skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0004264	lower leg skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0004265	outflow tract myocardium	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0004339	vault of skull	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0004528	alveolar ridge of mandible	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0004648	esophagus muscularis mucosa	tissue	UBERON:0001043	esophagus	tissue_general
+UBERON:0004720	cerebellar vermis	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0004721	crista ampullaris	tissue	UBERON:0001032	sensory system	tissue_general
+UBERON:0004725	piriform cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0004809	salivary gland epithelium	organoid	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0004929	submucosa of ascending colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0004946	submucosa of ileum	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0004989	mucosa of appendix	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0004990	mucosa of ascending colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0004991	mucosa of transverse colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0004992	mucosa of descending colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0004993	mucosa of sigmoid colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0005343	cortical plate	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0005383	caudate-putamen	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0005384	nasal cavity epithelium	tissue	UBERON:0000004	nose	tissue_general
+UBERON:0005396	carotid artery segment	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0005406	perirenal fat	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0005609	iliac artery	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0005616	mesenteric artery	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0005636	caecum epithelium	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0005969	eye trabecular meshwork	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0006083	perirhinal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006092	cuneus cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006094	superior parietal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006101	Brodmann (1909) area 24	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006102	Brodmann (1909) area 35	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006107	basolateral amygdaloid nuclear complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006108	corticomedial nuclear complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006479	Brodmann (1909) area 38	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006483	Brodmann (1909) area 46	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0006630	left atrium auricular region	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0006631	right atrium auricular region	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0006679	carina of trachea	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0006761	corneo-scleral junction	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0006767	head of femur	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0006956	buccal mucosa	tissue	UBERON:0000344	mucosa	tissue_general
+UBERON:0007106	chorionic villus	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0007177	lamina propria of mucosa of colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0007224	medial entorhinal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0007225	lateral entorhinal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0007616	layer of synovial tissue	tissue	UBERON:0007616	layer of synovial tissue	no_tissue_general
+UBERON:0007625	pigment epithelium of eye	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0007634	parabrachial nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0007635	nucleus of medulla oblongata	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0007644	thoracic lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0007650	esophagogastric junction	tissue	UBERON:0007650	esophagogastric junction	no_tissue_general
+UBERON:0007795	ascitic fluid	tissue	UBERON:0000916	abdomen	tissue_general
+UBERON:0007811	craniocervical region	tissue	UBERON:0007811	craniocervical region	no_tissue_general
+UBERON:0008337	inguinal part of abdomen	tissue	UBERON:0008337	inguinal part of abdomen	no_tissue_general
+UBERON:0008345	ileal epithelium	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0008346	duodenal epithelium	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:0008612	muscle of pelvic diaphragm	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0008803	skin of cheek	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0008814	pharyngeal arch system	tissue	UBERON:0000922	embryo	tissue_general
+UBERON:0008933	primary somatosensory cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0008946	lung parenchyma	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0008952	upper lobe of left lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0008953	lower lobe of left lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0008954	lingula of left lung	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0008971	left colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0008972	right colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0008989	submucosal esophageal gland	tissue	UBERON:0001043	esophagus	tissue_general
+UBERON:0009472	axilla	tissue	UBERON:0009472	axilla	tissue_general
+UBERON:0009661	midbrain nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0009834	dorsolateral prefrontal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0009835	anterior cingulate cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0009973	ureterovesical junction	tissue	UBERON:0001008	renal system	tissue_general
+UBERON:0010032	anterior part of tongue	tissue	UBERON:0001723	tongue	tissue_general
+UBERON:0010033	posterior part of tongue	tissue	UBERON:0001723	tongue	tissue_general
+UBERON:0010052	mucosa of dorsum of tongue	tissue	UBERON:0001723	tongue	tissue_general
+UBERON:0010172	bulb of aorta	tissue	UBERON:0002049	vasculature	tissue_general
+UBERON:0010230	eyeball of camera-type eye	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0010409	ocular surface region	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0010414	omental fat pad	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0011189	lamina propria of large intestine	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0011602	gingiva of lower jaw	tissue	UBERON:0000344	mucosa	tissue_general
+UBERON:0012168	umbilical cord blood	tissue	UBERON:0000178	blood	tissue_general
+UBERON:0012303	ureteral orifice	tissue	UBERON:0001255	urinary bladder	tissue_general
+UBERON:0012430	tunica fibrosa of eyeball	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0012474	hepatic cecum	tissue	UBERON:0000160	intestine	tissue_general
+UBERON:0012648	ampulla of fallopian tube	tissue	UBERON:0003889	fallopian tube	tissue_general
+UBERON:0012652	colorectum	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0013067	colorectal mucosa	tissue	UBERON:0000059	large intestine	tissue_general
+UBERON:0013473	lower esophagus	tissue	UBERON:0001043	esophagus	tissue_general
+UBERON:0013531	retrosplenial region	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013535	Brodmann (1909) area 4	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013538	Brodmann (1909) area 7	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013540	Brodmann (1909) area 9	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013541	Brodmann (1909) area 10	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013544	Brodmann (1909) area 13	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013545	Brodmann (1909) area 14	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013550	Brodmann (1909) area 19	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013554	Brodmann (1909) area 23	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013556	Brodmann (1909) area 25	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013560	Brodmann (1909) area 32	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013561	Brodmann (1909) area 43	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013573	Brodmann (1909) area 40	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0013682	peripheral region of retina	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0013706	bone spine	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0013756	venous blood	tissue	UBERON:0000178	blood	tissue_general
+UBERON:0014370	extrastriate cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0014374	embryoid body	organoid	UBERON:0000922	embryo	tissue_general
+UBERON:0014454	visceral abdominal adipose tissue	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0014455	subcutaneous abdominal adipose tissue	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0014614	cervical spinal cord white matter	tissue	UBERON:0002240	spinal cord	tissue_general
+UBERON:0014644	cerebrocerebellum	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0014648	hemisphere part of cerebellar posterior lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0014848	tendon of quadriceps femoris	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0014892	skeletal muscle organ, vertebrate	tissue	UBERON:0001015	musculature	tissue_general
+UBERON:0015233	nucleus of dorsal thalamus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0015476	nose skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0015838	molar dental pulp	tissue	UBERON:0001434	skeletal system	tissue_general
+UBERON:0015867	cystic lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0015880	external iliac lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:0016435	chest wall	tissue	UBERON:0016435	chest wall	no_tissue_general
+UBERON:0016475	skin of forehead	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0016525	frontal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016526	lobe of cerebral hemisphere	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016528	white matter of frontal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016530	parietal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016531	white matter of parietal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016534	white matter of temporal lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016535	white matter of occipital lobe	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016538	temporal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016540	occipital cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0016632	isthmus of fallopian tube	tissue	UBERON:0003889	fallopian tube	tissue_general
+UBERON:0018105	perifoveal part of retina	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0018303	adrenal tissue	tissue	UBERON:0002369	adrenal gland	tissue_general
+UBERON:0018707	bladder organ	tissue	UBERON:0018707	bladder organ	tissue_general
+UBERON:0019207	chorioretinal region	tissue	UBERON:0000970	eye	tissue_general
+UBERON:0019267	gray matter of midbrain	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0022276	splenic flexure of colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0022277	hepatic flexure of colon	tissue	UBERON:0001155	colon	tissue_general
+UBERON:0022352	medial orbital frontal cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0022395	temporal fusiform gyrus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0023787	subicular complex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0023852	temporoparietal junction	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034751	primary auditory cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034765	glabella skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:0034774	uncal CA1	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034779	rostral CA3	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034891	insular cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034892	granular insular cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034893	agranular insular cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0034991	anterior cortical amygdaloid nucleus	tissue	UBERON:0000955	brain	tissue_general
+UBERON:0035210	paracolic gutter	tissue	UBERON:0035210	paracolic gutter	no_tissue_general
+UBERON:0035213	basal zone of heart	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0035328	upper outer quadrant of breast	tissue	UBERON:0000310	breast	tissue_general
+UBERON:0035818	visceral fat	tissue	UBERON:0001013	adipose tissue	tissue_general
+UBERON:0035835	apical region of left ventricle	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0035963	epithelial lining fluid	tissue	UBERON:0002048	lung	tissue_general
+UBERON:0036214	rectosigmoid junction	tissue	UBERON:0000160	intestine	tissue_general
+UBERON:0036245	parenchyma of mammary gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:0036288	anterior wall of left ventricle	tissue	UBERON:0000948	heart	tissue_general
+UBERON:0036292	adnexa of uterus	tissue	UBERON:0000995	uterus	tissue_general
+UBERON:0036294	mucosa of lip	tissue	UBERON:0000344	mucosa	tissue_general
+UBERON:0039167	bronchopulmonary lymph node	tissue	UBERON:0000029	lymph node	tissue_general
+UBERON:1000021	skin of face	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:2000392	median tuberal portion	tissue	UBERON:0000955	brain	tissue_general
+UBERON:3000645	corpus	organoid	UBERON:0000004	nose	tissue_general
+UBERON:7770005	ascending colon epithelium	tissue	UBERON:0001155	colon	tissue_general
+UBERON:7770006	transverse colon epithelium	tissue	UBERON:0001155	colon	tissue_general
+UBERON:7770008	sigmoid colon epithelium	tissue	UBERON:0001155	colon	tissue_general
+UBERON:8000004	central retina	tissue	UBERON:0000970	eye	tissue_general
+UBERON:8300000	skin of scalp	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:8410000	duodeno-jejunal junction	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:8410010	fimbria of fallopian tube	tissue	UBERON:0003889	fallopian tube	tissue_general
+UBERON:8410021	inguinal region skin	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:8410025	transition zone of prostate	tissue	UBERON:0002367	prostate gland	tissue_general
+UBERON:8410026	peripheral zone of prostate	tissue	UBERON:0002367	prostate gland	tissue_general
+UBERON:8440010	Brodmann (1909) area 17	tissue	UBERON:0000955	brain	tissue_general
+UBERON:8440044	upper layers of the cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:8440051	lower layers of the cortex	tissue	UBERON:0000955	brain	tissue_general
+UBERON:8480009	tendon of semitendinosus	tissue	UBERON:8480009	tendon of semitendinosus	no_tissue_general
+UBERON:8480028	skin of temple	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:8480030	skin of breast	tissue	UBERON:0000310	breast	tissue_general
+UBERON:8480031	tooth root apical papilla	tissue	UBERON:8480031	tooth root apical papilla	no_tissue_general
+UBERON:8480050	skin of calf	tissue	UBERON:0002097	skin of body	tissue_general
+UBERON:8480060	paraspinal region	tissue	UBERON:8480060	paraspinal region	no_tissue_general
+UBERON:8480065	labial gland	tissue	UBERON:0002365	exocrine gland	tissue_general
+UBERON:8600034	jejunum lamina propria	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:8600035	ileum lamina propria	tissue	UBERON:0002108	small intestine	tissue_general
+UBERON:8600049	dome of urinary bladder	tissue	UBERON:0001255	urinary bladder	tissue_general
+UBERON:8600136	sigmoid colon lamina propria	tissue	UBERON:0001155	colon	tissue_general
+UBERON:8600137	transverse colon lamina propria	tissue	UBERON:0001155	colon	tissue_general
+UBERON:8600139	caecum lamina propria	tissue	UBERON:0001155	colon	tissue_general

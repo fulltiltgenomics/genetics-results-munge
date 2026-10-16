@@ -79,6 +79,40 @@ def test_every_native_term_maps_to_exactly_one_target(cell_types):
             assert cell_types[native]["rollup_term_id"] == target
 
 
+def test_broad_targets_and_summary_exclusion(cell_types):
+    """The curated broad set is lineage-level umbrellas only, and the shipped table excludes a
+    native term from the summary exactly when it is coarser than the target list."""
+    parents, labels, obsolete, _ = rollup.load_obo(_cl_obo())
+    targets = rollup.read_targets(TABLES / "cell_type_targets.tsv", labels)
+    ct = rollup.CellTypeRollup(parents, labels, obsolete, targets, {})
+    broad = rollup.read_broad(TABLES / "broad_targets.tsv", labels, ct)
+    assert set(broad) == {"CL:0000988", "CL:0000738", "CL:0000763", "CL:0000542", "CL:0000066",
+                          "CL:0002320", "CL:0000187", "CL:0000125"}
+    meta = json.loads((TABLES / "metadata.json").read_text())
+    assert meta["broad_targets"] == broad
+    assert meta["inputs_sha256"]["broad_targets.tsv"] == rollup.sha256(TABLES / "broad_targets.tsv")
+    for term, r in cell_types.items():
+        want = (r["method"] in ("self", "ancestor", "pin", "pin_descendant")
+                and r["rollup_term_id"] in broad and bool(ct.finer_targets(term, r["rollup_term_id"])))
+        assert (r["summary_excluded"] == "true") == want, term
+    assert meta["n_summary_excluded"] == sum(r["summary_excluded"] == "true" for r in cell_types.values())
+    excluded = {t for t, r in cell_types.items() if r["summary_excluded"] == "true"}
+    assert {"CL:0000738", "CL:0000763", "CL:0000766", "CL:0000066"} <= excluded
+    # T cell has no target below it; endothelial cell and macrophage do but are not listed; pro-B
+    # cell rolls up to the broad hematopoietic cell yet has nothing finer, so it still pools;
+    # neural cell and stem cell have no target, and no_target terms are never excluded
+    assert not {"CL:0000084", "CL:0000624", "CL:0000115", "CL:0000235", "CL:0000826",
+                "CL:0002319", "CL:0000034"} & excluded
+
+
+def _cl_obo():
+    meta = json.loads((TABLES / "metadata.json").read_text())
+    p = Path(os.environ.get("CELLXGENE_CACHE", "cellxgene-cache")) / f"cl-basic-{meta['ontologies']['CL']}.obo"
+    if not p.exists():
+        pytest.skip(f"{p} not cached (set CELLXGENE_CACHE to rollup.py's --cache-dir)")
+    return p
+
+
 def test_metadata_records_the_releases():
     meta = json.loads((TABLES / "metadata.json").read_text())
     assert meta["ontologies"]["CL"] and meta["ontologies"]["UBERON"]
@@ -150,6 +184,11 @@ name: orphan
 id: CL:1000011
 name: old
 is_obsolete: true
+
+[Term]
+id: CL:1000012
+name: a3
+is_a: CL:1000001
 """
 
 
@@ -162,11 +201,12 @@ def _synthetic(tmp_path):
     targets.write_text("# comment\nterm_id\tlabel\tlineage\torigin\n"
                        "CL:1000002\ta1\tx\ttest\nCL:1000008\ta2\tx\ttest\n"
                        "CL:1000004\tb\tx\ttest\nCL:1000001\ta\tx\ttest\n")
+    (tmp_path / "broad_targets.tsv").write_text("term_id\tlabel\treason\nCL:1000001\ta\tumbrella over a1 and a2\n")
     pins = tmp_path / "pins.tsv"
     pins.write_text("native_term_id\tnative_label\ttarget_term_id\ttarget_label\treason\n"
                     "CL:1000005\tp\tCL:1000004\tb\tsynthetic\n")
     terms = ["CL:1000003", "CL:1000002", "CL:1000005", "CL:1000006", "CL:1000007", "CL:1000009",
-             "CL:1000010", "CL:1000011", "CL:9999999", "unknown"]
+             "CL:1000010", "CL:1000011", "CL:9999999", "unknown", "CL:1000001", "CL:1000012", "CL:0000000"]
     listing = tmp_path / "datasets.json"
     listing.write_text(json.dumps([
         {"organism": [{"ontology_term_id": "NCBITaxon:9606"}], "primary_cell_count": 10,
@@ -197,7 +237,13 @@ def test_rules_on_synthetic_ontology(tmp_path):
         "CL:1000011": ("CL:1000011", "not_in_ontology", ""),
         "CL:9999999": ("CL:9999999", "not_in_ontology", ""),
         "unknown": ("unknown", "unknown", ""),
+        "CL:1000001": ("CL:1000001", "self", ""),
+        "CL:1000012": ("CL:1000001", "ancestor", ""),
+        "CL:0000000": ("CL:0000000", "no_target", ""),
     }
+    # the broad target itself is coarser than the target list; a3 rolls up to the broad a but has
+    # nothing finer, and the root has no target, so both stay in the summary
+    assert {r[0] for r in ct_rows if r[6] == "true"} == {"CL:1000001"}
     assert "CL:1000004" not in got  # listed only by the mouse dataset
     assert {r[0]: (r[3], r[5]) for r in ts_rows} == {
         "UBERON:0008952": ("UBERON:0002048", "tissue_general"),
@@ -222,6 +268,19 @@ def test_rerun_is_byte_identical(tmp_path):
 def test_bad_pin_is_refused(tmp_path, pin_row, msg):
     listing, obo, targets, pins = _synthetic(tmp_path)
     pins.write_text(pins.read_text().splitlines()[0] + "\n" + pin_row)
+    with pytest.raises(SystemExit, match=msg):
+        rollup.build(listing, obo, tmp_path / "out", targets, pins)
+
+
+@pytest.mark.parametrize("row, msg", [
+    ("CL:1000010\torphan\tr\n", "not in the target list"),
+    ("CL:1000002\ta1\tr\n", "not an is_a ancestor of another target"),
+    ("CL:1000001\ta\t \n", "empty reason"),
+    ("CL:1000001\twrong\tr\n", "label is"),
+])
+def test_bad_broad_target_is_refused(tmp_path, row, msg):
+    listing, obo, targets, pins = _synthetic(tmp_path)
+    (tmp_path / "broad_targets.tsv").write_text("term_id\tlabel\treason\n" + row)
     with pytest.raises(SystemExit, match=msg):
         rollup.build(listing, obo, tmp_path / "out", targets, pins)
 

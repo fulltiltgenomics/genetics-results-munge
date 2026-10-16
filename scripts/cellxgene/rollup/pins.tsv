@@ -1,0 +1,12 @@
+# reviewed exceptions to the is_a roll-up. A pin sends the native term, and every descendant of
+# it that has no target below the pinned term, to target_term_id. Every pin needs a reason a
+# reviewer can check; rollup.py refuses a row with an empty one.
+native_term_id	native_label	target_term_id	target_label	reason
+CL:0000186	myofibroblast cell	CL:0000057	fibroblast	CL places myofibroblast under connective tissue cell and contractile cell, not fibroblast, yet it is a fibroblast-derived ECM-producing state: in the proving-ground marker panel (proving_ground_results.md) COL1A1, DCN and LUM all ranked myofibroblast first, and with this pin the panel went from 89.2% to 97.3% of covered markers ranking their expected type first
+CL:0000132	corneal endothelial cell	CL:0000066	epithelial cell	CL places it under endothelial cell, but it lines the back of the cornea, is neural-crest derived and is not vascular: it lacks the PECAM1/VWF/CDH5 profile that the endothelial cell target stands for in the marker panel. Pinned to epithelial cell rather than itself because it is a simple squamous monolayer and so pools with the other epithelia instead of staying a singleton
+CL:0002341	basal cell of prostate epithelium	CL:0000646	basal cell	a basal epithelial cell that CL does not place under basal cell (it reaches only epithelial cell); KRT5, the panel marker for basal cell, is its defining marker
+CL:0002236	basal epithelial cell of prostatic duct	CL:0000646	basal cell	a basal epithelial cell that CL does not place under basal cell (it reaches only epithelial cell); KRT5-positive like the other basal cells
+CL:0002329	basal epithelial cell of tracheobronchial tree	CL:0000646	basal cell	the airway basal cell under another name; CL does not place it under basal cell, while respiratory basal cell and the tracheal/bronchial basal cells already roll up there
+CL:4033048	respiratory tract suprabasal cell	CL:0000646	basal cell	the KRT5-positive layer immediately derived from airway basal cells; CL places it only under epithelial cell
+CL:1000742	glomerular mesangial cell	CL:0000669	pericyte	a pericyte-like contractile cell of the glomerular stalk (PDGFRB, not an epithelial profile); CL's is_a to kidney epithelial cell made it pool with tubular epithelium, and mesangial cell, its parent, already rolls up to pericyte
+CL:0002481	peritubular myoid cell	CL:0000192	smooth muscle cell	the ACTA2/MYH11-expressing contractile cell surrounding seminiferous tubules; CL's is_a puts it under myoepithelial and mesothelial cell, neither of which it is

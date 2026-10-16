@@ -70,6 +70,8 @@ There are scripts to munge data from Open Targets and eQTL Catalogue to the same
 
 To run the scripts, make sure you have git, Docker and Google Cloud SDK installed, and a [Docker image created](#docker-image).
 
+The single-cell expression pipeline in `scripts/cellxgene/` (planner, worker, roll-up, publisher, driver) is separate from these and is described under [CELLxGENE cell-type expression release](#cellxgene-cell-type-expression-release).
+
 ### Open Targets
 
 Get the credible set and study parquet files of an Open Targets release into their own subdirectories of the data directory. They are on the EBI FTP site and in a requester pays bucket (see the [Open Targets website](https://platform.opentargets.org/downloads/credible_set/access) for other download options):
@@ -344,15 +346,37 @@ For FinnGen data, `most_severe` and `gene_most_severe` come from the FinnGen var
 
 ## CELLxGENE cell-type expression release
 
-`scripts/cellxgene/publish.py` reduces the per-dataset worker outputs (`aggregate.py`) to a release: a
-pooled normal-tissue summary and a per-dataset table, each as a gene-point tabix file and a BigQuery
-load file, plus `measured_genes.tsv.gz` and `manifest.json` (every file's sha256). Its header
-docstring holds the rules and thresholds; the `*_COLUMNS` constants are the column definitions.
+Production runs are not started by hand: `scripts/cellxgene/driver.py run`, itself a Cloud Batch job
+started weekly by Cloud Scheduler in the daly project, lists CELLxGENE Discover, plans
+(`plan.py`, with a circuit breaker on plan size), runs one Batch task per dataset version
+(`aggregate.py`, via `driver.py task`), publishes, loads BigQuery and only then writes
+`releases/CURRENT`, the pointer results-api reads. Its docstring is the reference for the bucket
+layout, the resume state, the lock and the exit codes; `--root cellxgene-staging` is a rehearsal
+that leaves production's pointer alone (but not BigQuery). The infrastructure it runs on is the
+suite's `terraform/expression.tf`.
+
+`scripts/cellxgene/publish.py` reduces the per-dataset worker outputs to a release: a pooled
+normal-tissue summary and a per-dataset table as gene-point tabix files, `measured_genes.tsv.gz`,
+the BigQuery load files under `bq/` (summary and per-dataset sharded by chromosome, plus groups,
+datasets and `bq/measured_genes.tsv.gz`), and `manifest.json` with every file's sha256 and every
+shard's row count — the loader refuses a release whose staged counts differ. Its header docstring
+lists the files and holds the rules and thresholds; the `*_COLUMNS` constants are the column
+definitions. The load step (`scripts/cellxgene/load_cellxgene.sh`) only hands over to
+genetics-results-db's loader, which replaces every `cellxgene_*` table in one transaction.
+
+The roll-up tables in `scripts/cellxgene/rollup/` are inputs pinned by checksum into every
+release, so they are tracked even though `.gitignore` excludes `*.tsv`: a new one needs
+`git add -f`, or the image builds without it.
+
+The image (`docker/cellxgene/Dockerfile`, built by the suite's `build.sh cellxgene`) takes
+genetics-results-db as a second build context for the loader, and runs `--help` on every entry
+point and on the loader at build time, so a missing module or dependency fails the build rather
+than the first scheduled run.
 
 - the **primary** metric is the cell-level `mean_log1p_cp10k`, with `frac_expressing` beside it;
   these are what rank cell types
 - `donor_pseudobulk_mean_cp10k` is **secondary**: the donor-pseudobulk mean (per-donor CP10k
-  averaged over donors), NA unless the group has 3 or more donors (`donor_pseudobulk_n_donors`)
+  averaged over donors), NA unless at least `--min-pseudobulk-donors` donors with a nonzero library (default 3) contribute; `donor_pseudobulk_n_donors` counts them
 - the per-dataset table has rows only where some cell expressed the gene; a missing row is 0 when
   `measured_genes.tsv.gz` lists the gene for that dataset, and "not measured" otherwise
 - a gs:// `--agg` needs `--datasets` / `--datasets-file`, the dataset_version_ids to publish, so
