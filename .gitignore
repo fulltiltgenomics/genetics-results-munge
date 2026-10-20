@@ -13,3 +13,6 @@ __pycache__/
 # every .env variant holds real credentials; the committed example does not
 .env*
 !.env.example
+
+# the issue tracker lives in the private Dolt remote; its export carries internal detail and is not published
+.beads/issues.jsonl
