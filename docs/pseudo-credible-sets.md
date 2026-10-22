@@ -283,7 +283,7 @@ line, dataset name and report file path, so one run can mix several datasets. Ou
 
 | dataset(s) | notes |
 |---|---|
-| `FinnGen_R13`, `FinnGen_R13_UKBB(_labs)`, `FinnGen_R13_MVP_UKBB(_labs)` | FinnGen and meta-analysis pseudo CS; phenotype names from `finngen_r13_pheno_202509.json`. The four R13 meta-analysis datasets are retired from the finngen deployment (replaced by `FinnGen_R14_MVP_UKBB_AOU`); their files stay in the bucket, and the daly deployment still serves them until its own R14 rollout |
+| `FinnGen_R13`, `FinnGen_R13_UKBB(_labs)`, `FinnGen_R13_MVP_UKBB(_labs)` | FinnGen and meta-analysis pseudo CS; phenotype names from `finngen_r13_pheno_202509.json`. The four R13 meta-analysis datasets are retired (replaced by `FinnGen_R14_MVP_UKBB_AOU`); their files stay in the bucket |
 | `FinnGen_R14_MVP_UKBB_AOU` | R14 meta-analysis pseudo CS, 1,188 phenotypes, from the green `autoreporting/` variant reports at `gs://finngen-production-library-green/finngen_R14/finngen_R14_analysis_data/meta_analysis/autoreporting/variant_reports/`; `--no-proximity-filter --mlog10p-diff 2 --r2-to-lead-thres 0.6 --r2-high-ld-thres 0.95 --filter-hla`; phenotype names from `gs://finngen-commons/results_api_metadata/finngen_r14_mvp_ukbb_aou_phenostrings.json` (the metadata JSON with `name` renamed to `phenostring`, which is the key the script reads); fofn `gs://finngen-commons/results_api_metadata/create_pseudo_credible_sets.finngen_mvp_ukbb_aou.r14.fofn`; staged at `gs://finngen-commons/results_api_data/credible_sets/finngen_mvp_ukbb_aou_pseudo/r14/` |
 | `COVID19_HGI` / `PGC` / `GP2` (external) | bundled external file (`ext`); inputs use `column_aliases` to map munged-sumstat column names to the canonical report columns |
 | `AIH` | the three autoimmune hypothyroidism meta-analysis phenotypes (`AIH`, `AITT1`, `AITT2`) munged by `scripts/munge_aih.py`; run separately from the `ext` bundle because its sumstats carry a different column set, but with the same `column_aliases` — autoreporting names the report columns after the input columns, which are the same `#chr`/`mlog10p`/`se`/`af` |
@@ -324,7 +324,7 @@ input with these differences:
 Everything else — the FinnGen R12 LD panel, `finngen_variants_only`, the thresholds — is
 as for the other external datasets, with the same consequence: an Icelandic study is
 clumped with Finnish LD, so leads whose Icelandic LD partners are absent or unlinked in
-FinnGen become singleton sets (see the LD-panel discussion for the external GWAS). The
+FinnGen become singleton sets. The
 reports do not stay in the Cromwell bucket: step 1 took several submissions (below), so
 `/mnt/disks/data/decode/stage_decode_reports.py <run id> ...` gathers them. For every
 aptamer with a `.report.out` in any run listed (a later run wins), it copies the report and

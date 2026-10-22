@@ -239,7 +239,9 @@ def read_report(filepath: str, extra_aliases: dict | None = None) -> pl.DataFram
         if canon in CANONICAL_DTYPES:
             schema_overrides[src] = CANONICAL_DTYPES[canon]
     # n_INFO_gt_0_6 is the share of imputation batches with INFO > 0.6, almost always exactly 0 or 1,
-    # so inference sees an integer column until the first fraction and then aborts
+    # so inference sees an integer column until the first fraction and then aborts. A larger
+    # infer_schema_length is not the fix: polars 1.37 still picked Int64 for a file whose first
+    # fraction was at row 13,843 under infer_schema_length=100000; only None gave Float64
     schema_overrides["n_INFO_gt_0_6"] = pl.Float64
 
     # autoreporting touches an empty report when a phenotype has no locus at all
@@ -405,8 +407,8 @@ def _query_ld_for_variants(
 
     for attempt in range(1, max_retries + 1):
         # the metadata server caches its token, so one fetched once per run can expire
-        # mid-phenotype on the long quantitative traits; fetch per attempt so a retry
-        # never reuses an expired one
+        # mid-phenotype on any phenotype whose LD phase outlives the token's remaining life;
+        # fetch per attempt so a retry never reuses an expired one
         try:
             env = {**os.environ, "GCS_OAUTH_TOKEN": _get_gce_access_token()}
         except (OSError, KeyError, ValueError) as exc:

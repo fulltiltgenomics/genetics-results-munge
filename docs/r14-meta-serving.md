@@ -6,9 +6,11 @@
 holds one tabix-indexed `summary_stats/<phenocode>_meta_out.tsv.gz` per phenotype, a
 phenotype mapping TSV, and the release's own autoreporting outputs under `autoreporting/`.
 Each sumstats file carries the inverse-variance meta (`all_inv_var_meta_*`) over whichever
-cohorts contributed that phenotype, a `<cohort>_{beta,sebeta,pval,af_alt}` block per
-contributing ancestry-split cohort, and `leave_cohort_<family>_*` leave-one-out blocks. The
-contributing cohorts therefore vary per phenotype.
+cohorts contributed that phenotype with its sample size `all_meta_N`, a
+`<cohort>_{beta,sebeta,pval,af_alt}` block per contributing ancestry-split cohort (an MVP
+block also carries `_r2`, its imputation quality), and `leave_cohort_<family>_*`
+leave-one-out blocks. The contributing cohorts therefore vary per phenotype; results-api's
+`app/config/profiles/r14_meta_columns.py` is the column mapping that serves them.
 
 ## How it is served
 
