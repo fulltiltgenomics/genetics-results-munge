@@ -221,6 +221,24 @@ def col_values(df, name):
     return cats[codes]
 
 
+def index_node(df):
+    return df[df.attrs.get("_index", "_index")]
+
+
+def index_len(df):
+    """Rows of a dataframe without decoding its index, which anndata writes as a string
+    dataset or, when it was categorical, as a codes/categories group."""
+    node = index_node(df)
+    return int((node["codes"] if hasattr(node, "keys") else node).shape[0])
+
+
+def index_values(df):
+    node = index_node(df)
+    if hasattr(node, "keys"):
+        return _decode(node["categories"][()])[node["codes"][()].astype(np.int64)]
+    return _decode(node[()])
+
+
 def open_matrix(f):
     which = "raw/X" if "raw" in f and "X" in f["raw"] else "X"
     X = f[which]
@@ -324,7 +342,7 @@ def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES
     f = h5py.File(path, "r", rdcc_nbytes=256 << 20)
     X, var, which, layout, (n_cells, n_genes) = open_matrix(f)
     obs = f["obs"]
-    n_obs = obs[obs.attrs.get("_index", "_index")].shape[0]
+    n_obs = index_len(obs)
     if n_obs != n_cells:
         raise InputRejected(f"obs has {n_obs} rows, {which} has {n_cells}")
 
@@ -345,14 +363,14 @@ def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES
     gd[kidx] = inv.ravel()
     n_groups, n_gd = len(grp_u), len(gd_u)
 
-    gene_ids = _decode(var[var.attrs.get("_index", "_index")][()])
+    gene_ids = index_values(var)
     if len(gene_ids) != n_genes:
         raise InputRejected(f"{which} has {n_genes} columns, its var {len(gene_ids)} rows")
     genes = pd.DataFrame({"gene": np.arange(n_genes, dtype=np.int32), "gene_id": gene_ids})
     for c in ("feature_name", "feature_biotype"):
         # raw/var may lack the annotation columns; var carries them when the index matches
         src = var if c in var else f["var"]
-        if c in src and np.array_equal(_decode(src[src.attrs.get("_index", "_index")][()]), gene_ids):
+        if c in src and np.array_equal(index_values(src), gene_ids):
             genes[c] = col_values(src, c)
     measured = np.ones(n_genes, bool)
     if which == "X" and "feature_is_filtered" in var:

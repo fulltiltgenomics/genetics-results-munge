@@ -65,10 +65,14 @@ unless `--force-remote-genes`
 - `manifest.json`: release, inputs, roll-up checksums, gencode drop counts, thresholds, row
   counts, and every other file's bytes and sha256. Each output's column list is the `*_COLUMNS` constant below
 
-Memory: one chromosome at a time. A full run first splits each dataset's `group_gene` and
-`group_donor_gene` by chromosome into `--workdir` (one streaming pass per file); each chromosome
-then reads only its own pieces, reduced one dataset at a time. `--genes` skips the split and
-filters the inputs directly, which is what makes the marker panel take seconds.
+Memory: one gene block at a time. A block is up to `--block-genes` consecutive genes of one
+chromosome in gene_start order (`gene_parts`), so the per-dataset rows of a block, with every
+group label joined on for the tabix table, are what bound the footprint; a whole chromosome does
+not (chromosome 1 over 1,031 datasets passed 29 GB and was killed on a 32 GB VM). A full run first
+splits each dataset's `group_gene` and `group_donor_gene` by block into `--workdir` (one streaming
+pass per file); each block then reads only its own pieces, reduced one dataset at a time, and
+blocks of a chromosome append to the same BigQuery shard. `--genes` skips the split and filters
+the inputs directly, which is what makes the marker panel take seconds.
 """
 import argparse
 import datetime
@@ -93,6 +97,7 @@ import aggregate  # noqa: E402
 from peak_utils import TabixIndex  # noqa: E402
 
 RELEASE_FORMAT_VERSION = 1
+BLOCK_GENES = 500
 NORMAL = "PATO:0000461"
 MIN_CELLS, MIN_DONORS, MIN_PB_DONORS = 50, 3, 3
 # lives in the expression bucket because the driver service account has no access to the results bucket
@@ -177,6 +182,31 @@ def load_gencode(path):
         pl.col("gene_end").cast(pl.Int64), pl.col("gene_name"))
     g = g.with_columns(ensembl=strip_version("gene_id")).unique("ensembl", keep="first", maintain_order=True)
     return g.sort("chrom", "gene_start", "gene_id").with_row_index("gidx").with_columns(pl.col("gidx").cast(pl.Int32))
+
+
+def gene_parts(gencode, block=None):
+    """[(chrom, gidx_lo, gidx_hi)] in output order: each chromosome's genes cut into runs of at
+    most `block` (None: one run per chromosome). gidx follows (chrom, gene_start, gene_id), so a
+    run is one contiguous gidx range and a chromosome's runs written in sequence come out sorted."""
+    parts = []
+    for c, lo, hi in gencode.group_by("chrom", maintain_order=True).agg(
+            pl.col("gidx").min(), (pl.col("gidx").max() + 1).alias("hi")).iter_rows():
+        step = block or hi - lo
+        parts += [(c, s, min(s + step, hi)) for s in range(lo, hi, step)]
+    if [p[1] for p in parts] != [0, *(p[2] for p in parts[:-1])] or parts[-1][2] != gencode.height:
+        raise SystemExit("gene_parts: gidx is not contiguous in chromosome order")
+    return parts
+
+
+class Slices:
+    """A frame split by dataset_key once, so the per-block loop never rescans every dataset's rows."""
+
+    def __init__(self, df):
+        self.empty = df.clear()
+        self.by = {k[0]: v for k, v in df.partition_by("dataset_key", as_dict=True).items()}
+
+    def __getitem__(self, d):
+        return self.by.get(d, self.empty)
 
 
 def load_rollups(rollup_dir):
@@ -287,6 +317,7 @@ class Inputs:
                              pl.col("cell_type").first(), groups=pl.len(), n_cells=pl.col("n_cells").sum()).sort(
                              "cell_type_ontology_term_id").iter_rows(named=True)}
         self.groups, self.gd, self.map = g, gd, pl.concat(maps)
+        self.groups_d, self.gd_d, self.map_d = Slices(g), Slices(gd), Slices(self.map)
         # per (dataset, level key): cells, distinct donors, donor libraries for the pseudobulk
         gdl = gd.join(g.filter("summary").select("dataset_key", "group", "row", "ct", "n_cells"),
                       on=["dataset_key", "group"])
@@ -296,31 +327,39 @@ class Inputs:
             lib = gdl.group_by("dataset_key", key, "donor_id").agg(lib=pl.col("library_size").sum())
             don = lib.group_by("dataset_key", key).agg(n_donors=pl.len(), n_pbd=(pl.col("lib") > 0).sum())
             self.level[key] = (cells.join(don, on=["dataset_key", key], how="left").fill_null(0), lib)
+        self.lib_d = {key: Slices(self.level[key][1]) for key in self.level}
 
     def path(self, d, name):
         return os.path.join(self.agg_dir, self.names[d], name)
 
 
-# ---------------------------------------------------------------- per-chromosome split
+# ---------------------------------------------------------------- per-block split
 
 KINDS = {"group_gene": ["group", "gene", "n_expressing", "sum_log1p_cp10k"],
          "group_donor_gene": ["gd", "gene", "counts"]}
 
 
-def split_by_chrom(inp, stage):
-    """One streaming pass per input file: rows of mapped genes, one Parquet file per chromosome."""
+def split_by_part(inp, parts, stage):
+    """One streaming pass per input file: rows of mapped genes, one Parquet file per gene block."""
+    part_of_gidx = np.repeat(np.arange(len(parts)), [hi - lo for _, lo, hi in parts])
     for d in range(len(inp.names)):
-        m = inp.map.filter(pl.col("dataset_key") == d)
-        n_var = inp.gene_stats[d]["n_genes"]
-        chrom_of = np.full(n_var, -1, np.int64)
-        chrom_of[m["gene"].to_numpy()] = m["chrom"].to_numpy()
+        m = inp.map_d[d]
+        part_of = np.full(inp.gene_stats[d]["n_genes"], -1, np.int64)
+        part_of[m["gene"].to_numpy()] = part_of_gidx[m["gidx"].to_numpy()]
         for kind, cols in KINDS.items():
             writers = {}
             try:
                 for b in pq.ParquetFile(inp.path(d, f"{kind}.parquet")).iter_batches(1 << 22, columns=cols):
-                    ch = chrom_of[b.column("gene").to_numpy()]
-                    for c in np.unique(ch[ch >= 0]):
-                        sub = b.filter(pa.array(ch == c))
+                    # one stable sort per batch, then contiguous slices: a filter per block
+                    # would rescan the batch once per block present
+                    ch = part_of[b.column("gene").to_numpy()]
+                    order = np.argsort(ch, kind="stable")[np.count_nonzero(ch < 0):]
+                    b, ch = b.take(pa.array(order)), ch[order]
+                    bounds = np.flatnonzero(np.diff(ch)) + 1
+                    for lo, hi in zip(np.r_[0, bounds], np.r_[bounds, len(ch)]):
+                        if hi == lo:
+                            continue
+                        c, sub = int(ch[lo]), b.slice(lo, hi - lo)
                         if c not in writers:
                             os.makedirs(f"{stage}/{kind}/{c}", exist_ok=True)
                             writers[c] = pq.ParquetWriter(f"{stage}/{kind}/{c}/{d}.parquet", sub.schema)
@@ -330,11 +369,11 @@ def split_by_chrom(inp, stage):
                     w.close()
 
 
-def read_part(inp, d, kind, chrom, genes, stage):
+def read_part(inp, d, kind, part, genes, stage):
     if stage is None:
         return pl.scan_parquet(inp.path(d, f"{kind}.parquet")).select(KINDS[kind]).filter(
             pl.col("gene").is_in(genes.to_list())).collect()
-    p = f"{stage}/{kind}/{chrom}/{d}.parquet"
+    p = f"{stage}/{kind}/{part}/{d}.parquet"
     if not os.path.exists(p):
         return pl.DataFrame(schema={c: (pl.Float64 if c in ("sum_log1p_cp10k", "counts") else pl.Int32)
                                     for c in KINDS[kind]})
@@ -367,14 +406,15 @@ def tau_of(ct):
     return x.select("gidx", tau=pl.when((pl.col("n") >= 2) & (pl.col("mx") > 0)).then(pl.col("s") / (pl.col("n") - 1)))
 
 
-def reduce_chrom(inp, chrom, a, stage, gidx_filter=None):
-    """(summary rows, per-dataset rows, cell-type profile) for one chromosome."""
+def reduce_part(inp, part, parts, a, stage, gidx_filter=None):
+    """(summary rows, per-dataset rows, cell-type profile) for one gene block."""
     groups = inp.groups
+    _, lo, hi = parts[part]
     num = {"row": [], "ct": []}
     pbn = {"row": [], "ct": []}
     per_ds, measured = [], []
     for d in range(len(inp.names)):
-        m = inp.map.filter((pl.col("dataset_key") == d) & (pl.col("chrom") == chrom))
+        m = inp.map_d[d].filter((pl.col("gidx") >= lo) & (pl.col("gidx") < hi))
         if gidx_filter is not None:
             m = m.filter(pl.col("gidx").is_in(gidx_filter.to_list()))
         if m.is_empty():
@@ -382,10 +422,10 @@ def reduce_chrom(inp, chrom, a, stage, gidx_filter=None):
         measured.append(m.select("dataset_key", "gidx", "source_gene_id"))
         genes = m["gene"]
         gm = m.select("gene", "gidx")
-        gg = read_part(inp, d, "group_gene", chrom, genes, stage).join(gm, on="gene")
-        gdg = read_part(inp, d, "group_donor_gene", chrom, genes, stage).join(gm, on="gene").join(
-            inp.gd.filter(pl.col("dataset_key") == d).drop("dataset_key"), on="gd")
-        gd_ = groups.filter(pl.col("dataset_key") == d)
+        gg = read_part(inp, d, "group_gene", part, genes, stage).join(gm, on="gene")
+        gdg = read_part(inp, d, "group_donor_gene", part, genes, stage).join(gm, on="gene").join(
+            inp.gd_d[d].drop("dataset_key"), on="gd")
+        gd_ = inp.groups_d[d]
 
         cp = gdg.filter(pl.col("library_size") > 0).with_columns(cp=1e4 * pl.col("counts") / pl.col("library_size"))
         pbg = cp.group_by("group", "gidx").agg(pb_sum=pl.col("cp").sum())
@@ -407,7 +447,7 @@ def reduce_chrom(inp, chrom, a, stage, gidx_filter=None):
             num[key].append(ggs.group_by(key, "gidx").agg(
                 sum_log=pl.col("sum_log1p_cp10k").sum(), n_expr=pl.col("n_expressing").sum()).with_columns(
                 dataset_key=pl.lit(d, pl.Int32)))
-            lib = inp.level[key][1].filter(pl.col("dataset_key") == d).drop("dataset_key")
+            lib = inp.lib_d[key][d].drop("dataset_key")
             pbn[key].append(gds.group_by(key, "donor_id", "gidx").agg(c=pl.col("counts").sum()).join(
                 lib, on=[key, "donor_id"]).filter(pl.col("lib") > 0).group_by(key, "gidx").agg(
                 pb_sum=(1e4 * pl.col("c") / pl.col("lib")).sum()))
@@ -477,23 +517,33 @@ class Release:
         # times over, so its BigQuery copy is one file per chromosome (summary too, as its
         # upper bound reaches 4 GB); the loader stages every shard the manifest lists
         self.shards = {k: {} for k in self.cols}
+        self.open = {k: None for k in self.cols}  # (chrom, Pipe) of the shard being written
 
     def append(self, kind, df, chrom):
+        """Rows of one gene block, in gene order; a chromosome's blocks must arrive in sequence."""
         tab, bqc = self.cols[kind]
         df = fmt(df)
         df.select(tab).write_csv(self.tab[kind].proc.stdin, separator="\t", include_header=False, null_value="NA")
         name = f"bq/{kind}/{chrom}.tsv.gz"
-        if name in self.shards[kind]:
-            raise SystemExit(f"{name} written twice")
-        os.makedirs(f"{self.local}/bq/{kind}", exist_ok=True)
-        shard = Pipe(GZIP, f"{self.local}/{name}", "\t".join(bqc) + "\n")
-        df.select(bqc).write_csv(shard.proc.stdin, separator="\t", include_header=False, null_value="")
-        shard.close()
-        self.shards[kind][name] = df.height
+        if self.open[kind] is None or self.open[kind][0] != chrom:
+            self._close_shard(kind)
+            if name in self.shards[kind]:
+                raise SystemExit(f"{name} written twice")
+            os.makedirs(f"{self.local}/bq/{kind}", exist_ok=True)
+            self.open[kind] = (chrom, Pipe(GZIP, f"{self.local}/{name}", "\t".join(bqc) + "\n"))
+            self.shards[kind][name] = 0
+        df.select(bqc).write_csv(self.open[kind][1].proc.stdin, separator="\t", include_header=False, null_value="")
+        self.shards[kind][name] += df.height
         self.rows[kind] += df.height
+
+    def _close_shard(self, kind):
+        if self.open[kind] is not None:
+            self.open[kind][1].close()
+            self.open[kind] = None
 
     def close(self):
         for k in self.cols:
+            self._close_shard(k)
             self.tab[k].close()
             subprocess.run(["tabix", "-f"] + GENE_POINT_INDEX.args + [f"{self.local}/{k}.tsv.gz"], check=True)
 
@@ -558,16 +608,17 @@ def run(a):
     os.makedirs(parent, exist_ok=True)
     local = tempfile.mkdtemp(prefix=f".{a.release_date}-", dir=parent)
     stage = None
+    parts = gene_parts(gencode)
     if gidx_filter is None:
         stage = f"{workdir}/stage"
         shutil.rmtree(stage, ignore_errors=True)
-        split_by_chrom(inp, stage)
+        parts = gene_parts(gencode, a.block_genes)
+        split_by_part(inp, parts, stage)
 
     rel = Release(local, a)
     profiles, summaries = [], []
-    chroms = sorted(set(inp.map["chrom"].to_list()))
-    for c in chroms:
-        r = reduce_chrom(inp, c, a, stage, gidx_filter)
+    for i, (c, lo, hi) in enumerate(parts):
+        r = reduce_part(inp, i, parts, a, stage, gidx_filter)
         if r is None:
             continue
         summary, pdr, prof = r
@@ -576,7 +627,8 @@ def run(a):
         if a.marker_panel:
             profiles.append(prof)
             summaries.append(summary)
-        print(f"chrom {c}: summary {summary.height} per_dataset {pdr.height}", file=sys.stderr, flush=True)
+        print(f"chrom {c} genes {lo}-{hi}: summary {summary.height} per_dataset {pdr.height}",
+              file=sys.stderr, flush=True)
     rel.close()
     if stage:
         shutil.rmtree(stage, ignore_errors=True)
@@ -711,6 +763,8 @@ def main(argv=None):
     p.add_argument("--gencode", default=GENCODE_URI)
     p.add_argument("--rollup-dir", default=str(HERE / "rollup"))
     p.add_argument("--workdir")
+    p.add_argument("--block-genes", type=int, default=BLOCK_GENES,
+                   help="genes per reduce block; the per-dataset rows of one block bound memory")
     p.add_argument("--genes", help="comma-separated gene names or Ensembl ids: compute only these")
     p.add_argument("--force-remote-genes", action="store_true",
                    help="allow --genes with a gs:// --out (output goes to <out>/<date>-genes-mode/)")

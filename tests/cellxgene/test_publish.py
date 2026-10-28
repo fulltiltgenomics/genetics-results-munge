@@ -213,13 +213,17 @@ def test_tabix_point_query(inputs):
     assert x.split("\t")[4] == "GENEC"
 
 
-def test_deterministic_and_genes_mode(inputs):
-    a, b = run(*inputs, "r1"), run(*inputs, "r2")
+def assert_same_files(a, b):
     for root, _, files in os.walk(a):
         for f in files:
             p = os.path.join(root, f)
             with open(p, "rb") as x, open(os.path.join(b, os.path.relpath(p, a)), "rb") as y:
                 assert x.read() == y.read(), f
+
+
+def test_deterministic_and_genes_mode(inputs):
+    a, b = run(*inputs, "r1"), run(*inputs, "r2")
+    assert_same_files(a, b)
     rg = run(*inputs, "rg", "--genes", "GENEA")
     assert not rg.exists()  # nothing under <out>/<date>/: genes mode is its sibling
     g = rg.parent / (rg.name + "-genes-mode")
@@ -232,6 +236,12 @@ def test_deterministic_and_genes_mode(inputs):
             with gzip.open(a / name, "rt") as fh:
                 assert fh.readline().rstrip("\n").split("\t") == cols
                 assert sum(1 for _ in fh) == n
+
+
+def test_gene_blocks_give_the_same_release(inputs):
+    """One gene per block: chromosome 1's two genes are reduced in two blocks that append to one
+    tabix stream and one BigQuery shard, byte-identical to the whole-chromosome release."""
+    assert_same_files(run(*inputs, "whole"), run(*inputs, "blocked", "--block-genes", "1"))
 
 
 def test_group_keys_unique_with_noncontiguous_ids(inputs):

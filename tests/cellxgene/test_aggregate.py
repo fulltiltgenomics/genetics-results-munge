@@ -47,10 +47,10 @@ def _legacy_categorical(g, name, values):
     g.create_dataset(name, data=codes.astype(np.int16)).attrs["categories"] = ref.ref
 
 
-def _dataframe(g, index, cols, plain=(), legacy=()):
+def _dataframe(g, index, cols, plain=(), legacy=(), categorical_index=False):
     g.attrs.update({"encoding-type": "dataframe", "encoding-version": "0.2.0", "_index": "_index",
                     "column-order": np.array(list(cols), dtype=object)})
-    _strings(g, "_index", index)
+    (_categorical if categorical_index else _strings)(g, "_index", index)
     for k, v in cols.items():
         if np.asarray(v).dtype == bool:
             _array(g, k, v)
@@ -90,13 +90,15 @@ def make_dataset(seed=0):
     return obs, counts
 
 
-def write_h5ad(path, obs, counts, normalised_x=False, feature_is_filtered=None, plain=(), legacy=()):
+def write_h5ad(path, obs, counts, normalised_x=False, feature_is_filtered=None, plain=(), legacy=(),
+               categorical_index=False):
     with h5py.File(path, "w") as f:
         f.attrs.update({"encoding-type": "anndata", "encoding-version": "0.1.0"})
-        _dataframe(f.create_group("obs"), [f"cell{i}" for i in range(N_CELLS)], obs, plain, legacy)
+        _dataframe(f.create_group("obs"), [f"cell{i}" for i in range(N_CELLS)], obs, plain, legacy,
+                   categorical_index)
         filtered = np.zeros(N_GENES, bool) if feature_is_filtered is None else feature_is_filtered
         var = {"feature_name": [f"GENE{i}-α" for i in range(N_GENES)], "feature_is_filtered": filtered}
-        _dataframe(f.create_group("var"), GENE_IDS, var)
+        _dataframe(f.create_group("var"), GENE_IDS, var, categorical_index=categorical_index)
         if normalised_x:
             lib = np.maximum(counts.sum(1, keepdims=True), 1)
             _csr(f, "X", np.log1p(counts / lib * 1e4))
@@ -296,6 +298,15 @@ def test_gcs_output_marker_last(tmp_path, data, monkeypatch):
     assert events[-1] == ("upload", "pre/fix/_SUCCESS.json")
     assert {n for _, n in events[1:-1]} == {f"pre/fix/{n}" for n in agg.OUTPUT_FILES}
     assert not [p for p in os.listdir(tmp_path) if p.startswith("cxg-")]  # staging cleaned up
+
+
+def test_categorical_index(tmp_path, data):
+    """An obs or var index written as a categorical (a codes/categories group, as one published
+    dataset's obs index is) reads like a string index."""
+    obs, counts = data
+    out = run(tmp_path, write_h5ad(tmp_path / "d.h5ad", obs, counts, categorical_index=True))
+    assert_matches(out, obs, counts)
+    assert list(pd.read_parquet(f"{out}/genes.parquet").gene_id) == GENE_IDS
 
 
 def test_fixture_is_a_valid_h5ad(tmp_path, data):
