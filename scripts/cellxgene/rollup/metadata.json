@@ -4,7 +4,8 @@
   "ontologies": {
     "CL": "v2026-03-26",
     "UBERON": "v2026-04-01",
-    "CVCL": "55.0"
+    "CVCL": "55.0",
+    "HsapDv": "v2025-01-23"
   },
   "cl_obo": {
     "url": "https://github.com/obophenotype/cell-ontology/releases/download/v2026-03-26/cl-basic.obo",
@@ -13,9 +14,9 @@
   },
   "listing": {
     "url": "https://api.cellxgene.cziscience.com/curation/v1/datasets",
-    "sha256": "bf0146737c15a92b0d3588a1338fa30b9ecfc606d3bbad238760d3ad953e1ca2",
-    "n_datasets": 2240,
-    "n_work_list": 1047,
+    "sha256": "a336cbe9648f5d5473cb6d26ccae60d2902f1f63687d044a6d311c331309b6f2",
+    "n_datasets": 2244,
+    "n_work_list": 1050,
     "filter": "human, primary_cell_count > 0, no methylation (snmC*/methyl*) assay"
   },
   "inputs_sha256": {
@@ -39,6 +40,12 @@
   "summary_excluded_rule": "native term that rolls up to a target in broad_targets.tsv and is an is_a ancestor-or-self of another target; no_target terms are never excluded; left out of the cross-dataset summary only",
   "n_summary_excluded": 35,
   "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an ancestor-or-self (guide closure, is_a + part_of); else self; CL and CVCL tissues -> self",
+  "prenatal_roots": {
+    "HsapDv:0000045": "prenatal stage",
+    "UBERON:0000068": "embryo stage"
+  },
+  "development_stage_rule": "prenatal when a prenatal_roots term is an ancestor-or-self (guide closure, is_a + part_of); unknown and terms not in the guide are not; a dataset whose every listed stage is prenatal is left out of the cross-dataset summary only",
+  "n_prenatal_stages": 50,
   "cell_type_methods": {
     "ancestor": 767,
     "no_target": 96,
@@ -51,5 +58,11 @@
     "cell_culture_self": 15,
     "no_tissue_general": 26,
     "tissue_general": 530
+  },
+  "development_stage_methods": {
+    "ancestor": 50,
+    "none": 145,
+    "not_in_ontology": 1,
+    "unknown": 1
   }
 }

@@ -10,13 +10,15 @@ Inputs
   subdirectories with `_SUCCESS.json` are read; any other is listed in the manifest as skipped.
   A `_SUCCESS.json` whose `aggregation_format_version` is not `aggregate.FORMAT_VERSION` stops
   the run: a release never mixes formats. A gs:// prefix is copied to `--workdir` first
-- roll-up tables `rollup/cell_type_rollup.tsv` and `rollup/tissue_rollup.tsv` (pinned, built by
-  `rollup.py`). A native term missing from a table maps to itself and is counted in the manifest
+- roll-up tables `rollup/cell_type_rollup.tsv`, `rollup/tissue_rollup.tsv` and
+  `rollup/development_stage.tsv` (pinned, built by `rollup.py`). A native term missing from a
+  table maps to itself and is counted in the manifest
 - GENCODE v49 genes (`--gencode`): Ensembl ids are matched with their `.N` version stripped on
   both sides; the source's own id is kept as `source_gene_id`. Features with no v49 match are
   dropped and counted in the manifest (`gencode`), as are non-Ensembl features (spike-ins)
 - `--listing`: the curation API datasets JSON, for the collection, title, DOI and citation in
-  `datasets.tsv`. Without it those columns are empty
+  `datasets.tsv` and for each dataset's development stages, which decide the prenatal exclusion
+  below. Without it those columns are empty and no dataset is excluded
 
 Rules
 - PRIMARY metrics, per cell group: `mean_log1p_cp10k` (cell-level mean, zeros included) and
@@ -35,9 +37,14 @@ Rules
 - summary: groups with disease `PATO:0000461` (normal), tissue_type `tissue`, cell type not
   `unknown`, not `summary_excluded` in the roll-up table (a native label coarser than the target
   list, such as 'leukocyte', whose pooled row would outrank the finer types it contains; see
-  rollup.py), and not a spatial assay (a Visium spot is not a cell; `--summary-include-spatial`
-  admits them), pooled across datasets at (rolled-up cell type, tissue_general). n_donors is
-  the sum over datasets of distinct donor_ids, so a donor published in two datasets counts twice
+  rollup.py), not a spatial assay (a Visium spot is not a cell; `--summary-include-spatial`
+  admits them), and not from an all-prenatal dataset (one whose every development stage in the
+  listing is `prenatal` in `rollup/development_stage.tsv`: a fetal atlas otherwise outranks adult
+  tissue for markers such as ALB, hepatoblast over hepatocyte; a dataset mixing prenatal and
+  postnatal donors stays whole, since development stage is not a worker grouping key, as does one
+  with no listing entry or an `unknown` stage), pooled across datasets at (rolled-up cell type,
+  tissue_general). n_donors is the sum over datasets of distinct donor_ids, so a donor published
+  in two datasets counts twice
 - tau (Yanai 2005) per gene on the cell-type profile: mean log1p CP10k pooled over all summary
   tissues per rolled-up cell type, over the cell types that pass suppression at that level;
   tau = sum(1 - x_i / max x) / (n - 1). NA when n < 2 or max x = 0. The same value is repeated
@@ -216,7 +223,19 @@ def load_rollups(rollup_dir):
     ti = pl.read_csv(f"{rollup_dir}/tissue_rollup.tsv", separator="\t", infer_schema_length=0).select(
         "tissue_ontology_term_id", pl.col("tissue_general_ontology_term_id").alias("tg_id"),
         pl.col("tissue_general").alias("tg_label"))
-    return ct, ti
+    ds = pl.read_csv(f"{rollup_dir}/development_stage.tsv", separator="\t", infer_schema_length=0)
+    prenatal = set(ds.filter(pl.col("prenatal") == "true")["development_stage_ontology_term_id"])
+    return ct, ti, prenatal
+
+
+def prenatal_datasets(listing, prenatal):
+    """dataset_version_ids whose every development stage in the listing is a prenatal term."""
+    out = []
+    for x in listing or []:
+        stages = {s["ontology_term_id"] for s in x.get("development_stage") or []}
+        if stages and stages <= prenatal:
+            out.append(x["dataset_version_id"])
+    return sorted(out)
 
 
 def discover(agg_dir, only=None):
@@ -236,8 +255,9 @@ def discover(agg_dir, only=None):
 class Inputs:
     """Everything small, for all datasets: groups, donors, gene mapping, summary-row keys."""
 
-    def __init__(self, agg_dir, names, gencode, ct, ti, a):
+    def __init__(self, agg_dir, names, gencode, ct, ti, a, summary_excluded_datasets=()):
         self.agg_dir, self.names, self.gencode = agg_dir, names, gencode
+        self.summary_excluded_datasets = sorted(set(summary_excluded_datasets) & set(names))
         self.success, groups, gds, maps, self.gene_stats = [], [], [], [], []
         v49 = gencode.select("ensembl", "gidx", "chrom")
         offset = 0
@@ -295,7 +315,8 @@ class Inputs:
             & (pl.col("cell_type_ontology_term_id") != "unknown")
             # a native term missing from the roll-up table is not excluded: nothing says it is coarse
             & ~pl.col("ct_excluded").fill_null(False)
-            & (pl.lit(a.summary_include_spatial) | ~pl.col("spatial")))
+            & (pl.lit(a.summary_include_spatial) | ~pl.col("spatial"))
+            & ~pl.col("dataset_version_id").is_in(self.summary_excluded_datasets))
         # summary row = (rolled-up cell type, tissue_general); ct = the cell-type level used for tau
         el = g.filter("summary")
         rows = el.group_by("cell_type_rollup_ontology_term_id", "tissue_general_ontology_term_id").agg(
@@ -588,8 +609,12 @@ def run(a):
     if not names:
         raise SystemExit(f"no completed datasets under {a.agg}")
     gencode = load_gencode(gencode_path)
-    ct, ti = load_rollups(a.rollup_dir)
-    inp = Inputs(agg_dir, names, gencode, ct, ti, a)
+    listing = None
+    if a.listing:
+        with open(a.listing) as fh:
+            listing = json.load(fh)
+    ct, ti, prenatal = load_rollups(a.rollup_dir)
+    inp = Inputs(agg_dir, names, gencode, ct, ti, a, prenatal_datasets(listing, prenatal))
 
     gidx_filter, missing = None, []
     if a.genes:
@@ -637,10 +662,6 @@ def run(a):
     inp.groups.select(BQ_GROUP_COLUMNS).sort("group_key").write_csv(
         groups.proc.stdin, separator="\t", include_header=False, null_value="")
     groups.close()
-    listing = None
-    if a.listing:
-        with open(a.listing) as fh:
-            listing = json.load(fh)
     measured = Pipe(GZIP, f"{local}/measured_genes.tsv.gz", "dataset_version_id\tgene_id\n")
     inp.map.join(inp.gencode.select("gidx", "gene_id"), on="gidx").select(
         pl.col("dataset_key").map_elements(lambda d: names[d], return_dtype=pl.Utf8).alias("dataset_version_id"),
@@ -666,12 +687,15 @@ def run(a):
         "aggregation_format_version": aggregate.FORMAT_VERSION,
         "input_dataset_version_ids": names, "skipped_incomplete": skipped,
         "rollup_sha256": {n: sha256(f"{a.rollup_dir}/{n}") for n in
-                          ("cell_type_rollup.tsv", "tissue_rollup.tsv", "metadata.json")
+                          ("cell_type_rollup.tsv", "tissue_rollup.tsv", "development_stage.tsv", "metadata.json")
                           if os.path.exists(f"{a.rollup_dir}/{n}")},
         "rollup_unmapped": inp.unmapped,
-        # normal tissue groups left out of the summary as coarser than the target list; still per-dataset
+        # left out of the summary, still per-dataset: normal tissue groups coarser than the target
+        # list, and whole datasets with only prenatal donors
         "summary_excluded": {"broad_targets": rollup_meta.get("broad_targets"),
-                             "rule": rollup_meta.get("summary_excluded_rule"), "cell_types": inp.excluded},
+                             "rule": rollup_meta.get("summary_excluded_rule"), "cell_types": inp.excluded,
+                             "prenatal_datasets": {"rule": rollup_meta.get("development_stage_rule"),
+                                                   "dataset_version_ids": inp.summary_excluded_datasets}},
         "gencode": {"source": a.gencode, "sha256": sha256(gencode_path),
                     "dropped_no_v49_match": len(unmatched), "dropped_ids": unmatched[:1000],
                     "dropped_non_ensembl_features": sum(s["non_ensembl"] for s in inp.gene_stats),

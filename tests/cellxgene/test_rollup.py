@@ -34,6 +34,11 @@ def tissues():
     return {r["tissue_ontology_term_id"]: r for r in _rows("tissue_rollup.tsv")}
 
 
+@pytest.fixture(scope="module")
+def stages():
+    return {r["development_stage_ontology_term_id"]: r for r in _rows("development_stage.tsv")}
+
+
 @pytest.mark.parametrize("native, target, method", [
     ("CL:0000624", "CL:0000084", "ancestor"),  # CD4-positive, alpha-beta T cell -> T cell
     ("CL:0002063", "CL:0002063", "self"),      # type II pneumocyte is itself a target
@@ -55,6 +60,27 @@ def test_known_cell_type_mappings(cell_types, native, target, method):
 def test_known_tissue_mappings(tissues, native, general, method):
     r = tissues[native]
     assert (r["tissue_general_ontology_term_id"], r["method"]) == (general, method)
+
+
+@pytest.mark.parametrize("term, prenatal, method", [
+    ("HsapDv:0000046", "true", "ancestor"),    # 9th week post-fertilization stage
+    ("HsapDv:0000017", "true", "ancestor"),    # Carnegie stage 10
+    ("HsapDv:0000198", "true", "ancestor"),    # fourth LMP month stage: no 'fetal' in the label
+    ("HsapDv:0000262", "false", "none"),       # newborn stage (0-28 days)
+    ("HsapDv:0000258", "false", "none"),       # adult stage
+    ("unknown", "false", "unknown"),
+])
+def test_known_development_stages(stages, term, prenatal, method):
+    assert (stages[term]["prenatal"], stages[term]["method"]) == (prenatal, method)
+
+
+def test_prenatal_rule_on_terms_the_listing_does_not_carry():
+    from cellxgene_ontology_guide.ontology_parser import OntologyParser
+    parser = OntologyParser("7.1.0")
+    # the embryo-stage root catches a stage annotated with UBERON rather than HsapDv
+    assert rollup.prenatal_stage("UBERON:0007220", parser) == (True, "ancestor")   # late embryonic stage
+    assert rollup.prenatal_stage("UBERON:0000113", parser) == (False, "none")      # post-juvenile adult stage
+    assert rollup.prenatal_stage("na", parser) == (False, "not_in_ontology")
 
 
 def test_culture_tissues_are_never_marked_tissue_only(tissues):
@@ -118,6 +144,10 @@ def test_metadata_records_the_releases():
     assert meta["ontologies"]["CL"] and meta["ontologies"]["UBERON"]
     assert meta["cl_obo"]["data_version"].endswith(meta["ontologies"]["CL"].lstrip("v") + "/cl-basic.owl")
     assert meta["n_pins"] == len(rollup._read_tsv(TABLES / "pins.tsv"))
+    stages = rollup._read_tsv(TABLES / "development_stage.tsv")
+    assert meta["ontologies"]["HsapDv"] and meta["prenatal_roots"] == rollup.PRENATAL_ROOTS
+    assert meta["n_prenatal_stages"] == sum(r["prenatal"] == "true" for r in stages) > 0
+    assert all(r["method"] == "ancestor" for r in stages if r["prenatal"] == "true")
 
 
 # synthetic CL: cell <- A <- A1 <- A1x ; cell <- B ; A1 <- P (pinned to B) <- P1 ; P <- Q, Q is_a A2 too
@@ -214,10 +244,12 @@ def _synthetic(tmp_path):
          "cell_type": [{"ontology_term_id": t, "label": t} for t in terms],
          "tissue": [{"ontology_term_id": "UBERON:0008952", "label": "upper lobe of left lung",
                      "tissue_type": "tissue"},
-                    {"ontology_term_id": "CL:0000084", "label": "T cell", "tissue_type": "primary cell culture"}]},
+                    {"ontology_term_id": "CL:0000084", "label": "T cell", "tissue_type": "primary cell culture"}],
+         "development_stage": [{"ontology_term_id": t, "label": t} for t in
+                               ("HsapDv:0000046", "HsapDv:0000258", "unknown", "HsapDv:9999999")]},
         {"organism": [{"ontology_term_id": "NCBITaxon:10090"}], "primary_cell_count": 10,
          "schema_version": "7.1.0", "assay": [], "cell_type": [{"ontology_term_id": "CL:1000004", "label": "b"}],
-         "tissue": []},
+         "tissue": [], "development_stage": [{"ontology_term_id": "MmusDv:0000019", "label": "Theiler stage 12"}]},
     ]))
     return listing, obo, targets, pins
 
@@ -249,6 +281,12 @@ def test_rules_on_synthetic_ontology(tmp_path):
         "UBERON:0008952": ("UBERON:0002048", "tissue_general"),
         "CL:0000084": ("CL:0000084", "cell_culture_self"),
     }
+    with open(tmp_path / "out" / "development_stage.tsv") as f:
+        ds = {r["development_stage_ontology_term_id"]: (r["prenatal"], r["method"])
+              for r in csv.DictReader(f, delimiter="\t")}
+    # the mouse dataset's stage is not listed; the human ones are classified by HsapDv ancestry
+    assert ds == {"HsapDv:0000046": ("true", "ancestor"), "HsapDv:0000258": ("false", "none"),
+                  "unknown": ("false", "unknown"), "HsapDv:9999999": ("false", "not_in_ontology")}
 
 
 def test_rerun_is_byte_identical(tmp_path):
@@ -256,7 +294,7 @@ def test_rerun_is_byte_identical(tmp_path):
     outs = [tmp_path / "o1", tmp_path / "o2"]
     for o in outs:
         rollup.build(listing, obo, o, targets, pins)
-    for name in ("cell_type_rollup.tsv", "tissue_rollup.tsv", "metadata.json"):
+    for name in ("cell_type_rollup.tsv", "tissue_rollup.tsv", "development_stage.tsv", "metadata.json"):
         assert (outs[0] / name).read_bytes() == (outs[1] / name).read_bytes(), name
 
 

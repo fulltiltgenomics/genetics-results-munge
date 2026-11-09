@@ -171,6 +171,35 @@ def test_coarse_native_type_is_left_out_of_the_summary_only(inputs):
     assert leuk in m["broad_targets"] and m["rule"]
 
 
+def test_all_prenatal_dataset_is_left_out_of_the_summary_only(inputs):
+    tmp_path, agg, gencode = inputs
+    fetal, adult = "HsapDv:0000046", "HsapDv:0000258"   # 9th week post-fertilization; adult stage
+    don = [("d1", 1000), ("d2", 1000), ("d3", 1000)]
+    for dvid in ("dsE", "dsF"):
+        write_dataset(agg, dvid, [(FIB, NORMAL, 100)], {0: don}, [G1], [(0, G1, 100, 500)], [])
+    listing = tmp_path / "listing.json"
+    listing.write_text(json.dumps([
+        {"dataset_version_id": "dsE", "development_stage": [{"ontology_term_id": fetal, "label": "9th week"}]},
+        {"dataset_version_id": "dsF", "development_stage": [{"ontology_term_id": fetal, "label": "9th week"},
+                                                            {"ontology_term_id": adult, "label": "adult"}]},
+        {"dataset_version_id": "not-published", "development_stage": [{"ontology_term_id": fetal, "label": "9th week"}]},
+    ]))
+    rel = run(tmp_path, agg, gencode, "rel", "--listing", str(listing))
+    # the fibroblast row is the three original datasets (460 cells) plus the mixed dsF; dsE, all
+    # fetal, pools nowhere, and dsA with no listing entry stays
+    r = summary_row(read(rel / "summary.tsv.gz"), G1)
+    assert (r.n_cells, r.n_datasets) == (560, 4)
+    p = read(rel / "per_dataset.tsv.gz")
+    assert {"id-dsE", "id-dsF"} <= set(p.dataset_id)
+    m = json.loads((rel / "manifest.json").read_text())["summary_excluded"]["prenatal_datasets"]
+    assert m["dataset_version_ids"] == ["dsE"] and "prenatal" in m["rule"]
+    assert "development_stage.tsv" in json.loads((rel / "manifest.json").read_text())["rollup_sha256"]
+    # without a listing nothing is known about stages, so nothing is excluded
+    rel = run(tmp_path, agg, gencode, "rel-nolisting")
+    assert summary_row(read(rel / "summary.tsv.gz"), G1).n_datasets == 5
+    assert json.loads((rel / "manifest.json").read_text())["summary_excluded"]["prenatal_datasets"]["dataset_version_ids"] == []
+
+
 def test_suppression(inputs):
     rel = run(*inputs)
     p = read(rel / "per_dataset.tsv.gz")

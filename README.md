@@ -364,7 +364,8 @@ that leaves production's pointer alone (but not BigQuery). The infrastructure it
 suite's `terraform/expression.tf`.
 
 `scripts/cellxgene/publish.py` reduces the per-dataset worker outputs to a release: a pooled
-normal-tissue summary and a per-dataset table as gene-point tabix files, `measured_genes.tsv.gz`,
+normal-tissue summary (postnatal: a dataset whose donors are all prenatal stays out of it, per
+`rollup/development_stage.tsv`) and a per-dataset table as gene-point tabix files, `measured_genes.tsv.gz`,
 the BigQuery load files under `bq/` (summary and per-dataset sharded by chromosome, plus groups,
 datasets and `bq/measured_genes.tsv.gz`), and `manifest.json` with every file's sha256 and every
 shard's row count — the loader refuses a release whose staged counts differ. Its header docstring

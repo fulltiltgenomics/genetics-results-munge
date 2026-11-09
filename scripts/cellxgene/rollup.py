@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pinned roll-up tables for the CELLxGENE work list: native cell type -> roll-up CL term,
-native tissue -> tissue_general.
+native tissue -> tissue_general, development stage -> prenatal or not.
 
     rollup.py [--listing datasets.json] [--download] [--cache-dir DIR] [--out DIR]
 
@@ -11,7 +11,7 @@ byte-identical files (nothing time-dependent is recorded).
 Inputs
 - the curation API listing (`--listing`, or fetched with `--download` into `--cache-dir`). The
   work list is the cost model's: human, `primary_cell_count > 0`, methylation assays excluded.
-  Only the dataset-level `cell_type` and `tissue` term lists are read
+  Only the dataset-level `cell_type`, `tissue` and `development_stage` term lists are read
 - `rollup/cell_type_targets.tsv`, `rollup/pins.tsv` and `rollup/broad_targets.tsv`, all
   hand-curated and reviewed. Every id must exist in the pinned CL release with exactly the label
   written there, so a typo fails the build instead of silently becoming a target nobody rolls up to
@@ -50,8 +50,16 @@ ancestor-or-self in the guide's UBERON closure (is_a + part_of), else the term i
 leaves CL (primary cell culture) and Cellosaurus (cell line) tissues as themselves too, and so
 does this; it is safe because `tissue_type` is a grouping key, so those never pool with tissue.
 
-Outputs in `--out`: `cell_type_rollup.tsv`, `tissue_rollup.tsv`, `metadata.json` (ontology
-releases, input checksums, rule text, per-method counts).
+Development stage rule (`development_stage.tsv`): a listed stage term is `prenatal` when
+`prenatal stage` (HsapDv:0000045) or `embryo stage` (UBERON:0000068, which a few older datasets
+annotate with) is an ancestor-or-self in the guide's closure; `unknown` and a term the guide does
+not know are not. publish.py leaves a dataset whose every listed stage is prenatal out of the
+cross-dataset summary and keeps it in the per-dataset grain: a fetal atlas otherwise outranks
+adult tissue for markers such as ALB (hepatoblast over hepatocyte). Mixed datasets stay whole,
+since development stage is not a worker grouping key.
+
+Outputs in `--out`: `cell_type_rollup.tsv`, `tissue_rollup.tsv`, `development_stage.tsv`,
+`metadata.json` (ontology releases, input checksums, rule text, per-method counts).
 """
 import argparse
 import csv
@@ -71,6 +79,7 @@ LISTING_URL = "https://api.cellxgene.cziscience.com/curation/v1/datasets"
 CL_OBO_URL = "https://github.com/obophenotype/cell-ontology/releases/download/{version}/cl-basic.obo"
 HUMAN = "NCBITaxon:9606"
 UNKNOWN = "unknown"
+PRENATAL_ROOTS = {"HsapDv:0000045": "prenatal stage", "UBERON:0000068": "embryo stage"}
 
 
 def work_list(datasets):
@@ -216,6 +225,20 @@ def tissue_general(term, parser, general):
     return (hits[0], "tissue_general") if hits else (term, "no_tissue_general")
 
 
+def prenatal_stage(term, parser):
+    """(prenatal, method) for a development_stage term under the rule in the module docstring."""
+    if term == UNKNOWN:
+        return False, UNKNOWN
+    try:
+        ancestors = set(parser.get_term_ancestors(term, include_self=True))
+    except (KeyError, ValueError):
+        ancestors = set()
+    # the guide answers an id it does not know (a listing's 'na') with an empty closure, not an error
+    if not ancestors:
+        return False, "not_in_ontology"
+    return (True, "ancestor") if ancestors & set(PRENATAL_ROOTS) else (False, "none")
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -266,29 +289,38 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
                         labels.get(tgt, listed_ct.get(tgt, tgt)), method, ";".join(others),
                         str(ct.summary_excluded(term, tgt, method, broad)).lower()])
 
-    listed_ts, ts_types = {}, {}
+    listed_ts, ts_types, listed_ds = {}, {}, {}
     for x in work:
         for t in x["tissue"]:
             listed_ts[t["ontology_term_id"]] = t["label"]
             ts_types.setdefault(t["ontology_term_id"], set()).add(t["tissue_type"])
+        for s in x.get("development_stage", []):
+            listed_ds[s["ontology_term_id"]] = s["label"]
     general = get_curated_ontology_term_list(CuratedOntologyTermList.TISSUE_GENERAL)
 
-    def label(term):
+    def label(term, listed=listed_ts):
         try:
-            return parser.get_term_label(term) or listed_ts.get(term, term)
+            return parser.get_term_label(term) or listed.get(term, term)
         except (KeyError, ValueError):
-            return listed_ts.get(term, term)
+            return listed.get(term, term)
 
     ts_rows = []
     for term in sorted(listed_ts):
         tg, method = tissue_general(term, parser, general)
         ts_rows.append([term, label(term), ",".join(sorted(ts_types[term])), tg, label(tg), method])
 
+    ds_rows = []
+    for term in sorted(listed_ds):
+        prenatal, method = prenatal_stage(term, parser)
+        ds_rows.append([term, label(term, listed_ds), str(prenatal).lower(), method])
+
     out.mkdir(parents=True, exist_ok=True)
     write_tsv(out / "cell_type_rollup.tsv", ["cell_type_ontology_term_id", "cell_type", "rollup_term_id",
               "rollup_label", "method", "other_candidates", "summary_excluded"], ct_rows)
     write_tsv(out / "tissue_rollup.tsv", ["tissue_ontology_term_id", "tissue", "tissue_types",
               "tissue_general_ontology_term_id", "tissue_general", "method"], ts_rows)
+    write_tsv(out / "development_stage.tsv", ["development_stage_ontology_term_id", "development_stage",
+              "prenatal", "method"], ds_rows)
 
     def counts(rows, col):
         c = {}
@@ -299,7 +331,7 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
     meta = {
         "cellxgene_schema_version": schemas[0],
         "cellxgene_ontology_guide": importlib.metadata.version("cellxgene-ontology-guide"),
-        "ontologies": {k: onto[k]["version"] for k in ("CL", "UBERON", "CVCL")},
+        "ontologies": {k: onto[k]["version"] for k in ("CL", "UBERON", "CVCL", "HsapDv")},
         "cl_obo": {"url": CL_OBO_URL.format(version=onto["CL"]["version"]), "data_version": obo_version,
                    "sha256": sha256(cl_obo)},
         "listing": {"url": LISTING_URL, "sha256": sha256(listing), "n_datasets": len(datasets),
@@ -320,8 +352,15 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
         "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an "
                        "ancestor-or-self (guide closure, is_a + part_of); else self; CL and CVCL "
                        "tissues -> self",
+        "prenatal_roots": PRENATAL_ROOTS,
+        "development_stage_rule": "prenatal when a prenatal_roots term is an ancestor-or-self (guide "
+                                  "closure, is_a + part_of); unknown and terms not in the guide are not; "
+                                  "a dataset whose every listed stage is prenatal is left out of the "
+                                  "cross-dataset summary only",
+        "n_prenatal_stages": sum(r[2] == "true" for r in ds_rows),
         "cell_type_methods": counts(ct_rows, 4),
         "tissue_methods": counts(ts_rows, 5),
+        "development_stage_methods": counts(ds_rows, 3),
     }
     (out / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n")
     return work, ct_rows, ts_rows
