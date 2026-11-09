@@ -142,7 +142,7 @@ def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
 
     out = df.select(
         pl.lit("BipEx2").alias("#dataset"),
-        pl.lit("bipolar_disorder").alias("trait"),
+        pl.lit("Bipolar disorder").alias("trait"),
         "gene",
         "gene_id",
         "gene_chr",
@@ -157,7 +157,7 @@ def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
         "total_variants_pheno",
         pl.col("n_cases").cast(pl.Int64),
         pl.col("n_controls").cast(pl.Int64),
-        pl.lit("bipolar_disorder").alias("trait_original"),
+        pl.lit("BIP").alias("trait_original"),
         pl.col("flags").fill_null("NA").alias("flags"),
     ).sort("gene_chr", "gene_start_pos", "gene_end_pos", "annotation")
 

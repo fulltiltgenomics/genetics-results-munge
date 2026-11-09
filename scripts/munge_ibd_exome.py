@@ -18,10 +18,12 @@ from sumstat_utils import write_exome_output
 
 GROUPS = ["IBD", "CD", "UC"]
 
-TRAIT_MAP = {
-    "IBD": "inflammatory_bowel_disease",
-    "CD": "crohns_disease",
-    "UC": "ulcerative_colitis",
+# the group code is the served trait_original (it names the per-trait file and is what
+# /search advertises); the display name goes in `trait`
+TRAIT_NAMES = {
+    "IBD": "Inflammatory bowel disease",
+    "CD": "Crohn's disease",
+    "UC": "Ulcerative colitis",
 }
 
 # gene burden annotation classes: prefix -> human-readable name
@@ -149,7 +151,7 @@ def build_gene_output(df: pl.DataFrame, gencode: pl.DataFrame, group: str) -> pl
     if n_unmatched > 0:
         print(f"  warning: {n_unmatched} genes not found in gencode")
 
-    trait = TRAIT_MAP[group]
+    trait = TRAIT_NAMES[group]
     out = df.select(
         pl.lit("IBD_exome").alias("#dataset"),
         pl.lit(trait).alias("trait"),
@@ -167,7 +169,7 @@ def build_gene_output(df: pl.DataFrame, gencode: pl.DataFrame, group: str) -> pl
         pl.lit(None, dtype=pl.Utf8).alias("total_variants_pheno"),
         pl.col("n_cases").cast(pl.Int64),
         pl.col("n_controls").cast(pl.Int64),
-        pl.lit(trait).alias("trait_original"),
+        pl.lit(group).alias("trait_original"),
         pl.lit("NA").alias("flags"),
     ).sort("gene_chr", "gene_start_pos", "gene_end_pos", "annotation")
 
@@ -252,7 +254,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
         if n_unmatched > 0:
             print(f"  warning: {n_unmatched} variants not matched to gencode")
 
-        trait = TRAIT_MAP[group]
+        trait = TRAIT_NAMES[group]
         out = df.select(
             pl.lit("IBD_exome").alias("#dataset"),
             "chr", "pos", "ref", "alt",
@@ -266,7 +268,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
             pl.lit(None, dtype=pl.Utf8).alias("n_cases"),
             pl.lit(None, dtype=pl.Utf8).alias("n_controls"),
             pl.lit(trait).alias("trait"),
-            pl.lit(trait).alias("trait_original"),
+            pl.lit(group).alias("trait_original"),
         ).sort("chr", "pos", "ref", "alt")
 
         write_exome_output(out, f"{output_dir}/IBD_exome_{group}_variant_results.munged.tsv.gz",

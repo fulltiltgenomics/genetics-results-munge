@@ -137,8 +137,8 @@ def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
         "ac", "an",
         pl.lit(None, dtype=pl.Utf8).alias("n_cases"),
         pl.lit(None, dtype=pl.Utf8).alias("n_controls"),
-        pl.lit("schizophrenia").alias("trait"),
-        pl.lit("schizophrenia").alias("trait_original"),
+        pl.lit("Schizophrenia").alias("trait"),
+        pl.lit("SCZ").alias("trait_original"),
     ).sort("chr", "pos", "ref", "alt")
 
     return out

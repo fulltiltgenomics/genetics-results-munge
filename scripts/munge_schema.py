@@ -147,7 +147,7 @@ def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
 
     out = df.select(
         pl.lit("SCHEMA").alias("#dataset"),
-        pl.lit("schizophrenia").alias("trait"),
+        pl.lit("Schizophrenia").alias("trait"),
         "gene",
         "gene_id",
         "gene_chr",
@@ -162,7 +162,7 @@ def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
         pl.lit(None, dtype=pl.Utf8).alias("total_variants_pheno"),
         pl.lit(N_CASES).alias("n_cases"),
         pl.lit(N_CONTROLS).alias("n_controls"),
-        pl.lit("schizophrenia").alias("trait_original"),
+        pl.lit("SCZ").alias("trait_original"),
         pl.lit("NA").alias("flags"),
     ).sort("gene_chr", "gene_start_pos", "gene_end_pos", "annotation")
 

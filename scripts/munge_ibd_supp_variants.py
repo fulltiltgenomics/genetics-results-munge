@@ -17,10 +17,12 @@ from sumstat_utils import write_exome_output
 
 GROUPS = ["IBD", "CD", "UC"]
 
-TRAIT_MAP = {
-    "IBD": "inflammatory_bowel_disease",
-    "CD": "crohns_disease",
-    "UC": "ulcerative_colitis",
+# the group code is the served trait_original (it names the per-trait file and is what
+# /search advertises); the display name goes in `trait`
+TRAIT_NAMES = {
+    "IBD": "Inflammatory bowel disease",
+    "CD": "Crohn's disease",
+    "UC": "Ulcerative colitis",
 }
 
 
@@ -124,7 +126,7 @@ def compute_group_stats(df: pl.DataFrame, group: str) -> pl.DataFrame:
 
 def build_output(df: pl.DataFrame, group: str, n_cases: int, n_controls: int) -> pl.DataFrame:
     """Build final output for one disease group."""
-    trait = TRAIT_MAP[group]
+    trait = TRAIT_NAMES[group]
     out = df.select(
         pl.lit("IBD_exome_2026").alias("#dataset"),
         "chr", "pos", "ref", "alt",
@@ -141,7 +143,7 @@ def build_output(df: pl.DataFrame, group: str, n_cases: int, n_controls: int) ->
         pl.lit(n_cases).alias("n_cases"),
         pl.lit(n_controls).alias("n_controls"),
         pl.lit(trait).alias("trait"),
-        pl.lit(trait).alias("trait_original"),
+        pl.lit(group).alias("trait_original"),
     ).sort("chr", "pos", "ref", "alt")
 
     return out

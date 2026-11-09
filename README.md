@@ -287,6 +287,13 @@ export into one gzip temp file per trait and then sorts each one on its own
 `split_burden_per_trait.py` also works on any other combined result file — pass
 `--trait-col 19 --tabix-args "-s2 -b3 -e3"` for the exome variant layout.
 
+The per-trait file name is the rows' `trait_original`, and results-api serves it under
+exactly that code, so it must be the code the registry advertises (`SCZ`, not
+`schizophrenia`). [scripts/relabel_traits.py](scripts/relabel_traits.py) rewrites the
+`trait` / `trait_original` columns of an existing `.munged.tsv.gz` (gene or variant
+layout, told apart by the header) and re-indexes it, for when the raw inputs are no longer
+on hand; it refuses a row whose `trait_original` is not in its map.
+
 ## outputs
 
 Both the WDL pipeline and the credible set scripts give output text files: 1) an uncompressed file for each trait or study, and 2) a bgzip-compressed tabixed file including all traits or studies. They also write per-trait credible set statistics (`*.stats.json` plus an aggregate `credible_set_stats.tsv`, see [scripts/credible_set_stats.py](scripts/credible_set_stats.py)), except for [Open Targets QTL](#open-targets-qtl). With `create_qtl_file = true` the WDL pipeline additionally writes a gene-indexed copy of the merged file (`*.qtl.tsv.gz`, indexed on the trait's gene locus) for the API's QTL gene lookups.
