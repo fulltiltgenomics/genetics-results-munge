@@ -105,7 +105,8 @@ parts that got copied across the family and then had to be corrected across it. 
 - **inputs, not just outputs: `sumstat_utils.fetch()` is the only cached downloader.** URL to
   a cache path, written to a `.part` sibling and renamed so an interrupt leaves nothing a
   later run mistakes for cached, `download=False` to refuse the network, `timeout=` where a
-  source is slow enough to need it. It was copied once and the duplication detector found it;
+  source is slow enough to need it. `fetch_gs()` beside it is the same cache for `gs://`
+  objects, which `fetch()` cannot speak (`billing_project=` for requester-pays buckets). It was copied once and the duplication detector found it;
   a munge that writes its own urllib block is that copy growing back
 - **the index mode is a per-product choice and it fails silently.** Interval products
   (`open_chromatin`) take `INTERVAL_INDEX`; point products (`variant_effect`, MPRA) take

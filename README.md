@@ -13,6 +13,7 @@ Fine-mapping results from FinnGen, Open Targets and eQTL Catalogue are processed
   - [Open Targets QTL](#open-targets-qtl)
   - [eQTL Catalogue](#eqtl-catalogue)
   - [PGC schizophrenia fine-mapping](#pgc-schizophrenia-fine-mapping)
+  - [NMR metabolic trait fine-mapping](#nmr-metabolic-trait-fine-mapping)
   - [caQTL gene-indexed credible sets](#caqtl-gene-indexed-credible-sets)
   - [gene-indexed peak-to-gene table](#gene-indexed-peak-to-gene-table)
   - [other datasets](#other-datasets)
@@ -186,6 +187,29 @@ can hold several independent signals because FINEMAP was run with more than one 
 allowed per locus. See [docs/pgc-scz-finemapping.md](docs/pgc-scz-finemapping.md) for the full
 column mapping, the caveats and what is dropped.
 
+### NMR metabolic trait fine-mapping
+
+`munge_nmr_meta.{py,sh}` converts the published SuSiE credible sets of the EstBB-UKBB
+Nightingale NMR metabolic trait meta-analysis
+([Tambets et al. 2026](https://www.nature.com/articles/s41586-026-10532-5), 249 traits) into the
+credible set format, as dataset `nmr_ukbb_est`. The fine-mapping file carries only a signed z
+(of the reference allele) and the MAF, so `beta`, `se` and `mlog10p` come from the companion
+lead-variant file where it has them and are derived elsewhere:
+
+```
+scripts/munge_nmr_meta.sh \
+UKBB_EUR_fine_mapping_with_meta_EUR_lead_variants.parquet \
+EUR_all_lead_variants.tsv.gz \
+data/R14_annotated_variants_v0.small.gz \
+data/nmr_meta
+```
+
+`nmr_meta_phenotypes.py` writes the phenotype metadata JSON from the same parquet. `cs_min_r2`
+is `NA` throughout, and `most_severe` and `gene_most_severe` are `NA` until
+`scripts/annotate_resource.sh` stamps them. See
+[docs/nmr-metabolic-trait-finemapping.md](docs/nmr-metabolic-trait-finemapping.md) for the
+column mapping, the allele orientation and the derivation.
+
 ### caQTL gene-indexed credible sets
 
 The API's `/credible_sets_by_qtl_gene/{gene}` endpoint reads a gene-indexed copy of a QTL credible set file (`*.qtl.tsv.gz`) that carries the trait's gene coordinates in `trait_chr`/`trait_start`/`trait_end`. For eQTL/pQTL the trait is itself a gene (`create_gene_indexed_qtl_file.py`), but the FinnGen caQTL trait is a chromatin peak, so the gene link comes from the Open4Gene peak-to-gene table: each credible set row is joined to the genes its peak is linked to **in the same cell type** and emitted once per linked gene, with `trait` set to the linked gene symbol and `trait_original` keeping the peak id.
@@ -259,8 +283,8 @@ Gene burden results are served two ways, and the munging produces a file for eac
 | `gene_burden_per_trait/<trait_original>.tsv.gz` | one trait, unfiltered, same tabix index | the API's `/gene_based_results_by_phenotype/{resource}/{trait}` and the BigQuery `gene_burden_results` load |
 
 `trait_original` names the per-trait file, so the IBD burden files are
-`inflammatory_bowel_disease` / `ulcerative_colitis` / `crohns_disease`, not the
-`IBD`/`UC`/`CD` codes the IBD exome *variant* files use.
+`IBD` / `UC` / `CD` — the same group codes the IBD exome *variant* files carry — while
+the display names (`Inflammatory bowel disease` etc.) go in `trait`.
 
 For BRaVa `trait_original` is the phenocode, which carries the meta-analysis stratum:
 `AFib.tsv.gz` is the cross-ancestry meta-analysis and `AFib|EUR.tsv.gz` one ancestry
