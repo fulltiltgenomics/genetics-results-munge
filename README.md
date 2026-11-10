@@ -377,6 +377,46 @@ The roll-up tables in `scripts/cellxgene/rollup/` are inputs pinned by checksum 
 release, so they are tracked even though `.gitignore` excludes `*.tsv`: a new one needs
 `git add -f`, or the image builds without it.
 
+### Refreshing by hand
+
+The weekly Scheduler job is created paused, so until it is resumed every release is a Batch
+submission from a workstation. `scripts/cellxgene/driver-by-hand.json` is the spec for that: the
+same VM, network and service account as the scheduled `driver-batch-job.json`, but the image
+pinned by digest (so a build pushed mid-run cannot change what the workers run), a run id that
+names the lock holder, the job and `runs/<run-id>/`, and `--approve-large` (the plan-size breaker
+is sized for a weekly delta, not a full build) with `--allow-partial` (a few datasets the worker
+cannot read must not block the release).
+
+1. Push munge `master` (and genetics-results-db `master` if the loader changed), then in the
+   suite run `DEPLOY_ENV=daly scripts/build.sh cellxgene`. It clones both from GitHub and
+   pushes `cellxgene:<YYYYMMDD>.<sha>` and `:latest`; take the digest from its output or
+   `gcloud artifacts docker images describe`.
+2. Fill the spec and submit it, with a run id that no earlier run used:
+
+   ```bash
+   IMAGE=us-central1-docker.pkg.dev/daly-finngenie/genetics-results/cellxgene@sha256:...
+   RUN_ID=refresh-$(date -u +%Y%m%d)
+   sed "s|@IMAGE@|$IMAGE|g; s|@RUN_ID@|$RUN_ID|g" scripts/cellxgene/driver-by-hand.json > /tmp/$RUN_ID.json
+   gcloud batch jobs submit cxg-driver-$RUN_ID --project daly-finngenie --location us-central1 --config /tmp/$RUN_ID.json
+   ```
+
+3. Watch the task log, not the agent log (which only carries VM events); the job uid is in
+   `gcloud batch jobs describe cxg-driver-$RUN_ID --location us-central1`:
+
+   ```bash
+   gcloud logging read 'labels.job_uid="<uid>" AND logName:"batch_task_logs"' --project daly-finngenie --limit 50 --order desc
+   ```
+
+   Exit codes and the lock are in the driver's docstring; `runs/<run-id>/report.json` has the
+   per-dataset outcome.
+4. Verify: `releases/CURRENT` names the new release with `bigquery_loaded` true,
+   `cellxgene_datasets.release` in BigQuery agrees, and each cluster whose release pointer is set
+   logs `cell-type expression: now serving release <release>` from results-api within its refresh
+   interval (15 min).
+
+A rerun after a failed publish goes straight to publish: the worker outputs under `agg/v1/` are the
+resume state, and a run with nothing new does not republish (`publish_key`).
+
 The image (`docker/cellxgene/Dockerfile`, built by the suite's `build.sh cellxgene`) takes
 genetics-results-db as a second build context for the loader, and runs `--help` on every entry
 point and on the loader at build time, so a missing module or dependency fails the build rather

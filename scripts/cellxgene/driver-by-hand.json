@@ -1,0 +1,44 @@
+{
+  "taskGroups": [
+    {
+      "taskCount": 1,
+      "taskSpec": {
+        "environment": {"variables": {"IMAGE": "@IMAGE@", "RUN_ID": "@RUN_ID@"}},
+        "runnables": [
+          {
+            "container": {
+              "imageUri": "@IMAGE@",
+              "entrypoint": "python",
+              "commands": ["-c",
+                           "import os, sys; sys.path.insert(0, '/app/scripts/cellxgene'); import driver; sys.exit(driver.main(['run', '--root', 'cellxgene', '--image', os.environ['IMAGE'], '--run-id', os.environ['RUN_ID'], '--approve-large', '--allow-partial']))"]
+            }
+          }
+        ],
+        "computeResource": {"cpuMilli": 4000, "memoryMib": 26624},
+        "maxRetryCount": 0,
+        "maxRunDuration": "172800s"
+      }
+    }
+  ],
+  "allocationPolicy": {
+    "location": {"allowedLocations": ["regions/us-central1"]},
+    "instances": [
+      {"policy": {"machineType": "e2-highmem-4", "provisioningModel": "STANDARD", "bootDisk": {"type": "pd-balanced", "sizeGb": "200"}}}
+    ],
+    "network": {
+      "networkInterfaces": [
+        {
+          "network": "projects/daly-finngenie/global/networks/expression-batch-network",
+          "subnetwork": "projects/daly-finngenie/regions/us-central1/subnetworks/expression-batch-subnet",
+          "noExternalIpAddress": false
+        }
+      ]
+    },
+    "serviceAccount": {
+      "email": "expression-batch-driver@daly-finngenie.iam.gserviceaccount.com",
+      "scopes": ["https://www.googleapis.com/auth/cloud-platform"]
+    }
+  },
+  "labels": {"purpose": "expression-data", "component": "cellxgene-driver", "run-id": "@RUN_ID@"},
+  "logsPolicy": {"destination": "CLOUD_LOGGING"}
+}
