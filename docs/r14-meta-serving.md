@@ -34,11 +34,13 @@ the code:
 
 - **`num_controls` is omitted, not written as `NA`, for quantitative traits** (Labs and
   Quantitative endpoints: 85 rows on 2026-10-12), and so is a cohort's `n_controls` inside
-  `n_by_cohort`; `num_cases` is then the sample size. This is the contract the JSON is written to for one reader: a dedicated `finngen_meta`
-  harmonizer, to be added to genetics-results-api's `metadata_harmonizer.py` and mirrored in
-  genetics-results-db's `build_phenotypes.py` (neither exists yet). It treats an absent
-  `num_controls` as quantitative, reads the label from `name`, and passes
-  `contributing_cohorts`, `cohort_families` and `n_by_cohort` through. No existing harmonizer
+  `n_by_cohort`; `num_cases` is then the sample size. This is the contract the JSON is written to for one reader: the dedicated `finngen_meta`
+  harmonizer in genetics-results-api's `metadata_harmonizer.py`, mirrored in
+  genetics-results-db's `build_phenotypes.py`. Both treat an absent `num_controls` as
+  quantitative and read the label from `name`; results-api passes `contributing_cohorts`,
+  `cohort_families` and `n_by_cohort` through, while the BigQuery side keeps only
+  `contributing_cohorts`, since the other two add nothing a query cannot derive or have no
+  columnar shape. No existing harmonizer
   may be pointed at this file: `finngen_r13` types every row binary (and defaults
   `num_controls` to 0), and `pheweb` reads only `phenostring` and types `num_cases`-only rows
   binary.
