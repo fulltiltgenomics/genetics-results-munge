@@ -15,8 +15,8 @@ from credible_set_stats import (
     stats_to_tsv_row,
 )
 
-# eQTL Catalogue R8 pilot munging.
-# R8 SUSIE credible sets are distributed as parquet (R7 were tsv.gz) and every record
+# eQTL Catalogue R8 pre-release (R8_pre) munging.
+# R8 SUSIE credible sets are distributed as parquet and every record
 # carries an Ensembl gene_id, so the gene name is mapped directly from gene_id via the
 # gene-level metadata (gene_counts) for ALL quantification methods -- including the new
 # majiq splicing method and leafcutter, neither of which needs a per-quant phenotype

@@ -1,12 +1,20 @@
+import sys
+
 import polars as pl
 
-ihc_file = "/mnt/disks/dist_data/hpa/normal_ihc_data.tsv"
-ihc_version = "24.1"
-annotation_file = "/mnt/disks/dist_data/gencode.v43.annotation.genes.tsv"
+# usage: munge_hpa.py <normal_ihc_data.tsv> <HPA version> <gencode genes tsv>
+# the gencode release must be the one HPA's Ensembl version corresponds to (109 -> v43)
+ihc_file, ihc_version, annotation_file = sys.argv[1:4]
+
+# HPA scores each gene's IHC annotation once, best to worst: Enhanced, Supported, Approved,
+# Uncertain. Only Uncertain is left out
+RELIABLE = ["Enhanced", "Supported", "Approved"]
 
 ihc = (
     pl.read_csv(ihc_file, separator="\t")
-    .filter(pl.col("Reliability") == "Approved")
+    .filter(pl.col("Reliability").is_in(RELIABLE))
+    # one source row has no level at all
+    .filter(pl.col("Level") != "N/A")
     .with_columns(
         pl.concat_str(
             pl.col("Tissue"),

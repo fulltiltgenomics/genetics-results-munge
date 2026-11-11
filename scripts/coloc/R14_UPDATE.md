@@ -23,10 +23,10 @@ explicit hit beta/se/p/mlogp). They do not support the older R13 layout.
 
 `coloc.H4_tables.tsv.gz` and `unfiltered_summaries/` in the same folder are not used.
 
-## eQTL Catalogue metadata (R7 + R8 pilot)
+## eQTL Catalogue metadata (R8 pre-release)
 
-R14 colocalized against the **eQTL Catalogue R8 pre-release ("r8_beta", Jan 2026)** on
-top of R7 (new studies `INTERVAL_RNA`, `INTERVAL_RNA_WGS`, the `*_reannotated`
+R14 colocalized against the **eQTL Catalogue R8 pre-release ("r8_beta", Jan 2026)**,
+served as version `R8_pre`; it contains the earlier release's studies (new studies `INTERVAL_RNA`, `INTERVAL_RNA_WGS`, the `*_reannotated`
 single-cell studies, and the `majiq` quant). The merged metadata and the reusable
 phenotype-metadata files are already staged under
 `/mnt/disks/data/eqtl_catalogue_r8_beta/`:
