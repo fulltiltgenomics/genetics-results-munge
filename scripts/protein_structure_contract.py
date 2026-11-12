@@ -70,13 +70,34 @@ def header_line(columns: list[tuple[str, type]]) -> str:
     return "#" + "\t".join(c for c, _ in columns) + "\n"
 
 
+# manifest.json: top-level keys a reader may rely on. Adding a key is not a contract change
+MANIFEST_KEYS = ("contract_version", "release", "built_at", "bundle", "gencode", "lab_inputs",
+                 "feature_sources", "counts", "drops", "objects", "directories")
+# `objects` maps a release-relative path to {OBJECT_BYTES, OBJECT_SHA256}, one entry per name in
+# manifest_object_names(). Structures and PAE objects are hashed per row in models.tsv.gz instead,
+# and `directories` maps STRUCTURE_DIR and PAE_DIR to {DIRECTORY_OBJECTS, OBJECT_BYTES} totals
+MANIFEST_OBJECTS = "objects"
+MANIFEST_DIRECTORIES = "directories"
+OBJECT_BYTES = "bytes"
+OBJECT_SHA256 = "sha256"
+DIRECTORY_OBJECTS = "objects"
+TABIX_FILES = (RESIDUES_FILE, FEATURES_FILE, VARIANTS_FILE)
+
+
+def manifest_object_names() -> list[str]:
+    """every key of the manifest's `objects`: models.tsv.gz and each tabix file with its .tbi."""
+    return [MODELS_FILE] + [n for f in TABIX_FILES for n in (f, f + ".tbi")]
+
+
 # (column, type) in file order. Types: str, int, float, bool (written true/false); empty = null
 MODEL_COLUMNS = [
     ("model_file_id", str),
     ("accession", str),
     ("uniprot_isoform", str),
-    ("gene_id", str),            # unversioned Ensembl id; empty when it is not in GENCODE_VERSION
-    ("gene_name", str),          # GENCODE_VERSION symbol for gene_id: the authoritative one
+    # unversioned Ensembl id; an accession under several genes has them comma-joined, sorted by
+    # id (split_model_genes()); empty only when no gene of the accession is in GENCODE_VERSION
+    ("gene_id", str),
+    ("gene_name", str),          # GENCODE_VERSION symbol per gene_id, comma-joined in the same order
     ("source_gene_symbol", str),  # the bundle's symbol, which lags (LOC400499); display only
     ("source", str),             # one of SOURCES
     ("source_label", str),       # AF3_SOURCE_LABEL for AF3 rows
@@ -100,6 +121,18 @@ MODEL_COLUMNS = [
     ("source_pae_sha256", str),  # sha256 of the bundle json.gz the PAE was converted from
 ]
 
+def split_model_genes(gene_id: str, gene_name: str) -> list[tuple[str, str]]:
+    """the (gene_id, gene_name) pairs of one models.tsv row; refuses lists of different lengths."""
+    if not gene_id:
+        if gene_name:
+            raise ValueError("gene_name without gene_id")
+        return []
+    ids, names = gene_id.split(","), gene_name.split(",")
+    if len(ids) != len(names):
+        raise ValueError(f"{len(ids)} gene ids but {len(names)} gene names")
+    return list(zip(ids, names))
+
+
 _GENE_ANCHOR = [("gene_id", str), ("chrom", int), ("gene_start", int), ("gene_end", int), ("gene_name", str)]
 
 # point index on gene_start, as for every gene-keyed tabix product the API reads
@@ -110,7 +143,7 @@ RESIDUE_COLUMNS = _GENE_ANCHOR + [
     ("model_file_id", str),
     ("file_position", int),
     ("protein_position", int),
-    ("residue", str),            # one-letter code
+    ("residue", str),            # one-letter code of the model's residue, not the sequence guide's
     ("is_owner", bool),          # this file owns protein_position under owning_window()
     ("ca_x", float),
     ("ca_y", float),

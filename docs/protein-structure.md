@@ -33,7 +33,10 @@ only as `source_gene_symbol`. An accession can appear more than once in the
 sequence guide, sometimes under different genes (`A0A0G2JLJ8` under `IGHD5OR15-5A` and `-5B`) and
 sometimes under the same gene with another transcript. Gene-keyed rows are therefore keyed on the
 distinct (`gene_id`, `accession`) pairs: an accession under two genes is repeated under each, an
-accession repeated under one gene appears once. `is_owner` is true on exactly one row per
+accession repeated under one gene appears once. `models.tsv.gz` has one row per model file, so an accession under
+several GENCODE v49 genes carries them there as comma-joined `gene_id` and `gene_name` lists in
+matching order, sorted by gene id (`split_model_genes()` reads them back); an empty `gene_id`
+means no gene of the accession is in GENCODE v49. `is_owner` is true on exactly one row per
 (`gene_id`, `accession`, `protein_position`), and the build asserts it.
 
 ## Release layout
@@ -63,7 +66,11 @@ receive the PDB text; the largest is 0.8 MB compressed.
 
 `manifest.json` holds `contract_version`, `release`, the bundle's identity (tar sha256 and
 date), the GENCODE version, the lab-supplied inputs outside the bundle (`LAB_INPUTS`, each with its sha256), the feature sources' versions and
-licences, row counts and drop counts per rule, and every other object's bytes and sha256.
+licences, row counts and drop counts per rule, and every other object's bytes and sha256. Its key
+names are the module's `MANIFEST_KEYS`; `objects` holds bytes and sha256 for exactly the files
+`manifest_object_names()` lists, while each structure and PAE object is hashed on its own row of
+`models.tsv.gz` (itself in `objects`), so the manifest's sha256 still covers every byte of the
+release without 41,000 entries, and `directories` carries only their counts and total bytes.
 
 ## Manifest: `models.tsv.gz`
 
@@ -189,7 +196,10 @@ only, and coordinates are GENCODE v49's, the version the API looks the gene up i
 whose gene id is not in GENCODE v49 is in `models.tsv.gz` (reachable by model file id) but has
 no residue or feature rows, and is counted in the manifest.
 
-Residue rows sort by `RESIDUE_SORT`. `plddt` is the PDB B-factor; `ca_x/y/z` are the CA
+Residue rows sort by `RESIDUE_SORT`. `residue` is the model's residue, and the variant file's
+`aa_ref` is the sequence's: they differ where the model does not carry the sequence's residue,
+which in the current bundle is selenocysteine (`U` in the sequence, modelled as `CYS`), and the
+manifest lists those models and positions. `plddt` is the PDB B-factor; `ca_x/y/z` are the CA
 coordinates as written in the PDB. `mu`, `n_with_mu`, `n_possible` are the lab's per-residue
 mutation rate, taken from the lab-supplied `mu_per_residue_gnomad.parquet`
 (`precompute_mu_per_residue.py`: summed rate over every possible missense SNV at
