@@ -286,6 +286,16 @@ VIEW_COLOUR_MODES = ("plddt", "uniform")
 VIEW_DEFAULT_COLOUR_MODE = "plddt"
 
 
+# `<UTC date>-<HHMMSS>` of the build; it names a directory, so nothing else may pass
+RELEASE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{6}$")
+
+
+def check_release(release: str) -> str:
+    if not isinstance(release, str) or not RELEASE_RE.match(release):
+        raise ValueError(f"release id {release!r} is not <YYYY-MM-DD>-<HHMMSS>")
+    return release
+
+
 def pointer(release: str, uri: str, written_at: str, manifest_sha256: str) -> str:
     return json.dumps({"release": release, "uri": uri, "written_at": written_at,
                        "contract_version": CONTRACT_VERSION, "manifest_sha256": manifest_sha256},

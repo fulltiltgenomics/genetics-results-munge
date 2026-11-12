@@ -51,7 +51,7 @@ means no gene of the accession is in GENCODE v49. `is_owner` is true on exactly 
                               pae/<model_file_id>.u8
 
 Roots: rehearsal `gs://daly-genetics-results/protein_structure_staging/`, production
-`gs://daly-genetics-results/protein_structure/`. `<release>` is `<UTC date>-<HHMMSS>` of the
+`gs://daly-genetics-results/protein_structure/`. `<release>` is `<UTC date>-<HHMMSS>` (`RELEASE_RE`, `check_release()`) of the
 build and never reused. As in the CELLxGENE release, objects are written create-only, the
 manifest after every file it lists, and `releases/CURRENT` last, as one JSON object
 (`pointer()`): `release`, `uri` (the release directory), `written_at`, `contract_version` and

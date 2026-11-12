@@ -10,10 +10,15 @@ contract module's (`protein_structure_contract`); this script only reads the bun
 them. Every stage writes into `<workdir>/<release>/`. A stage named in `--stages` runs again from
 scratch, except `pae`, which converts only the files whose log row and object are both intact;
 stages not named are left alone, so a failure in `variants` does not redo the PAE conversion.
-A stage writes its outputs under temporary names, runs its gates, indexes, renames, and writes
-`_work/<stage>.json` last; that file is what says the stage finished, it is removed when the
-stage starts, and the manifest stage refuses without it. `--release` is fixed at the first run
-in `<workdir>/RELEASE`; a new release needs a new workdir.
+The release tables are gated: `models.tsv.gz` is written under a temporary name and renamed only
+after `check_model_rows()`, and the tabix tables are written and indexed under temporary names
+and renamed only after their stage's gates. The rest is not: the models stage writes
+`_work/residue_core.parquet` in place and copies structures before its row checks, and PAE
+objects appear as each converts. What says a stage finished is `_work/<stage>.json`, removed
+when the stage starts and written last; the manifest stage refuses without it, and the upload
+re-verifies every object against the manifest and models.tsv.gz rows. `--release` is fixed at
+the first run in `<workdir>/RELEASE`, must match the contract's `RELEASE_RE`, and a new release
+needs a new workdir.
 
 Upload (`--upload`) verifies every local object against the manifest (and each structure and PAE
 object against its models.tsv.gz row) before copying anything, refuses when the release
@@ -21,8 +26,10 @@ directory in the bucket already holds an object the manifest does not name or on
 crc32c differs, verifies the bucket against the manifest again after copying, and writes the
 pointer only once the manifest read back from the bucket has the sha256 going into it. A manifest
 rebuilt after an upload started therefore differs from the bucket's and is refused: build it
-under a new release id. `--copy-from` copies structures and PAE objects bucket-to-bucket from an
-earlier release instead of uploading them, under the same checks.
+under a new release id. The pointer is moved off a different release only with
+`--move-pointer`, so rerunning an older workdir's upload cannot silently roll it back.
+`--copy-from` copies structures and PAE objects bucket-to-bucket from another release under the
+same root, after checking that its `structures/` and `pae/` hold exactly the local objects.
 
 Inputs, as read from their bytes:
 - bundle (`sir-reference-data/`): `pdb_pae_file_pos_guide.tsv` (pdb_filename, pae_filename,
@@ -856,7 +863,7 @@ def stage_variants(bundle, out, work, lab):
                 stats["variants_with_several_accessions"] += int(
                     (v.groupby(["pos", "ref", "alt"]).size() > 1).sum())
                 v = v.sort_values(list(psc.VARIANT_SORT))
-                w.write(v, float_format="%.10g")
+                w.write(v, float_format=MU_FORMAT.format)
             print(f"  variants chr{c}: {hi} map rows, {time.time() - t0:.0f}s", flush=True)
             del ra_all, p_all, acc_all, file_all, order, sorted_pos, mu_all, mu_pos
     stats["variant_rows"] = w.close()
@@ -957,6 +964,16 @@ def gs_cat(uri):
     return subprocess.run(["gcloud", "storage", "cat", uri], check=True, capture_output=True).stdout
 
 
+def gs_read_if_exists(uri):
+    r = subprocess.run(["gcloud", "storage", "cat", uri], capture_output=True)
+    if r.returncode:
+        err = r.stderr.decode(errors="replace")
+        if "matched no objects" in err or "No URLs matched" in err:
+            return None
+        raise RuntimeError(f"reading {uri} failed: {err.strip()}")
+    return r.stdout
+
+
 def gs_replace(local, uri):
     subprocess.run(["gcloud", "storage", "cp", str(local), uri], check=True)
 
@@ -1016,16 +1033,51 @@ def check_bucket(dest, exp, complete):
             raise RefuseUpload(f"{len(missing)} objects missing from {dest}, e.g. {missing[0]}")
 
 
-def upload(out, release, root, copy_from=None):
+def check_copy_source(src, root, dest, exp):
+    """refuses a --copy-from that is not another release under this root or whose objects differ."""
+    m = re.fullmatch(re.escape(f"{root}/releases/") + r"([^/]+)", src)
+    if not m or not psc.RELEASE_RE.match(m.group(1)):
+        raise ValueError(f"--copy-from {src} is not a release directory under {root}/releases/")
+    if src == dest:
+        raise ValueError("--copy-from names the destination release itself")
+    dirs = (psc.STRUCTURE_DIR + "/", psc.PAE_DIR + "/")
+    have = {k: v for k, v in gs_list(src).items() if k.startswith(dirs)}
+    want = {k: v for k, v in exp.items() if k.startswith(dirs)}
+    for k in sorted(set(have) | set(want)):
+        if k not in have:
+            raise RefuseUpload(f"{src}/{k} is missing from the copy source")
+        if k not in want:
+            raise RefuseUpload(f"{src}/{k} is in the copy source but not named by this manifest")
+        if have[k] != want[k]:
+            raise RefuseUpload(f"{src}/{k} differs from the local object (size or crc32c)")
+
+
+def current_pointer_release(root):
+    raw = gs_read_if_exists(f"{root}/{psc.POINTER}")
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)["release"]
+    except (ValueError, KeyError) as e:
+        raise RefuseUpload(f"{root}/{psc.POINTER} is not a pointer: {e}") from None
+
+
+def upload(out, release, root, copy_from=None, move_pointer=False):
     root = check_root(root)
+    release = psc.check_release(release)
     dest = f"{root}/releases/{release}"
     if not (out / psc.MANIFEST_FILE).exists():
         raise RuntimeError("no manifest: run the manifest stage first")
+    current = current_pointer_release(root)
+    if current not in (None, release) and not move_pointer:
+        raise RefuseUpload(f"{root}/{psc.POINTER} names release {current}; pass --move-pointer to point it at {release}")
     exp, man_bytes = expected_objects(out)
     check_bucket(dest, exp, complete=False)
     dirs = [psc.STRUCTURE_DIR, psc.PAE_DIR]
     if copy_from:
-        gs_cp(["-r", *(f"{copy_from.rstrip('/')}/{d}" for d in dirs)], f"{dest}/")
+        src = copy_from.rstrip("/")
+        check_copy_source(src, root, dest, exp)
+        gs_cp(["-r", *(f"{src}/{d}" for d in dirs)], f"{dest}/")
     else:
         gs_cp(["-r", *(str(out / d) for d in dirs)], f"{dest}/")
     top = [n for n in exp if "/" not in n and n != psc.MANIFEST_FILE]
@@ -1061,14 +1113,20 @@ def main(argv=None):
     ap.add_argument("--upload", action="store_true")
     ap.add_argument("--root", default=REHEARSAL_ROOT)
     ap.add_argument("--copy-from")
+    ap.add_argument("--move-pointer", action="store_true",
+                    help="point releases/CURRENT at this release even when it names another one")
     args = ap.parse_args(argv)
     root = check_root(args.root)
+    if (args.copy_from or args.move_pointer) and not args.upload:
+        ap.error("--copy-from and --move-pointer only apply with --upload")
+    if args.release:
+        psc.check_release(args.release)
 
     workdir = Path(args.workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     rel_file = workdir / "RELEASE"
     if rel_file.exists():
-        release = rel_file.read_text().strip()
+        release = psc.check_release(rel_file.read_text().strip())
         if args.release and args.release != release:
             raise ValueError(f"workdir holds release {release}")
     else:
@@ -1110,7 +1168,7 @@ def main(argv=None):
         write_json(work / "timings.json", timings)
         print(f"stage {s} done in {timings[s]}s", flush=True)
     if args.upload:
-        upload(out, release, root, args.copy_from)
+        upload(out, release, root, args.copy_from, args.move_pointer)
     return out
 
 

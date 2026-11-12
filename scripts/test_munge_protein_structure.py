@@ -7,6 +7,7 @@ Needs h5py, hdf5plugin and pyarrow (the protein-structure venv), and bgzip/tabix
 import gzip
 import hashlib
 import json
+import os
 import subprocess
 
 import h5py
@@ -356,6 +357,7 @@ class FakeBucket:
         monkeypatch.setattr(mps, "gs_list", self.ls)
         monkeypatch.setattr(mps, "gs_cp", self.cp)
         monkeypatch.setattr(mps, "gs_cat", lambda uri: self.objects[uri])
+        monkeypatch.setattr(mps, "gs_read_if_exists", lambda uri: self.objects.get(uri))
         monkeypatch.setattr(mps, "gs_replace", self.replace)
 
     def ls(self, prefix):
@@ -448,13 +450,15 @@ def test_copy_from_an_earlier_release_is_checked(fresh, monkeypatch):
     b = FakeBucket(monkeypatch)
     mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
     new = f"{mps.REHEARSAL_ROOT}/releases/2026-01-02-000000"
-    mps.upload(fresh, "2026-01-02-000000", mps.REHEARSAL_ROOT, copy_from=DEST)
+    mps.upload(fresh, "2026-01-02-000000", mps.REHEARSAL_ROOT, copy_from=DEST, move_pointer=True)
     assert b.objects[f"{new}/{psc.structure_path('AF-Q00001-F1-model_v6')}"] == \
         (fresh / psc.structure_path("AF-Q00001-F1-model_v6")).read_bytes()
     assert any(c[0] == "cp" and f"{DEST}/{psc.STRUCTURE_DIR}" in c[1] for c in b.calls)
     b.objects[f"{DEST}/{psc.pae_path('AF-Q00001-F1-model_v6')}"] = b"corrupt"
     with pytest.raises(mps.RefuseUpload, match="pae/AF-Q00001-F1"):
-        mps.upload(fresh, "2026-01-03-000000", mps.REHEARSAL_ROOT, copy_from=DEST)
+        mps.upload(fresh, "2026-01-03-000000", mps.REHEARSAL_ROOT, copy_from=DEST, move_pointer=True)
+    # refused before copying: the new release directory stays empty
+    assert not any("/2026-01-03-000000/" in k for k in b.objects)
 
 
 def test_root_guards(fresh, tmp_path):
@@ -520,3 +524,147 @@ def test_changed_input_is_rehashed(fresh, tmp_path):
     mps.main(args_for(tmp_path, "manifest"))
     man = json.loads((fresh / psc.MANIFEST_FILE).read_text())
     assert man["gencode"]["sha256"] == hashlib.sha256(g.read_bytes()).hexdigest()
+
+
+NEW = f"{mps.REHEARSAL_ROOT}/releases/2026-01-02-000000"
+
+
+def test_copy_source_must_be_another_release_under_the_root(fresh, monkeypatch, tmp_path):
+    b = FakeBucket(monkeypatch)
+    mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+    for src in ("gs://other-bucket/protein_structure_staging/releases/2026-01-01-000000",
+                f"{mps.PRODUCTION_ROOT}/releases/{REL}", str(fresh), DEST, f"{DEST}/structures",
+                f"{mps.REHEARSAL_ROOT}/releases/../x"):
+        with pytest.raises(ValueError):
+            mps.upload(fresh, REL if src == DEST else "2026-01-02-000000", mps.REHEARSAL_ROOT,
+                       copy_from=src, move_pointer=True)
+    with pytest.raises(SystemExit):
+        mps.main(args_for(tmp_path, "", ("--copy-from", DEST)))
+
+
+@pytest.mark.parametrize("change, why", [
+    ("drop", "missing from the copy source"),
+    ("extra", "not named by this manifest"),
+    ("differ", "differs from the local object"),
+])
+def test_copy_source_checked_before_copying(fresh, monkeypatch, change, why):
+    b = FakeBucket(monkeypatch)
+    mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+    key = f"{DEST}/{psc.structure_path('AF-Q00001-F1-model_v6')}"
+    if change == "drop":
+        del b.objects[key]
+    elif change == "extra":
+        b.objects[f"{DEST}/{psc.PAE_DIR}/AF-ZZZ-F1-model_v6.u8"] = b"x"
+    else:
+        b.objects[key] = b"y" * len(b.objects[key])
+    with pytest.raises(mps.RefuseUpload, match=why):
+        mps.upload(fresh, "2026-01-02-000000", mps.REHEARSAL_ROOT, copy_from=DEST, move_pointer=True)
+    assert not any(k.startswith(NEW) for k in b.objects)
+
+
+def test_pointer_moves_only_with_the_flag(fresh, monkeypatch):
+    b = FakeBucket(monkeypatch)
+    mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+    with pytest.raises(mps.RefuseUpload, match="--move-pointer"):
+        mps.upload(fresh, "2026-01-02-000000", mps.REHEARSAL_ROOT)
+    assert json.loads(b.objects[PTR])["release"] == REL and not any(k.startswith(NEW) for k in b.objects)
+    mps.upload(fresh, "2026-01-02-000000", mps.REHEARSAL_ROOT, move_pointer=True)
+    assert json.loads(b.objects[PTR])["release"] == "2026-01-02-000000"
+    # rerunning the older release's upload does not roll the pointer back
+    with pytest.raises(mps.RefuseUpload, match="--move-pointer"):
+        mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+    assert json.loads(b.objects[PTR])["release"] == "2026-01-02-000000"
+
+
+def test_release_id_validated(fresh, tmp_path, monkeypatch):
+    FakeBucket(monkeypatch)
+    for bad in ("../x", "2026-01-01-000000/..", "a/b", "2026-1-1-0"):
+        with pytest.raises(ValueError):
+            psc.check_release(bad)
+        with pytest.raises(ValueError):
+            mps.upload(fresh, bad, mps.REHEARSAL_ROOT)
+    a = args_for(tmp_path, "manifest")
+    a[a.index("--release") + 1] = "../escape"
+    a[a.index("--workdir") + 1] = str(tmp_path / "w3")
+    with pytest.raises(ValueError):
+        mps.main(a)
+    assert not (tmp_path / "w3").exists() and not (tmp_path / "escape").exists()
+
+
+def test_corrupt_local_structure_refused(fresh, monkeypatch):
+    b = FakeBucket(monkeypatch)
+    f = fresh / psc.structure_path("AF-Q00001-F1-model_v6")
+    f.write_bytes(b"z" * f.stat().st_size)
+    with pytest.raises(mps.RefuseUpload, match="models.tsv.gz row"):
+        mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+    assert b.objects == {}
+
+
+def test_directory_totals_must_match_rows(fresh, monkeypatch):
+    FakeBucket(monkeypatch)
+    man = json.loads((fresh / psc.MANIFEST_FILE).read_text())
+    man[psc.MANIFEST_DIRECTORIES][psc.PAE_DIR][psc.DIRECTORY_OBJECTS] += 1
+    (fresh / psc.MANIFEST_FILE).write_text(json.dumps(man))
+    with pytest.raises(mps.RefuseUpload, match="totals"):
+        mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+
+
+def test_copy_that_leaves_an_object_out_is_refused(fresh, monkeypatch):
+    b = FakeBucket(monkeypatch)
+    real = b.cp
+
+    def lossy(args, dest):
+        real(args, dest)
+        b.objects.pop(f"{DEST}/{psc.pae_path('AF-Q00001-F1-model_v6')}", None)
+    monkeypatch.setattr(mps, "gs_cp", lossy)
+    with pytest.raises(mps.RefuseUpload, match="missing"):
+        mps.upload(fresh, REL, mps.REHEARSAL_ROOT)
+    assert PTR not in b.objects
+
+
+def test_failed_models_gate_leaves_no_models_json(fresh, tmp_path, monkeypatch):
+    work = fresh.parent / "_work"
+    assert (work / "models.json").exists()
+
+    def refuse(text):
+        raise ValueError("gate")
+    monkeypatch.setattr(mps, "check_model_rows", refuse)
+    before = (fresh / psc.MODELS_FILE).read_bytes()
+    with pytest.raises(ValueError, match="gate"):
+        mps.main(args_for(tmp_path, "models"))
+    assert not (work / "models.json").exists()
+    assert (fresh / psc.MODELS_FILE).read_bytes() == before  # the gated table was not replaced
+
+
+def test_failed_rerun_removes_the_earlier_stage_json(fresh, tmp_path, monkeypatch):
+    work = fresh.parent / "_work"
+    assert (work / "residues.json").exists()
+    monkeypatch.setattr(mps, "MAX_GENE_RESIDUE_BYTES", 10)
+    with pytest.raises(AssertionError):
+        mps.main(args_for(tmp_path, "residues"))
+    assert not (work / "residues.json").exists()
+
+
+def test_pae_log_row_with_short_hash_ignored(fresh):
+    log = fresh.parent / "_work" / "pae.tsv"
+    mid = "AF-Q00001-F1-model_v6"
+    size = (fresh / psc.pae_path(mid)).stat().st_size
+    good = mps.read_pae_log(log, fresh)[mid]
+    assert len(good[1]) == 64
+    log.write_text(mps.PAE_LOG_HEADER + f"{mid}\t{size}\t{good[1][:25]}\t{good[2]}\n")
+    assert mid not in mps.read_pae_log(log, fresh)
+    log.write_text(mps.PAE_LOG_HEADER + f"{mid}\t{size}\t{good[1]}\t{good[2][:63]}\n")
+    assert mid not in mps.read_pae_log(log, fresh)
+
+
+def test_same_size_input_change_is_rehashed(fresh, tmp_path):
+    g = tmp_path / "gencode.tsv"
+    old = g.read_text()
+    new = old.replace("GENEA", "GENEZ")
+    assert len(new) == len(old) and new != old
+    st = g.stat()
+    g.write_text(new)
+    os.utime(g, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    mps.main(args_for(tmp_path, "manifest"))
+    man = json.loads((fresh / psc.MANIFEST_FILE).read_text())
+    assert man["gencode"]["sha256"] == hashlib.sha256(new.encode()).hexdigest()
