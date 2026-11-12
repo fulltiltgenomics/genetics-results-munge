@@ -261,6 +261,40 @@ A script writes a JSON object; it persists in chat history, so the viewer must r
 A residue carries `role` (one of `VIEW_ROLES`) or `colour`, not both; roles let the viewer
 own the palette. `colour_mode` is one of `VIEW_COLOUR_MODES`: `plddt` (the default) or `uniform`.
 
+What the viewer does with a spec, which a writer has to know to predict the picture. The
+constants are `VIEW_*` in `scripts/protein_structure_contract.py`; the viewer's parser
+(genetics-results-browser `src/features/structure/viewSpec.ts`) is the other end and cannot
+import them, so it carries them by hand.
+
+- **Which artifact is a view.** One whose file name ends `.structure-view.json`
+  (`VIEW_NAME_SUFFIX`), compared case-insensitively. The artifact's content type is not looked at.
+- **Colours.** `colour` is `#rrggbb` and nothing else (`VIEW_COLOUR_RE`): no three-digit form, no
+  alpha, no colour names; either letter case is read. A role is drawn in `VIEW_ROLE_COLOURS` and the
+  neighbourhood sphere in `VIEW_SPHERE_COLOUR`. A residue with neither `role` nor `colour` is
+  drawn as `neutral`.
+- **Labels.** A residue is labelled only when it carries a `label` that is not blank; nothing
+  is derived from its position or role.
+- **Repeated positions.** Entries with the same `file_position` are one residue: the first
+  entry's role or colour stands (neutral, if the first entry gave neither), and the label is
+  the first non-blank one any of the entries gives.
+- **Limits.** A file over `VIEW_MAX_BYTES` is not parsed. Any position above
+  `VIEW_MAX_POSITION` and a radius above `VIEW_MAX_SPHERE_RADIUS` make the view invalid. Past
+  `VIEW_MAX_RESIDUES` distinct positions the later ones are not drawn, and past
+  `VIEW_MAX_LABELS` the later labels are shown on hover only; the viewer says how many of
+  each. `label`, `gene` and `accession` longer than `VIEW_MAX_TEXT_LENGTH` are cut to it, the
+  last character an ellipsis. A writer treats all of these as errors or reports them, rather
+  than leaning on what the viewer does past a limit.
+- **One invalid residue invalidates the view.** A residue that is not an object, has no
+  positive whole `file_position`, carries both `role` and `colour`, or an unknown role or a
+  malformed colour, makes the viewer refuse the whole spec; it does not draw the rest. The
+  same holds for a malformed `sphere`, an unknown `colour_mode` and a `model_file_id` outside
+  `MODEL_FILE_ID_RE`. `null` for an optional key reads as the key being absent.
+- **Versions.** A `version` above the viewer's own is refused with a message to reload the
+  page, not drawn as the newest shape it knows.
+
+A view reaches the browser as a chat artifact, and the chat delivers no artifact over 512 KiB,
+so that, not `VIEW_MAX_BYTES`, is what a writer in the sandbox has to stay under.
+
 The `residues` list is authoritative and `sphere` is indicative only. The SDK takes the distance
 for a partner outside the centre's owned range from another window (`pair_window()`), so a sphere
 drawn in one file's coordinates does not reproduce the computed neighbourhood; a script shows a

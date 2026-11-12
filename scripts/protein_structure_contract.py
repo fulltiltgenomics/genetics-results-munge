@@ -29,8 +29,9 @@ PAE_DIR = "pae"
 
 GENCODE_VERSION = 49
 
-# model file ids appear in URLs and object paths
-MODEL_FILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# model file ids appear in URLs and object paths. `\Z`, not `$`: `$` also matches before a
+# trailing newline, which would then reach the path
+MODEL_FILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _BUNDLE_SUFFIX = ".pdb.gz"
 
 
@@ -284,6 +285,29 @@ def pair_window(windows: list[tuple[int, int]], a: int, b: int) -> int | None:
 VIEW_ROLES = ("case", "control", "both", "neutral")
 VIEW_COLOUR_MODES = ("plddt", "uniform")
 VIEW_DEFAULT_COLOUR_MODE = "plddt"
+
+# the chat draws an artifact as a structure when its file name ends with this, compared
+# case-insensitively; the artifact's content type plays no part
+VIEW_NAME_SUFFIX = ".structure-view.json"
+
+# the viewer owns the palette: a residue with neither `role` nor `colour` is drawn as neutral
+VIEW_ROLE_COLOURS = {
+    "case": "#d62728",
+    "control": "#1f77b4",
+    "both": "#9467bd",
+    "neutral": "#7f7f7f",
+}
+VIEW_SPHERE_COLOUR = "#ff7f0e"
+VIEW_COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}\Z")
+
+# the viewer's bounds on a spec, which a script the model wrote produces. A writer refuses or
+# reports what is past them, so a script learns at write time and not in the browser
+VIEW_MAX_BYTES = 1_000_000  # the file; a larger one is not parsed
+VIEW_MAX_RESIDUES = 2000  # distinct file positions; later ones are not drawn
+VIEW_MAX_LABELS = 40  # labels drawn in the scene; later ones are told on hover only
+VIEW_MAX_TEXT_LENGTH = 80  # label, gene, accession, in UTF-16 code units; longer is cut
+VIEW_MAX_POSITION = 100_000  # any file position, the sphere centre included
+VIEW_MAX_SPHERE_RADIUS = 100  # angstrom
 
 
 # `<UTC date>-<HHMMSS>` of the build; it names a directory, so nothing else may pass
