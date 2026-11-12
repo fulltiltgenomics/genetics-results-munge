@@ -150,6 +150,7 @@ parts that got copied across the family and then had to be corrected across it. 
 | `scripts/build_gene_sets.{py,sh}`, `scripts/gene_set_bundle.py` | `docs/gene-sets.md` — the collections taken and refused, the licence table, the id mapping rules and floors, the bundle layout and staging; genetics-results-suite's `configs/datasets.yaml` pins the release it serves |
 | `scripts/munge_decode_pqtl.py`, `scripts/decode_pqtl_phenotypes.py` | `docs/pseudo-credible-sets.md` — step 0 of the deCODE run: what the per-aptamer files carry, which aptamers enter the input array, where the trait names come from |
 | `scripts/r14_meta_phenotypes.py` | `docs/r14-meta-serving.md` — which keys are omitted for quantitative traits, the `contributing_cohorts` naming, header-derived cohort presence and the TSV/header disagreement result |
+| `scripts/protein_structure_contract.py` | `docs/protein-structure.md` — the release layout and pointer, the model file id, the window ownership and pair rules, the PAE encoding and its cutoff argument, what a variant's absence means, the view-spec |
 
 `scripts/check-doc-drift.sh` warns (never blocks) on commits that skip this; it runs
 from `.beads/hooks/pre-commit`, outside the beads-managed fence that beads rewrites.

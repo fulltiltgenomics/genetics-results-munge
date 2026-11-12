@@ -58,6 +58,9 @@ check '^wdl/(munge_finngen_finemapping_results|qtl_file)' "$DOC_README" \
 check '^scripts/(build_gene_sets\.(py|sh)|gene_set_bundle\.py)$' '^docs/gene-sets\.md$' \
     'scripts/build_gene_sets.{py,sh}, scripts/gene_set_bundle.py -> docs/gene-sets.md (collections taken and refused, the licence table, id mapping rules, bundle layout, staging)'
 
+check '^scripts/protein_structure_contract\.py$' '^docs/protein-structure\.md$' \
+    'scripts/protein_structure_contract.py -> docs/protein-structure.md (release layout, model file id, window ownership and pair rules, PAE encoding, variant absence, view-spec)'
+
 check '^scripts/(munge_decode_pqtl|decode_pqtl_phenotypes)\.py$' '^docs/pseudo-credible-sets\.md$' \
     'scripts/munge_decode_pqtl.py, scripts/decode_pqtl_phenotypes.py -> docs/pseudo-credible-sets.md (step 0 of the deCODE run: per-aptamer file columns, input-array selection, trait names)'
 
