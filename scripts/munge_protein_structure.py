@@ -2,7 +2,8 @@
 
 usage: munge_protein_structure.py --bundle DIR --lab-files DIR --gencode TSV --workdir DIR
            [--bundle-tar TAR] [--ted TSV --ted-meta JSON] [--release ID]
-           [--stages pae,models,residues,features,variants,manifest] [--upload] [--root gs://...]
+           [--predictors DIR] [--stages pae,models,residues,features,variants,scores,manifest]
+           [--upload] [--root gs://...]
            [--copy-from gs://.../releases/<earlier release>]
 
 The column lists, sort orders, tabix arguments, PAE encoding and the window rules are the
@@ -46,6 +47,14 @@ Inputs, as read from their bytes:
   isoform, which is not always `-1`.
 - GENCODE v49 genes TSV (gene_id versioned, numeric chrom with X=23), the file
   `scripts/cellxgene/publish.py` reads; gene ids are matched with the `.N` version stripped.
+- missense predictors (`--predictors DIR`, one `<predictor>/` directory per key of
+  `SCORE_SOURCES`, holding at least the files named there, each pinned by sha256; anything
+  else in the directory is not read):
+  `AlphaMissense_aa_substitutions.tsv.gz` (three `#` lines, then uniprot_id, protein_variant
+  `M1A`, am_pathogenicity, am_class; every substitution of every position of a UniProt canonical
+  isoform) and `ALL_hum_isoforms_ESM1b_LLR.zip` (one `<isoform>_LLR.csv` per UniProt isoform, a
+  bare accession being the canonical one: a header of `<residue> <position>` columns and one
+  row per alternative residue, the reference's own cell 0).
 - TED domain summary (optional): the human (tax 9606) rows of
   `ted_365m.domain_summary.cath.globularity.taxid.tsv.gz`, header-less, columns per the Zenodo
   record; `--ted-meta` is a JSON object recorded verbatim in the manifest (url, version, licence,
@@ -64,6 +73,16 @@ Decisions that are not in the contract, stated where they bind:
 - `mu` and `mu_snp` are written with MU_FORMAT. The lab's per-SNV rates carry 5 significant
   digits and the per-residue sums at most 8 (measured on the files), so 10 loses nothing; the
   build refuses a value that does not survive the format to 1e-12.
+- a predictor's scores are placed by (accession, protein position) only after its reference
+  residues have been compared with the bundle sequence over the whole protein; `ScoreTable.close()`
+  states the order of the refusals. The AlphaMissense per-substitution file is used rather than
+  its hg38 per-variant file: it is keyed the way the table is, it carries the substitutions no
+  single-nucleotide change reaches, and it shows the reference residue of every position, where
+  the hg38 file would bring a second transcript-to-genome mapping (GENCODE v32) into the join.
+- `mean_snv` is the primary summary and the one `percentile` ranks: REVEL and MPC, which the
+  lab's track figure draws beside AlphaMissense, exist only for single-nucleotide variants, so a
+  mean over those is the one summary every row of that figure can share. `mean_all` is carried
+  for the sources that score every substitution.
 - structures and PAE objects are hashed per object in models.tsv.gz; the manifest lists the
   top-level files with their hashes (models.tsv.gz among them) and totals for the two
   directories rather than 41,000 entries.
@@ -90,16 +109,23 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute  # noqa: F401  pa.compute
+import pyarrow.csv  # noqa: F401  pa.csv
 import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import protein_structure_contract as psc  # noqa: E402
 
-STAGES = ("pae", "models", "residues", "features", "variants", "manifest")
+STAGES = ("pae", "models", "residues", "features", "variants", "scores", "manifest")
 REHEARSAL_ROOT = "gs://daly-genetics-results/protein_structure_staging"
 PRODUCTION_ROOT = "gs://daly-genetics-results/protein_structure"
 CHROMS = [str(c) for c in range(1, 23)] + ["X"]
 MAX_GENE_RESIDUE_BYTES = 8 * 1024 * 1024
+# the same bound for the same reason: a gene's score rows are one response under the SDK's cap.
+# The bound is per gene over all predictors, so the longest protein's rows times the number of
+# predictors that score it is what meets it first (the manifest's `score_gene_largest` says how
+# near the current build is). A predictor too many fails the stage at the gate with no table
+# written; the way out is a file per predictor, not a larger bound
+MAX_GENE_SCORE_BYTES = 8 * 1024 * 1024
 TED_COLUMNS = ["ted_id", "md5_domain", "consensus_level", "chopping", "nres_domain", "num_segments",
                "plddt", "num_helix_strand_turn", "num_helix", "num_strand", "num_helix_strand",
                "num_turn", "proteome_id", "cath_label", "cath_assignment_level",
@@ -112,7 +138,7 @@ ECO_RE = re.compile(r"ECO:\d{7}")
 VARIANT_BLOCK_ROWS = 300_000
 MU_FORMAT = "{:.10g}"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-STAGE_JSON = ("models", "residues", "features", "variants")
+STAGE_JSON = ("models", "residues", "features", "variants", "scores")
 
 
 class RefuseUpload(RuntimeError):
@@ -873,6 +899,357 @@ def stage_variants(bundle, out, work, lab):
     write_json(work / "variants.json", stats)
 
 
+# ---------------------------------------------------------------- scores
+
+AA = "ACDEFGHIKLMNPQRSTVWY"
+# in _work/scores.json only: which variants.tsv.gz mean_snv was computed from. The manifest stage
+# compares it with the object it is about to list and keeps it out of the manifest
+SCORES_VARIANTS_KEY = "variants_sha256"
+AA_ASCII = np.frombuffer(AA.encode(), dtype=np.uint8)
+_ALT_CODE = np.full(256, -1, dtype=np.int64)
+_ALT_CODE[AA_ASCII] = np.arange(len(AA))
+_LETTERS = pa.array([chr(c) for c in range(65, 91)])
+SCORE_BATCH_BYTES = 32 << 20
+SCORE_SUMMARY = (
+    "per (accession, protein_position): mean_snv is the mean raw score over the amino-acid substitutions "
+    "this release's variants.tsv.gz holds at the position (reachable by a single-nucleotide change), each "
+    "substitution once however many variants give it; mean_all is the mean over every substitution the "
+    "source scored there; percentile is the mid-rank percentile of mean_snv, rounded as written, among "
+    "the predictor's distinct (accession, protein_position) in scores.tsv.gz")
+
+
+def letter_ascii(arr):
+    """the ASCII code of each one-letter string, 0 for anything that is not A-Z."""
+    return (pa.compute.index_in(arr, value_set=_LETTERS).fill_null(-65).to_numpy() + 65).astype(np.uint8)
+
+
+def read_alphamissense(paths, rel, stats):
+    path = paths["AlphaMissense_aa_substitutions.tsv.gz"]
+    names = ["uniprot_id", "protein_variant", "am_pathogenicity", "am_class"]
+    with gzip.open(path, "rt") as f:
+        head = [f.readline() for _ in range(4)]
+    if not all(h.startswith("#") for h in head[:3]) or head[3].rstrip("\n").split("\t") != names:
+        raise ValueError(f"{path.name}: not three comment lines and the header {names}")
+    proc = subprocess.Popen(["gzip", "-dc", str(path)], stdout=subprocess.PIPE)
+    reader = pa.csv.open_csv(
+        proc.stdout, read_options=pa.csv.ReadOptions(skip_rows=4, column_names=names, block_size=SCORE_BATCH_BYTES),
+        parse_options=pa.csv.ParseOptions(delimiter="\t", quote_char=False),
+        convert_options=pa.csv.ConvertOptions(include_columns=names[:3], column_types={
+            "uniprot_id": pa.string(), "protein_variant": pa.string(), "am_pathogenicity": pa.float64()}))
+    for b in reader:
+        pv = b.column("protein_variant")
+        acc = b.column("uniprot_id").dictionary_encode()
+        yield (acc.dictionary.to_pylist(), acc.indices.to_numpy(),
+               pa.compute.utf8_slice_codeunits(pv, 1, -1).cast(pa.int64()).to_numpy(),
+               letter_ascii(pa.compute.utf8_slice_codeunits(pv, 0, 1)),
+               _ALT_CODE[letter_ascii(pa.compute.utf8_slice_codeunits(pv, -1))],
+               b.column("am_pathogenicity").to_numpy())
+    if proc.wait() != 0:
+        raise RuntimeError(f"gzip failed on {path}")
+
+
+def parse_esm1b(text, name):
+    """(the sequence the file scored, alternative residue codes, a 20 x length matrix) of one LLR csv."""
+    lines = text.replace("\r", "").rstrip("\n").split("\n")
+    cols = [c.split(" ") for c in lines[0].split(",")[1:]]
+    if len(lines) != 21 or any(len(c) != 2 or len(c[0]) != 1 or int(c[1]) != i for i, c in enumerate(cols, 1)):
+        raise ValueError(f"{name}: not a header of '<residue> <position>' columns and 20 rows")
+    rows = [ln.split(",") for ln in lines[1:]]
+    alts = _ALT_CODE[np.frombuffer("".join(r[0] for r in rows).encode(), dtype=np.uint8)]
+    if sorted(alts) != list(range(20)) or any(len(r) != len(cols) + 1 for r in rows):
+        raise ValueError(f"{name}: rows are not the 20 residues over every position")
+    return "".join(c[0] for c in cols), alts, np.array([r[1:] for r in rows], dtype=float)
+
+
+def read_esm1b(paths, rel, stats):
+    import zipfile
+    suffix = "_LLR.csv"
+    with zipfile.ZipFile(paths["ALL_hum_isoforms_ESM1b_LLR.zip"]) as z:
+        members = {n.rsplit("/", 1)[-1][:-len(suffix)]: n for n in z.namelist() if n.endswith(suffix)}
+        used = 0
+        for acc in rel.accessions:
+            iso = rel.isoform[acc]
+            # the file is taken by sequence, not by name: the first candidate that scored the
+            # release's sequence, else the first there is, which close() then refuses with a reason
+            found = None
+            for c in dict.fromkeys((iso, re.sub(r"-1$", "", iso), acc)):
+                if c in members:
+                    parsed = parse_esm1b(z.read(members[c]).decode(), members[c])
+                    if parsed[0] == rel.sequence[acc]:
+                        found = parsed
+                        break
+                    found = found or parsed
+            if found is None:
+                continue
+            used += 1
+            seq, alts, m = found
+            n = len(seq)
+            ref = np.tile(np.frombuffer(seq.encode(), dtype=np.uint8), 20)
+            alt = np.repeat(alts, n)
+            sub = AA_ASCII[alt] != ref  # the reference's own cell is not a substitution
+            yield ([acc], np.zeros(int(sub.sum()), dtype=np.int64), np.tile(np.arange(1, n + 1), 20)[sub],
+                   ref[sub], alt[sub], m.ravel()[sub])
+        stats["source_files_not_used"] = len(members) - used
+
+
+# files are pinned by sha256: a source's version is its bytes, and a re-download that differs is
+# a different release of the scores. `licence` is what the distributor's page states on `licence_checked`
+SCORE_SOURCES = {
+    "alphamissense": {
+        "source": "AlphaMissense (Google DeepMind), predictions for all possible single amino acid substitutions "
+                  "within UniProt canonical isoforms",
+        "files": {"AlphaMissense_aa_substitutions.tsv.gz":
+                  "bc18d954a9aa6b9efab8e40d6d1912e32b774906cd3846a1f51066588e9c176d"},
+        "url": "https://zenodo.org/records/10813168",
+        "download_url": "gs://dm_alphamissense/AlphaMissense_aa_substitutions.tsv.gz",
+        "version": "Zenodo 10.5281/zenodo.10813168, published 2023-09-19, relicensed record of 2024-03-13; "
+                   "the file is byte-identical (md5 b9ccb339e0de6cb0a8d1973ad2026576) to the first record's",
+        "licence": "CC-BY-4.0",
+        "licence_statement": "AlphaMissense predictions are licensed under the Creative Commons Attribution 4.0 "
+                             "International License (github.com/google-deepmind/alphamissense README; the Zenodo "
+                             "record's licence field is cc-by-4.0)",
+        "licence_note": "the file's own third header line still reads 'Licensed under CC BY-NC-SA 4.0 license', "
+                        "the licence of the first record (10.5281/zenodo.8208688)",
+        "licence_checked": "2026-11-12",
+        "reader": read_alphamissense,
+    },
+    "esm1b": {
+        "source": "ESM1b log-likelihood ratios for all human UniProt isoforms (Brandes et al. 2023, "
+                  "doi:10.1038/s41588-023-01465-0)",
+        "files": {"ALL_hum_isoforms_ESM1b_LLR.zip":
+                  "42b90ce74a007ce7147f8e4be4035fe7f11881215fecce0983441cc229207cd0"},
+        "url": "https://huggingface.co/spaces/ntranoslab/esm_variants",
+        "download_url": "https://huggingface.co/spaces/ntranoslab/esm_variants/resolve/main/"
+                        "ALL_hum_isoforms_ESM1b_LLR.zip",
+        "version": "not stated by source; downloaded 2026-11-12",
+        "licence": "CC-BY-NC-4.0",
+        "licence_statement": "license: cc-by-nc-4.0 (the metadata of the Hugging Face space's README.md; the "
+                             "space states no licence in prose)",
+        "licence_note": "the code repository github.com/ntranoslab/esm-variants is MIT; that covers the code",
+        "licence_checked": "2026-11-12",
+        "reader": read_esm1b,
+    },
+}
+
+
+class ScoreIndex:
+    """the release's proteins as one flat residue axis: accession i owns [offset[i], offset[i] + length[i])."""
+
+    def __init__(self, bundle):
+        self.accessions = sorted(set(bundle.models["uniprot_id"]))
+        self.index = {a: i for i, a in enumerate(self.accessions)}
+        self.sequence, self.isoform = bundle.sequence, bundle.isoform
+        self.length = np.array([len(bundle.sequence[a]) for a in self.accessions], dtype=np.int64)
+        self.offset = np.concatenate([[0], np.cumsum(self.length)[:-1]])
+        self.seq = np.frombuffer("".join(bundle.sequence[a] for a in self.accessions).encode(), dtype=np.uint8)
+        self.n = len(self.seq)
+        with_gene = set(bundle.pairs["accession"])
+        self.has_gene = np.array([a in with_gene for a in self.accessions])
+
+    def lookup(self, names, codes):
+        return np.array([self.index.get(a, -1) for a in names], dtype=np.int64)[codes]
+
+
+def snv_substitutions(path, rel):
+    """(residue x 20 mask of the substitutions variants.tsv.gz holds, counts), each row checked against the sequence."""
+    cols = [c for c, _ in psc.VARIANT_COLUMNS]
+    with gzip.open(path, "rt") as f:
+        if f.readline() != psc.header_line(psc.VARIANT_COLUMNS):
+            raise ValueError(f"{path.name}: header is not the contract's")
+    mask = np.zeros((rel.n, len(AA)), dtype=bool)
+    stats = {"variant_rows": 0, "variant_rows_not_on_the_sequence": 0}
+    proc = subprocess.Popen(["bgzip", "-dc", str(path)], stdout=subprocess.PIPE)
+    take = ["accession", "aa_pos", "aa_ref", "aa_alt"]
+    reader = pa.csv.open_csv(
+        proc.stdout, read_options=pa.csv.ReadOptions(skip_rows=1, column_names=cols, block_size=SCORE_BATCH_BYTES),
+        parse_options=pa.csv.ParseOptions(delimiter="\t", quote_char=False),
+        convert_options=pa.csv.ConvertOptions(include_columns=take, column_types={
+            "accession": pa.string(), "aa_pos": pa.int64(), "aa_ref": pa.string(), "aa_alt": pa.string()}))
+    for b in reader:
+        acc = b.column("accession").dictionary_encode()
+        a = rel.lookup(acc.dictionary.to_pylist(), acc.indices.to_numpy())
+        pos = b.column("aa_pos").to_numpy()
+        ref, alt = letter_ascii(b.column("aa_ref")), _ALT_CODE[letter_ascii(b.column("aa_alt"))]
+        ok = (a >= 0) & (pos >= 1) & (alt >= 0)
+        ok[ok] &= pos[ok] <= rel.length[a[ok]]
+        r = rel.offset[a[ok]] + pos[ok] - 1
+        same = rel.seq[r] == ref[ok]
+        mask[r[same], alt[ok][same]] = True
+        stats["variant_rows"] += len(b)
+        stats["variant_rows_not_on_the_sequence"] += int(len(b) - same.sum())
+    if proc.wait() != 0:
+        raise RuntimeError(f"bgzip failed on {path}")
+    stats["snv_substitutions"] = int(mask.sum())
+    return mask, stats
+
+
+class ScoreTable:
+    """one predictor's substitutions accumulated on the release's residue axis, then judged per protein."""
+
+    def __init__(self, rel, snv):
+        self.rel, self.snv = rel, snv
+        self.count = np.zeros((rel.n, len(AA)), dtype=np.uint8)
+        self.sum_all, self.sum_snv = np.zeros(rel.n), np.zeros(rel.n)
+        n = len(rel.accessions)
+        self.seen, self.longer, self.ref_differs = (np.zeros(n, dtype=bool) for _ in range(3))
+        self.not_in_release = set()
+
+    def add(self, names, codes, pos, ref, alt, score):
+        rel = self.rel
+        a = rel.lookup(names, codes)
+        self.not_in_release |= {n for n in names if n not in rel.index}
+        known = a >= 0
+        a, pos, ref, alt, score = a[known], pos[known], ref[known], alt[known], score[known]
+        if (alt < 0).any() or (AA_ASCII[alt] == ref).any() or not np.isfinite(score).all():
+            raise ValueError("a substitution to a non-standard residue or to the reference, or a score that is not a number")
+        self.seen[a] = True
+        inside = (pos >= 1) & (pos <= rel.length[a])
+        self.longer[a[~inside]] = True
+        a, pos, ref, alt, score = a[inside], pos[inside], ref[inside], alt[inside], score[inside]
+        r = rel.offset[a] + pos - 1
+        self.ref_differs[a[rel.seq[r] != ref]] = True
+        np.add.at(self.count, (r, alt), 1)
+        np.add.at(self.sum_all, r, score)
+        m = self.snv[r, alt]
+        np.add.at(self.sum_snv, r[m], score[m])
+
+    def close(self):
+        """keeps a protein only when the source scored the release's sequence; returns per-residue arrays and counts.
+
+        Refusals, first that applies: the source has no row for the accession; it scores some
+        substitution twice, which is two sequences under one accession (AlphaMissense does this
+        for a few hundred proteins, giving one position two reference residues) and leaves no way
+        to tell which of them any other row was scored on; it has a position past the release
+        sequence's end; a reference residue differs; the last residue has no score, which is what
+        a shorter isoform looks like. A kept protein's unscored residues elsewhere get no row.
+        """
+        rel = self.rel
+        twice = np.zeros(len(rel.accessions), dtype=bool)
+        twice[np.searchsorted(rel.offset, np.flatnonzero((self.count > 1).any(axis=1)), side="right") - 1] = True
+        scored = self.count.astype(bool)
+        n_all = scored.sum(axis=1)
+        n_snv = (scored & self.snv).sum(axis=1)
+        del scored
+        absent = ~self.seen
+        twice &= ~absent
+        longer = self.longer & ~absent & ~twice
+        differs = self.ref_differs & ~absent & ~twice & ~longer
+        short = (n_all[rel.offset + rel.length - 1] == 0) & ~absent & ~twice & ~longer & ~differs
+        keep = ~(absent | twice | longer | differs | short)
+        residue_kept = np.repeat(keep, rel.length)
+        row = residue_kept & (n_all > 0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            mean_all = np.round(self.sum_all / n_all, psc.SCORE_MEAN_DECIMALS)
+            mean_snv = np.round(self.sum_snv / n_snv, psc.SCORE_MEAN_DECIMALS)
+        ranked = row & (n_snv > 0) & np.repeat(rel.has_gene, rel.length)
+        percentile = np.full(rel.n, np.nan)
+        percentile[ranked] = midrank_percentiles(mean_snv[ranked])
+        placed = keep & rel.has_gene
+        counts = {
+            "proteins": int(placed.sum()),
+            "residues": int((row & np.repeat(rel.has_gene, rel.length)).sum()),
+            "residues_with_mean_snv": int(ranked.sum()),
+            "proteins_kept_without_gencode_gene": int((keep & ~rel.has_gene).sum()),
+            "residues_unscored_in_kept_proteins": int((residue_kept & (n_all == 0)).sum()),
+            "source_proteins_not_in_release": len(self.not_in_release),
+        }
+        drops = {
+            "proteins_absent_from_source": int(absent.sum()),
+            "proteins_substitution_scored_twice": int(twice.sum()),
+            "proteins_source_longer_than_release_sequence": int(longer.sum()),
+            "proteins_reference_residue_differs": int(differs.sum()),
+            "proteins_last_residue_unscored": int(short.sum()),
+        }
+        return keep, row, mean_snv, n_snv, percentile, mean_all, n_all, counts, drops
+
+
+def midrank_percentiles(values):
+    """psc.score_percentiles() over an array."""
+    _, inverse, equal = np.unique(values, return_inverse=True, return_counts=True)
+    below = np.cumsum(equal) - equal
+    return (100 * (below + equal / 2) / len(values))[inverse]
+
+
+def score_source_paths(predictors):
+    """{predictor: {file name: path}}; refuses a missing directory or file, without hashing anything."""
+    if not predictors:
+        raise ValueError("the scores stage needs --predictors")
+    paths = {name: {f: Path(predictors) / name / f for f in src["files"]} for name, src in SCORE_SOURCES.items()}
+    missing = [str(p) for files in paths.values() for p in files.values() if not p.is_file()]
+    if missing:
+        raise ValueError(f"the scores stage needs {', '.join(missing)}")
+    return paths
+
+
+def stage_scores(bundle, out, work, predictors):
+    paths = score_source_paths(predictors)
+    if not (work / "variants.json").exists():
+        raise RuntimeError("stage variants has not finished: no _work/variants.json")
+    if set(SCORE_SOURCES) != set(psc.SCORE_DIRECTIONS):
+        raise AssertionError("SCORE_SOURCES and the contract's SCORE_DIRECTIONS name different predictors")
+    rel = ScoreIndex(bundle)
+    sources = {}
+    for name, src in SCORE_SOURCES.items():
+        files = {}
+        for f, pinned in src["files"].items():
+            size, sha, _ = file_digests(paths[name][f])
+            if sha != pinned:
+                raise ValueError(f"{name}/{f} hashes to {sha}, not the pinned {pinned}")
+            files[f] = {psc.OBJECT_BYTES: size, psc.OBJECT_SHA256: sha}
+        sources[name] = {k: v for k, v in src.items() if k not in ("reader", "files")}
+        sources[name].update(files=files, direction=psc.SCORE_DIRECTIONS[name], summary=SCORE_SUMMARY)
+    variants_sha256 = sha256_file(out / psc.VARIANTS_FILE)
+    snv, map_stats = snv_substitutions(out / psc.VARIANTS_FILE, rel)
+    print(f"  scores: {map_stats}", flush=True)
+
+    results, drops = {}, {}
+    for name in sorted(SCORE_SOURCES):
+        t0 = time.time()
+        table, stats = ScoreTable(rel, snv), {}
+        for batch in SCORE_SOURCES[name]["reader"](paths[name], rel, stats):
+            table.add(*batch)
+        *results[name], counts, d = table.close()
+        del table
+        if not counts["proteins"]:
+            raise AssertionError(f"{name}: no protein of the release is scored on its own sequence")
+        sources[name]["counts"] = {**counts, **stats}
+        drops.update({f"{name}.{k}": v for k, v in d.items()})
+        print(f"  scores {name}: {counts} {d}, {time.time() - t0:.0f}s", flush=True)
+
+    aa = rel.seq.view("S1").astype("U1")
+    w = TabixWriter(out / psc.SCORES_FILE, psc.SCORE_COLUMNS, psc.GENE_TABIX_ARGS)
+    gene_bytes, rows_by = {}, dict.fromkeys(sorted(SCORE_SOURCES), 0)
+    mean_fmt, pct_fmt = f"{{:.{psc.SCORE_MEAN_DECIMALS}f}}", f"{{:.{psc.SCORE_PERCENTILE_DECIMALS}f}}"
+    for pair in bundle.pairs.itertuples():
+        i = rel.index[pair.accession]
+        sl = slice(rel.offset[i], rel.offset[i] + rel.length[i])
+        prefix = f"{pair.gene_id}\t{pair.chrom}\t{pair.gene_start}\t{pair.gene_end}\t{pair.gene_name}\t{pair.accession}\t"
+        lines = []
+        for name in rows_by:
+            keep, row, mean_snv, n_snv, percentile, mean_all, n_all = results[name]
+            if not keep[i]:
+                continue
+            for p in np.flatnonzero(row[sl]):
+                k = sl.start + p
+                snv_cols = f"{mean_fmt.format(mean_snv[k])}\t{n_snv[k]}\t{pct_fmt.format(percentile[k])}" \
+                    if n_snv[k] else "\t0\t"
+                lines.append(f"{prefix}{name}\t{p + 1}\t{aa[k]}\t{snv_cols}\t{mean_fmt.format(mean_all[k])}\t{n_all[k]}\n")
+                rows_by[name] += 1
+        data = "".join(lines).encode()
+        gene_bytes[pair.gene_id] = gene_bytes.get(pair.gene_id, 0) + len(data)
+        w.proc.stdin.write(data)
+        w.rows += len(lines)
+    rows = w.close()
+    largest = max(gene_bytes, key=gene_bytes.get)
+    if gene_bytes[largest] > MAX_GENE_SCORE_BYTES:
+        raise AssertionError(f"gene {largest}'s score rows are {gene_bytes[largest]} bytes, over the 8 MiB gate")
+    w.commit()
+    write_json(work / "scores.json", {
+        "score_rows": rows, "score_rows_by_predictor": rows_by, "variant_map": map_stats,
+        "score_gene_largest": {"gene_id": largest, "bytes": gene_bytes[largest], "limit": MAX_GENE_SCORE_BYTES},
+        "sources": sources, "drops": drops, SCORES_VARIANTS_KEY: variants_sha256})
+
+
 # ---------------------------------------------------------------- manifest and upload
 
 
@@ -907,6 +1284,7 @@ def stage_manifest(bundle, out, work, args, release):
                         "licence": "CC-BY-4.0"},
             "ted": json.loads(Path(args.ted_meta).read_text()) if args.ted_meta else None,
         },
+        "score_sources": {},
         "no_model_accessions": bundle.no_model_accessions,
         "accessions_in_several_genes": bundle.accessions_in_several_genes,
         "genes_absent_from_gencode": bundle.genes_absent_from_gencode,
@@ -920,10 +1298,16 @@ def stage_manifest(bundle, out, work, args, release):
             raise RuntimeError(f"stage {stage} has not finished: no _work/{stage}.json")
         s = json.loads((work / f"{stage}.json").read_text())
         manifest["drops"].update({f"{stage}.{k}": v for k, v in s.pop("drops", {}).items()})
+        if stage == "scores":
+            manifest["score_sources"] = s.pop("sources")
+            scores_variants = s.pop(SCORES_VARIANTS_KEY, None)
         manifest["counts"][stage] = s
     for f in psc.manifest_object_names():
         p = out / f
         manifest[psc.MANIFEST_OBJECTS][f] = {psc.OBJECT_BYTES: p.stat().st_size, psc.OBJECT_SHA256: sha256_file(p)}
+    if scores_variants != manifest[psc.MANIFEST_OBJECTS][psc.VARIANTS_FILE][psc.OBJECT_SHA256]:
+        raise RuntimeError(f"{psc.SCORES_FILE} was not computed from this {psc.VARIANTS_FILE} (the variants stage "
+                           "ran again since, or the scores predate the record): rerun --stages scores,manifest")
     for d in (psc.STRUCTURE_DIR, psc.PAE_DIR):
         files = list((out / d).glob("*"))
         manifest[psc.MANIFEST_DIRECTORIES][d] = {psc.DIRECTORY_OBJECTS: len(files),
@@ -1107,6 +1491,7 @@ def main(argv=None):
     ap.add_argument("--bundle-tar")
     ap.add_argument("--ted")
     ap.add_argument("--ted-meta")
+    ap.add_argument("--predictors", help="directory holding one <predictor>/ per key of SCORE_SOURCES")
     ap.add_argument("--release")
     ap.add_argument("--stages", default=",".join(STAGES))
     ap.add_argument("--procs", type=int, default=3)
@@ -1141,6 +1526,9 @@ def main(argv=None):
     unknown = set(stages) - set(STAGES)
     if unknown:
         raise ValueError(f"unknown stages {sorted(unknown)}")
+    if "scores" in stages:
+        # the last stage but one: found missing only when it starts, the earlier stages have run for hours
+        score_source_paths(args.predictors)
     gencode = load_gencode(args.gencode)
     bundle = Bundle(args.bundle, gencode)
     lab = Path(args.lab_files)
@@ -1162,6 +1550,8 @@ def main(argv=None):
             stage_features(bundle, out, work, lab, args.ted)
         elif s == "variants":
             stage_variants(bundle, out, work, lab)
+        elif s == "scores":
+            stage_scores(bundle, out, work, args.predictors)
         elif s == "manifest":
             stage_manifest(bundle, out, work, args, release)
         timings[s] = round(time.time() - t0, 1)

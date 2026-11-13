@@ -24,6 +24,7 @@ MODELS_FILE = "models.tsv.gz"
 RESIDUES_FILE = "residues.tsv.gz"
 FEATURES_FILE = "features.tsv.gz"
 VARIANTS_FILE = "variants.tsv.gz"
+SCORES_FILE = "scores.tsv.gz"
 STRUCTURE_DIR = "structures"
 PAE_DIR = "pae"
 
@@ -73,7 +74,7 @@ def header_line(columns: list[tuple[str, type]]) -> str:
 
 # manifest.json: top-level keys a reader may rely on. Adding a key is not a contract change
 MANIFEST_KEYS = ("contract_version", "release", "built_at", "bundle", "gencode", "lab_inputs",
-                 "feature_sources", "counts", "drops", "objects", "directories")
+                 "feature_sources", "score_sources", "counts", "drops", "objects", "directories")
 # `objects` maps a release-relative path to {OBJECT_BYTES, OBJECT_SHA256}, one entry per name in
 # manifest_object_names(). Structures and PAE objects are hashed per row in models.tsv.gz instead,
 # and `directories` maps STRUCTURE_DIR and PAE_DIR to {DIRECTORY_OBJECTS, OBJECT_BYTES} totals
@@ -82,7 +83,7 @@ MANIFEST_DIRECTORIES = "directories"
 OBJECT_BYTES = "bytes"
 OBJECT_SHA256 = "sha256"
 DIRECTORY_OBJECTS = "objects"
-TABIX_FILES = (RESIDUES_FILE, FEATURES_FILE, VARIANTS_FILE)
+TABIX_FILES = (RESIDUES_FILE, FEATURES_FILE, VARIANTS_FILE, SCORES_FILE)
 
 
 def manifest_object_names() -> list[str]:
@@ -212,6 +213,57 @@ VARIANT_COLUMNS = [
 VARIANT_SORT = ("chrom", "pos", "ref", "alt", "accession")
 VARIANT_TABIX_ARGS = ("-s1", "-b2", "-e2")
 
+# missense predictors summarised per residue, and which end of each raw score is the damaging one.
+# `percentile` ranks the raw mean ascending for every predictor, so a reader colours by this
+SCORE_HIGHER_IS_DAMAGING = "higher_is_more_damaging"
+SCORE_LOWER_IS_DAMAGING = "lower_is_more_damaging"
+SCORE_DIRECTIONS = {
+    "alphamissense": SCORE_HIGHER_IS_DAMAGING,
+    "esm1b": SCORE_LOWER_IS_DAMAGING,  # a log-likelihood ratio against the reference residue
+}
+
+# long: one row per (gene_id, accession, protein_position, predictor), never per model window.
+# No row means the source has no score for that residue of the release's sequence
+SCORE_COLUMNS = _GENE_ANCHOR + [
+    ("accession", str),
+    ("predictor", str),          # a key of SCORE_DIRECTIONS
+    ("protein_position", int),
+    ("aa_ref", str),             # the release sequence's residue, which the source's reference was checked against
+    ("mean_snv", float),         # mean raw score over the substitutions variants.tsv.gz holds at the position
+    ("n_snv", int),              # how many were averaged; 0 leaves mean_snv and percentile empty
+    # score_percentiles() of mean_snv within the predictor. Not comparable between predictors: each
+    # ranks its own raw mean ascending, so the damaging end differs (SCORE_DIRECTIONS), over its own proteins
+    ("percentile", float),
+    ("mean_all", float),         # mean over every substitution the source scored; empty with n_all 0
+    ("n_all", int),
+]
+SCORE_SORT = ("chrom", "gene_start", "gene_id", "accession", "predictor", "protein_position")
+SCORE_MEAN_DECIMALS = 5
+SCORE_PERCENTILE_DECIMALS = 3
+
+
+def score_percentiles(values: list[float]) -> list[float]:
+    """the mid-rank percentile of each value among `values`: 100 * (below + equal / 2) / n.
+
+    Equal values share one percentile and the value itself counts among its equals, so the
+    mid-rank is strictly between 0 and 100; what is returned and written is that rounded to
+    SCORE_PERCENTILE_DECIMALS, which reaches 0.0 and 100.0 at the ends of a large enough
+    population. `values` are means already rounded to SCORE_MEAN_DECIMALS,
+    one per distinct (accession, protein_position) of a predictor, so an accession repeated under
+    several genes counts once and a reader can recompute a percentile from the file.
+    """
+    n = len(values)
+    order = sorted(values)
+    below, equal, i = {}, {}, 0
+    while i < n:
+        j = i
+        while j < n and order[j] == order[i]:
+            j += 1
+        below[order[i]], equal[order[i]] = i, j - i
+        i = j
+    return [round(100 * (below[v] + equal[v] / 2) / n, SCORE_PERCENTILE_DECIMALS) for v in values]
+
+
 # PAE: one row-major n x n uint8 object per model file, symmetrised by minimum within the file
 PAE_SCALE = 8
 # reserved; no composed matrix is stored, so the build writes it for no entry of this bundle
@@ -310,8 +362,10 @@ VIEW_MAX_POSITION = 100_000  # any file position, the sphere centre included
 VIEW_MAX_SPHERE_RADIUS = 100  # angstrom
 
 
-# `<UTC date>-<HHMMSS>` of the build; it names a directory, so nothing else may pass
-RELEASE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{6}$")
+# `<UTC date>-<HHMMSS>` of the build; it names a directory and travels in an HTTP header, so
+# nothing else may pass. `[0-9]`, not `\d`, which also matches every other script's digits;
+# `\Z` for the reason MODEL_FILE_ID_RE has it
+RELEASE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\Z")
 
 
 def check_release(release: str) -> str:

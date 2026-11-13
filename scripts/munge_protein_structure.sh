@@ -5,7 +5,7 @@
 # rows at a time but the residue stage still peaks at a few GB, and an OOM kill on a shared VM
 # takes the whole session with it, so it runs in its own memory-capped scope.
 #
-# Extra arguments pass through: `--stages variants,manifest` resumes, `--upload` stages.
+# Extra arguments pass through: `--stages variants,scores,manifest` resumes, `--upload` stages.
 set -euo pipefail
 
 SCRIPTS_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -26,4 +26,5 @@ exec systemd-run --user --scope -p MemoryMax="$MEMORY_MAX" \
   --bundle "$BASE/bundle/sir-reference-data" --bundle-tar "$BASE/bundle/sir-data.tar.gz" \
   --lab-files "$BASE/lab-files" \
   --gencode "${GENCODE:-/mnt/disks/data/cellxgene-pg/ref/gencode.v49.annotation.genes.tsv}" \
+  --predictors "${PREDICTORS:-$BASE/predictors}" \
   --workdir "$WORKDIR" "${TED_ARGS[@]}" "$@"

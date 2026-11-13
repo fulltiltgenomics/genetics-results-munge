@@ -47,6 +47,7 @@ means no gene of the accession is in GENCODE v49. `is_owner` is true on exactly 
                               residues.tsv.gz  .tbi
                               features.tsv.gz  .tbi
                               variants.tsv.gz  .tbi
+                              scores.tsv.gz    .tbi
                               structures/<model_file_id>.pdb.gz
                               pae/<model_file_id>.u8
 
@@ -66,7 +67,7 @@ receive the PDB text; the largest is 0.8 MB compressed.
 
 `manifest.json` holds `contract_version`, `release`, the bundle's identity (tar sha256 and
 date), the GENCODE version, the lab-supplied inputs outside the bundle (`LAB_INPUTS`, each with its sha256), the feature sources' versions and
-licences, row counts and drop counts per rule, and every other object's bytes and sha256. Its key
+licences, the predictor sources under `score_sources` (below), row counts and drop counts per rule, and every other object's bytes and sha256. Its key
 names are the module's `MANIFEST_KEYS`; `objects` holds bytes and sha256 for exactly the files
 `manifest_object_names()` lists, while each structure and PAE object is hashed on its own row of
 `models.tsv.gz` (itself in `objects`), so the manifest's sha256 still covers every byte of the
@@ -240,6 +241,94 @@ that and nothing stronger: not that the variant is non-coding, not that it is sy
 that it is missense in no transcript. A consumer that wants consequence reads
 `variant_annotation_v`.
 
+## Predictor scores
+
+`scores.tsv.gz` (`SCORE_COLUMNS`) holds per-residue summaries of missense predictors in long
+form: one row per (`gene_id`, `accession`, `predictor`, `protein_position`), sorted by
+`SCORE_SORT`, with the gene anchor and `GENE_TABIX_ARGS` of the residue and feature files, so one
+tabix query on a gene returns every predictor's rows for its proteins and an accession under
+several genes is repeated under each. The position is the protein position. Rows are not
+repeated per model window: a score belongs to the sequence, not to a model, and a consumer
+that wants it on a structure joins on `protein_position` to the residue rows with `is_owner`.
+`predictor` is a key of `SCORE_DIRECTIONS`.
+
+**The summary.** A predictor scores substitutions; a track needs one number per residue.
+`mean_snv` is the mean raw score over the substitutions `variants.tsv.gz` holds at the position,
+that is the amino-acid changes a single-nucleotide change reaches, each counted once however
+many variants give it, and `n_snv` is how many were averaged. `mean_all` and `n_all` are the
+same over every substitution the source scored there (19 for a source that scores them all).
+`mean_snv` is the primary column and the one `percentile` ranks: some predictors exist only for
+single-nucleotide variants, so it is the one definition every predictor's row can be computed
+under, and it weights a residue by the changes that can be observed in a genome. A shared
+definition does not make the rows comparable (below). With
+`n_snv` 0, `mean_snv` and `percentile` are empty and the row carries `mean_all` alone. Means
+are written to `SCORE_MEAN_DECIMALS` decimals.
+
+**The percentile** is `score_percentiles()` over the predictor's `mean_snv` values as written,
+one per distinct (`accession`, `protein_position`) in the file, so an accession under two genes
+counts once: `100 * (values below + half the values equal) / n`. Equal means share one
+percentile, and a reader can recompute it from the file. The mid-rank itself is strictly
+between 0 and 100; the value written is rounded to `SCORE_PERCENTILE_DECIMALS` decimals and is
+`0.000` or `100.000` on the rows at either end of a population this large. It is a rank within this release and this predictor, not a calibrated probability, and
+it is not comparable across releases whose protein sets differ.
+
+**Direction.** `percentile` ranks the raw mean ascending for every predictor; it is not turned
+so that high means damaging. `SCORE_DIRECTIONS` says which end is the damaging one
+(`higher_is_more_damaging` for AlphaMissense's pathogenicity, `lower_is_more_damaging` for
+ESM1b's log-likelihood ratio), the manifest repeats it per predictor, and a consumer that
+colours a track reads it rather than assuming.
+
+**Percentiles of different predictors are not comparable with each other.** A value of 90 is
+the damaging end for one predictor and the tolerant end for another, and each predictor's
+population is the proteins that source scored on the release's sequence, which differ between
+sources. Two tracks drawn one above the other show where each predictor's own scale is high
+or low along the protein; a difference or an average of two predictors' percentiles means
+nothing.
+
+**The sequence scored is the release's.** A source keyed by accession and residue is placed
+only after its reference residues have been compared with the bundle sequence over the whole
+protein. A protein is left out, and counted under the reason in the manifest's `drops`, when
+the source has no row for it, scores some substitution twice (two sequences under one
+accession, which AlphaMissense's file has for a few hundred proteins as one position with two
+reference residues), has a position past the sequence's end, names a different reference
+residue anywhere, or has no score at the last residue (what a shorter isoform looks like).
+The protein goes, not the position: a predictor's score at one residue depends on the rest of
+the sequence, so a source that scored another sequence has no score for this one.
+
+**What that costs.** A protein whose source sequence differs from the release sequence at even
+one residue has no scores from that source, at any position. This removes well-known genes.
+Measured on release `2026-11-12-231134`: `BRCA2` (`P51587`), `DMD` (`P11532`) and `APOB`
+(`P04114`) have no row from either predictor. In each the bundle sequence and ESM1b's file
+differ at exactly one residue (2466 V against A, 2937 R against Q, 1422 C against Y), and
+AlphaMissense's file carries both of those residues as references at that position, which is
+its "scored twice" case. That is the usual shape of the case: of the release's accessions
+with such a position in AlphaMissense's file, 386 have one, 73 two and 6 three. The manifest
+holds the count per reason and predictor (`drops`, keys `scores.<predictor>.<reason>`), not the
+accessions; which proteins a reason removed is found today by their absence from the file. `aa_ref` is the sequence's residue the check compared. For ESM1b, which publishes one
+file per UniProt isoform, the candidates are the files named for the bundle's isoform id, for
+that id without a `-1` suffix and for the bare accession; among them the comparison decides,
+and an isoform published only under another name is not looked for. The
+variant map's rows go through the same check before they define `mean_snv`: a row whose
+`aa_ref` is not the sequence's residue at `aa_pos` places nothing, and is counted.
+
+**What absence means.** A residue with no row for a predictor has no score from that source for
+the release's sequence: the source did not score the protein, scored another sequence under
+the same accession, or skipped the residue. It does not mean the residue is tolerant, and a
+track draws it as missing, never as the low end of the scale.
+
+**Sources and licences.** The manifest's `score_sources` maps each predictor to its source
+name, `files` (name, bytes, sha256 of the downloaded file, which the build pins), `url`,
+`version`, `licence` (an SPDX id), the distributor's statement it was read from and the date
+it was read, `direction`, the summary definition and its counts. Which predictors a deployment
+may serve is that deployment's licence decision, as for models: a reader filters rows by
+`score_sources[predictor].licence`, and the build leaves nothing out on licence grounds.
+
+**Response size.** One gene's rows are every predictor's rows for its proteins. The build fails
+if any gene's uncompressed rows exceed 8 MiB, the bound the residue file has and for the same
+reason; the manifest records the largest gene. The bound is per gene across predictors, so a
+further predictor on the largest proteins meets it before it meets anything else, and the
+answer then is a file per predictor, not a looser bound.
+
 ## View-spec for the browser viewer
 
 A script writes a JSON object; it persists in chat history, so the viewer must render every
@@ -312,4 +401,9 @@ not hold rather than drawing another model.
 4. A structure or PAE object's size equals its manifest bytes; the build and any offline consumer
    also check sha256. results-api, which serves byte ranges, checks the size, which costs
    nothing, and leaves the full hash to the build.
-5. A deployment filters `models.tsv.gz` by `licence` before serving.
+5. A deployment filters `models.tsv.gz` by `licence` before serving, and `scores.tsv.gz` rows by
+   their predictor's `licence` in the manifest's `score_sources`.
+6. It reads the `objects` entries it uses and ignores the rest. An object added to
+   `manifest_object_names()` is not a contract change, so a reader that refused a manifest for
+   listing an object it does not know would refuse every release after the addition; a mirror
+   of the module that carries `TABIX_FILES` follows it when its pin test says so.

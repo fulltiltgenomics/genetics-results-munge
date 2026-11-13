@@ -1,6 +1,6 @@
 """Offline tests of `munge_protein_structure.py` on a synthetic bundle: window ownership and
 is_owner, the partial-PAE refusal, PAE encoding and symmetrisation, headers and sort orders,
-the variant address rule, model-less accessions, features, and the pointer.
+the variant address rule, model-less accessions, features, predictor scores, and the pointer.
 
 Needs h5py, hdf5plugin and pyarrow (the protein-structure venv), and bgzip/tabix on PATH."""
 
@@ -9,6 +9,8 @@ import hashlib
 import json
 import os
 import subprocess
+import types
+import zipfile
 
 import h5py
 import numpy as np
@@ -159,12 +161,65 @@ def make_bundle(tmp, drop_pae=None):
     ]
     ted = tmp / "ted.tsv"
     ted.write_text("\n".join("\t".join(r) for r in ted_rows) + "\n")
+    make_predictors(tmp)
     return b, lab, gencode, ted, paes
+
+
+# what each synthetic source scored. AlphaMissense: Q00006 on another residue at 2, Q00007 with no
+# row at its selenocysteine, Q00010 one residue longer, and two accessions the release lacks.
+# ESM1b: Q00002 under its isoform's name beside a canonical file with another sequence, Q00007
+# with the selenocysteine read as C, Q00010 one residue short, nothing for Q00003 and Q00006
+AM_SCORED = {"Q00001": SEQ["Q00001"], "Q00002": SEQ["Q00002"], "Q00003": SEQ["Q00003"], "Q00004": SEQ["Q00004"],
+             "Q00006": "MTSSG", "Q00007": SEQ["Q00007"], "Q00010": SEQ["Q00010"] + "A", "Q99999": "MAAA"}
+ESM_SCORED = {"Q00001": SEQ["Q00001"], "Q00002": "MSTNA", "Q00002-2": SEQ["Q00002"], "Q00007": "MACAG",
+              "Q00010": SEQ["Q00010"][:-1], "Q88888": "MAAA"}
+AM_FIXED = {("Q00001", 5, "C"): 0.2, ("Q00002", 2, "N"): 0.2, ("Q00001", 9, "R"): 0.9}
+ESM_FIXED = {("Q00001", 5, "C"): -3.0, ("Q00001", 9, "R"): -3.0, ("Q00002", 2, "N"): -1.0}
+
+
+def am_score(acc, pos, alt):
+    return AM_FIXED.get((acc, pos, alt), round(0.05 + 0.04 * mps.AA.index(alt) + 0.001 * pos, 4))
+
+
+def esm_score(acc, pos, alt):
+    return ESM_FIXED.get((acc, pos, alt), round(-0.5 * mps.AA.index(alt) - 0.01 * pos, 3))
+
+
+def write_alphamissense(tmp, extra=()):
+    lines = ["# Copyright", "#", "# Licensed", "uniprot_id\tprotein_variant\tam_pathogenicity\tam_class"]
+    for acc, seq in AM_SCORED.items():
+        for pos, ref in enumerate(seq, 1):
+            if ref != "U":
+                lines += [f"{acc}\t{ref}{pos}{alt}\t{am_score(acc, pos, alt)}\tambiguous" for alt in mps.AA if alt != ref]
+    lines += list(extra)
+    path = tmp / "predictors" / "alphamissense" / "AlphaMissense_aa_substitutions.tsv.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode(), mtime=0))
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def write_esm1b(tmp):
+    path = tmp / "predictors" / "esm1b" / "ALL_hum_isoforms_ESM1b_LLR.zip"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        for iso, seq in ESM_SCORED.items():
+            rows = ["," + ",".join(f"{aa} {i}" for i, aa in enumerate(seq, 1))]
+            rows += [alt + "," + ",".join("0.000" if alt == aa else f"{esm_score(iso.split('-')[0], i, alt):.3f}"
+                                          for i, aa in enumerate(seq, 1)) for alt in "KRHEDNQTSCGAVLIMPYFW"]
+            z.writestr(zipfile.ZipInfo(f"content/ALL_hum_isoforms_ESM1b_LLR/{iso}_LLR.csv"), "\n".join(rows) + "\n")
+    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def make_predictors(tmp):
+    # the build pins each source file's sha256; the synthetic files are pinned as they are written
+    mps.SCORE_SOURCES["alphamissense"]["files"] = write_alphamissense(tmp)
+    mps.SCORE_SOURCES["esm1b"]["files"] = write_esm1b(tmp)
 
 
 def args_for(tmp, stages=",".join(mps.STAGES), extra=()):
     return ["--bundle", str(tmp / "bundle"), "--lab-files", str(tmp / "lab"), "--gencode", str(tmp / "gencode.tsv"),
             "--workdir", str(tmp / "build"), "--ted", str(tmp / "ted.tsv"), "--ted-meta", str(tmp / "ted_meta.json"),
+            "--predictors", str(tmp / "predictors"),
             "--procs", "1", "--release", "2026-01-01-000000", "--stages", stages, *extra]
 
 
@@ -189,7 +244,8 @@ def release(tmp_path_factory):
 def test_headers_equal_the_module(release):
     out, _ = release
     for name, cols in ((psc.MODELS_FILE, psc.MODEL_COLUMNS), (psc.RESIDUES_FILE, psc.RESIDUE_COLUMNS),
-                       (psc.FEATURES_FILE, psc.FEATURE_COLUMNS), (psc.VARIANTS_FILE, psc.VARIANT_COLUMNS)):
+                       (psc.FEATURES_FILE, psc.FEATURE_COLUMNS), (psc.VARIANTS_FILE, psc.VARIANT_COLUMNS),
+                       (psc.SCORES_FILE, psc.SCORE_COLUMNS)):
         header, df = read_tsv(out / name)
         assert header == psc.header_line(cols)
         assert df.shape[1] == len(cols)
@@ -323,6 +379,209 @@ def test_features(release):
     assert s["drops"]["uniprot_rows_position_outside_sequence"] == 1
     assert s["drops"]["uniprot_rows_bundle_sequence_not_canonical_isoform"] == 3
     assert s["drops"]["ted_domains_sequence_md5_differs"] == 1
+
+
+def test_scores_join_mean_and_percentile(release):
+    out, _ = release
+    s = frame(out, psc.SCORES_FILE, psc.SCORE_COLUMNS)
+    assert set(s["predictor"]) == set(psc.SCORE_DIRECTIONS)
+    am, esm = (s[s["predictor"] == p] for p in ("alphamissense", "esm1b"))
+    # one row per protein position however many windows hold it, repeated under each gene of Q00002
+    assert am.groupby(["gene_name", "accession"]).size().to_dict() == {
+        ("GENEA", "Q00001"): 10, ("GENEB", "Q00002"): 5, ("GENEC", "Q00002"): 5, ("GENEG", "Q00007"): 4}
+    assert esm.groupby(["gene_name", "accession"]).size().to_dict() == {
+        ("GENEA", "Q00001"): 10, ("GENEB", "Q00002"): 5, ("GENEC", "Q00002"): 5}
+    assert 3 not in set(am[am["accession"] == "Q00007"]["protein_position"].astype(int))  # unscored: no row
+    assert "".join(am[am["gene_name"] == "GENEA"]["aa_ref"]) == SEQ["Q00001"]
+
+    def row(df, acc, pos, gene=None):
+        hit = df[(df["accession"] == acc) & (df["protein_position"] == pos)]
+        return (hit[hit["gene_name"] == gene] if gene else hit).iloc[0]
+    for df, score in ((am, am_score), (esm, esm_score)):
+        r = row(df, "Q00001", 5)
+        others = [score("Q00001", 5, alt) for alt in mps.AA if alt != "Y"]
+        assert (float(r["mean_snv"]), r["n_snv"], r["n_all"]) == (score("Q00001", 5, "C"), 1, 19)
+        assert float(r["mean_all"]) == pytest.approx(sum(others) / 19, abs=1e-5)
+        # the map's row at position 4 names T where the sequence has A, so it places nothing
+        r = row(df, "Q00001", 4)
+        assert (r["mean_snv"], r["n_snv"], r["percentile"], r["n_all"]) == ("", 0, "", 19)
+    # ESM1b's Q00002 is the isoform file, not the canonical one of another sequence
+    assert float(row(esm, "Q00002", 5, "GENEB")["mean_all"]) == pytest.approx(
+        sum(esm_score("Q00002", 5, alt) for alt in mps.AA if alt != "P") / 19, abs=1e-5)
+
+    # ties share a mid-rank, and Q00002's position counts once though it is written under two genes
+    def pct(df):
+        return {(r.gene_name, r.accession, int(r.protein_position)): float(r.percentile)
+                for r in df[df["percentile"] != ""].itertuples()}
+    low, high = psc.score_percentiles([0.2, 0.2, 0.9])[1:]
+    assert (low, high) == (33.333, 83.333)
+    assert pct(am) == {("GENEA", "Q00001", 5): low, ("GENEB", "Q00002", 2): low, ("GENEC", "Q00002", 2): low,
+                       ("GENEA", "Q00001", 9): high}
+    assert pct(esm) == {("GENEA", "Q00001", 5): low, ("GENEA", "Q00001", 9): low, ("GENEB", "Q00002", 2): high,
+                        ("GENEC", "Q00002", 2): high}
+    values = np.random.default_rng(3).integers(0, 50, 500) / 10
+    assert np.round(mps.midrank_percentiles(values), psc.SCORE_PERCENTILE_DECIMALS).tolist() == \
+        psc.score_percentiles(values.tolist())
+
+    key = s.assign(**{c: s[c].astype(int) for c in ("chrom", "gene_start", "protein_position")})
+    assert key.sort_values(list(psc.SCORE_SORT), kind="stable").index.tolist() == s.index.tolist()
+    got = subprocess.run(["tabix", str(out / psc.SCORES_FILE), "1:1900-1900"], capture_output=True, text=True,
+                         check=True).stdout
+    assert got.count("\n") == 10
+
+
+def test_scores_reference_check_and_manifest(release):
+    out, _ = release
+    man = json.loads((out / psc.MANIFEST_FILE).read_text())
+    assert man["counts"]["scores"]["variant_map"] == {
+        "variant_rows": 4, "variant_rows_not_on_the_sequence": 1, "snv_substitutions": 3}
+    assert man["counts"]["scores"]["score_rows_by_predictor"] == {"alphamissense": 24, "esm1b": 20}
+    am, esm = man["score_sources"]["alphamissense"], man["score_sources"]["esm1b"]
+    assert am["counts"] == {"proteins": 3, "residues": 19, "residues_with_mean_snv": 3,
+                            "proteins_kept_without_gencode_gene": 1, "residues_unscored_in_kept_proteins": 1,
+                            "source_proteins_not_in_release": 2}
+    assert esm["counts"] == {"proteins": 2, "residues": 15, "residues_with_mean_snv": 3,
+                             "proteins_kept_without_gencode_gene": 0, "residues_unscored_in_kept_proteins": 0,
+                             "source_proteins_not_in_release": 0, "source_files_not_used": 2}
+    drops = {k.split(".", 1)[1]: v for k, v in man["drops"].items() if k.startswith("scores.")}
+    assert drops == {
+        "alphamissense.proteins_absent_from_source": 0,
+        "alphamissense.proteins_substitution_scored_twice": 0,
+        "alphamissense.proteins_source_longer_than_release_sequence": 1,
+        "alphamissense.proteins_reference_residue_differs": 1,
+        "alphamissense.proteins_last_residue_unscored": 0,
+        "esm1b.proteins_absent_from_source": 2,
+        "esm1b.proteins_substitution_scored_twice": 0,
+        "esm1b.proteins_source_longer_than_release_sequence": 0,
+        "esm1b.proteins_reference_residue_differs": 1,
+        "esm1b.proteins_last_residue_unscored": 1,
+    }
+    for name, src in man["score_sources"].items():
+        assert src["direction"] == psc.SCORE_DIRECTIONS[name]
+        assert {"source", "url", "version", "licence", "licence_statement", "summary"} <= set(src)
+        for f, o in src["files"].items():
+            assert o[psc.OBJECT_SHA256] == hashlib.sha256(
+                (out.parent.parent / "predictors" / name / f).read_bytes()).hexdigest()
+    assert "reader" not in am
+
+
+def test_failed_scores_gate_leaves_the_earlier_table_and_no_stage_json(fresh, tmp_path, monkeypatch):
+    work = fresh.parent / "_work"
+    assert (work / "scores.json").exists()
+    before = (fresh / psc.SCORES_FILE).read_bytes()
+    monkeypatch.setattr(mps, "MAX_GENE_SCORE_BYTES", 10)
+    with pytest.raises(AssertionError, match="score rows"):
+        mps.main(args_for(tmp_path, "scores"))
+    assert not (work / "scores.json").exists()
+    assert (fresh / psc.SCORES_FILE).read_bytes() == before
+    with pytest.raises(RuntimeError, match="scores"):
+        mps.main(args_for(tmp_path, "manifest"))
+
+
+def test_scores_refuse_an_unpinned_file_and_drop_a_protein_scored_twice(tmp_path, monkeypatch):
+    out, _ = run(tmp_path, stages="pae,models,residues,features,variants")
+    assert not (out / psc.SCORES_FILE).exists()
+    # a second reference residue at one position of Q00001, as the real file has for some proteins
+    twice = write_alphamissense(tmp_path, extra=[f"Q00001\tT1{alt}\t0.5\tambiguous" for alt in mps.AA if alt != "T"])
+    with pytest.raises(ValueError, match="pinned"):
+        mps.main(args_for(tmp_path, "scores"))
+    assert not (out / psc.SCORES_FILE).exists() and not (out / (psc.SCORES_FILE + ".tbi")).exists()
+    assert not (out.parent / "_work" / "scores.json").exists()
+    monkeypatch.setitem(mps.SCORE_SOURCES["alphamissense"], "files", twice)
+    mps.main(args_for(tmp_path, "scores"))
+    stats = json.loads((out.parent / "_work" / "scores.json").read_text())
+    assert stats["drops"]["alphamissense.proteins_substitution_scored_twice"] == 1
+    assert stats["drops"]["alphamissense.proteins_reference_residue_differs"] == 1  # still only Q00006
+    s = frame(out, psc.SCORES_FILE, psc.SCORE_COLUMNS)
+    assert set(s[s["accession"] == "Q00001"]["predictor"]) == {"esm1b"}
+
+
+def score_index(seqs):
+    accs = list(seqs)
+    return mps.ScoreIndex(types.SimpleNamespace(
+        models=pd.DataFrame({"uniprot_id": accs}), sequence=seqs, isoform={a: a for a in accs},
+        pairs=pd.DataFrame({"accession": accs})))
+
+
+def score_all(table, acc, seq, score):
+    """every substitution of every position of `seq`, scored by score(position, alt)."""
+    subs = [(pos, ref, alt) for pos, ref in enumerate(seq, 1) for alt in mps.AA if alt != ref]
+    table.add([acc], np.zeros(len(subs), dtype=np.int64), np.array([p for p, _, _ in subs]),
+              np.array([ord(r) for _, r, _ in subs], dtype=np.uint8),
+              np.array([mps.AA.index(a) for _, _, a in subs]), np.array([score(p, a) for p, _, a in subs]))
+    return table.close()
+
+
+def test_mean_snv_counts_a_substitution_once_however_many_variants_give_it(tmp_path):
+    rel = score_index({"P1": "MKT"})
+    # two variants give K2R, one gives K2E
+    rows = [(1, 10, "A", "G", "1:10:A:G", "P1", "G1", "GENE", 2, "K", "R", "AF-P1-F1-model_v6", 2, ""),
+            (1, 11, "A", "C", "1:11:A:C", "P1", "G1", "GENE", 2, "K", "R", "AF-P1-F1-model_v6", 2, ""),
+            (1, 12, "A", "G", "1:12:A:G", "P1", "G1", "GENE", 2, "K", "E", "AF-P1-F1-model_v6", 2, "")]
+    path = tmp_path / psc.VARIANTS_FILE
+    path.write_bytes(gzip.compress((psc.header_line(psc.VARIANT_COLUMNS)
+                                    + "".join("\t".join(map(str, r)) + "\n" for r in rows)).encode()))
+    snv, stats = mps.snv_substitutions(path, rel)
+    assert stats == {"variant_rows": 3, "variant_rows_not_on_the_sequence": 0, "snv_substitutions": 2}
+    _, _, mean_snv, n_snv, *_ = score_all(mps.ScoreTable(rel, snv), "P1", "MKT",
+                                          lambda p, a: {(2, "R"): 0.9, (2, "E"): 0.3}.get((p, a), 0.5))
+    assert (mean_snv[1], n_snv[1]) == (0.6, 2)  # over the three variant rows it would be 0.7
+    assert n_snv.tolist() == [0, 2, 0]
+
+
+def test_percentile_ranks_the_mean_as_written(tmp_path):
+    rel = score_index({"P1": "MKTA"})
+    snv = np.zeros((rel.n, len(mps.AA)), dtype=bool)
+    a, c = mps.AA.index("A"), mps.AA.index("C")
+    snv[0, [a, c]] = snv[1, [a, c]] = snv[2, a] = True
+    # positions 1 and 2 differ only past the decimals written, so they are one value and one rank
+    scores = {(1, "A"): 0.1, (1, "C"): 0.100001, (2, "A"): 0.1, (2, "C"): 0.1, (3, "A"): 0.5}
+    _, _, mean_snv, _, percentile, *_ = score_all(mps.ScoreTable(rel, snv), "P1", "MKTA",
+                                                  lambda p, alt: scores.get((p, alt), 0.7))
+    assert mean_snv[:3].tolist() == [0.1, 0.1, 0.5]
+    assert np.round(percentile[:3], psc.SCORE_PERCENTILE_DECIMALS).tolist() == psc.score_percentiles([0.1, 0.1, 0.5])
+    assert percentile[0] == percentile[1] and np.isnan(percentile[3])
+
+
+def test_written_percentiles_reach_the_ends_of_the_scale():
+    # the mid-rank is strictly inside (0, 100); three decimals are not
+    p = psc.score_percentiles(list(range(100_001)))
+    assert (p[0], p[-1]) == (0.0, 100.0) and 0 < 100 * 0.5 / 100_001
+
+
+def test_manifest_refuses_scores_from_another_variant_map(fresh, tmp_path):
+    man = json.loads((fresh / psc.MANIFEST_FILE).read_text())
+    assert mps.SCORES_VARIANTS_KEY not in man["counts"]["scores"]
+    path = fresh.parent / "_work" / "scores.json"
+    stats = json.loads(path.read_text())
+    assert stats[mps.SCORES_VARIANTS_KEY] == man[psc.MANIFEST_OBJECTS][psc.VARIANTS_FILE][psc.OBJECT_SHA256]
+    mps.main(args_for(tmp_path, "manifest"))  # up to date: rebuilt without complaint
+    for change in ({mps.SCORES_VARIANTS_KEY: "0" * 64}, None):
+        edited = {**stats, **change} if change else {k: v for k, v in stats.items() if k != mps.SCORES_VARIANTS_KEY}
+        path.write_text(json.dumps(edited))
+        with pytest.raises(RuntimeError, match="rerun --stages scores,manifest"):
+            mps.main(args_for(tmp_path, "manifest"))
+
+
+def test_scores_preconditions_are_checked_before_any_stage(tmp_path):
+    make_bundle(tmp_path)
+    (tmp_path / "ted_meta.json").write_text("{}")
+    a = args_for(tmp_path)
+    i = a.index("--predictors")
+    with pytest.raises(ValueError, match="--predictors"):
+        mps.main(a[:i] + a[i + 2:])
+    (tmp_path / "predictors" / "esm1b" / "ALL_hum_isoforms_ESM1b_LLR.zip").unlink()
+    with pytest.raises(ValueError, match="ALL_hum_isoforms_ESM1b_LLR.zip"):
+        mps.main(a)
+    out = tmp_path / "build" / REL
+    assert not (out / psc.PAE_DIR).exists() and not (out / psc.MODELS_FILE).exists()
+    mps.main(args_for(tmp_path, "pae,models"))  # stages that do not need the predictors still run
+
+
+def test_scores_need_the_variant_stage(tmp_path):
+    run(tmp_path, stages="pae,models,residues,features")
+    with pytest.raises(RuntimeError, match="variants"):
+        mps.main(args_for(tmp_path, "scores"))
 
 
 def test_tabix_answers(release):
@@ -578,7 +837,8 @@ def test_pointer_moves_only_with_the_flag(fresh, monkeypatch):
 
 def test_release_id_validated(fresh, tmp_path, monkeypatch):
     FakeBucket(monkeypatch)
-    for bad in ("../x", "2026-01-01-000000/..", "a/b", "2026-1-1-0"):
+    for bad in ("../x", "2026-01-01-000000/..", "a/b", "2026-1-1-0", "2026-01-01-000000\n",
+                "\u0662\u0660\u0662\u0666-01-01-000000", "2026-01-01-00000\u0660"):
         with pytest.raises(ValueError):
             psc.check_release(bad)
         with pytest.raises(ValueError):
