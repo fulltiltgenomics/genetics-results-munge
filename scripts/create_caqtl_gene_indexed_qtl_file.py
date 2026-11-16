@@ -26,6 +26,8 @@ import argparse
 
 import polars as pl
 
+from sumstat_utils import chrom_code_expr
+
 CS_SCHEMA = {
     "#dataset": pl.Utf8,
     "data_type": pl.Utf8,
@@ -79,12 +81,7 @@ def gene_coordinates(gene_mapping_file: str) -> pl.LazyFrame:
             },
         )
         .with_columns(
-            pl.col("chrom")
-            .str.replace(r"^X$", "23")
-            .str.replace(r"^Y$", "24")
-            .str.replace(r"^M$", "26")
-            .cast(pl.Int8)
-            .alias("trait_chr")
+            chrom_code_expr("chrom").cast(pl.Int8).alias("trait_chr")
         )
         .filter(pl.col("trait_chr").lt(24))
         .rename({"gene_start": "trait_start", "gene_end": "trait_end"})

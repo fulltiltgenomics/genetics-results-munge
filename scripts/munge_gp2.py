@@ -2,20 +2,18 @@
 """Munge GP2 Parkinson's GWAS summary statistics (build 38) and create AF-AF plot against gnomAD."""
 
 import argparse
-import subprocess
 import warnings
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
 from sumstat_utils import (
-    GNOMAD_AF_COLS, GNOMAD_KEEP_COLS,
-    read_gnomad_filtered, write_sumstat_output,
+    chrom_code_expr, create_af_af_plot_by_type, gnomad_plot_parser, read_gnomad_filtered,
+    save_gnomad_by_variant_key, write_sumstat_output,
 )
 
 
@@ -23,15 +21,10 @@ GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bg
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Path to GP2 .txt.gz file")
-    parser.add_argument("--gnomad", default=GNOMAD_PATH, help="Path to gnomAD bgz file")
-    parser.add_argument("--af-col", default="AF", choices=GNOMAD_AF_COLS, help="gnomAD AF column for plot (default: AF)")
-    parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
-    parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
-    parser.add_argument("--gnomad-source", default="g", choices=["g", "e"], help="Use gnomAD genomes (g) or exomes (e) (default: g)")
-    parser.add_argument("--plot", help="Output AF-AF plot PNG path (default: derived from input)")
-    return parser.parse_args()
+    return gnomad_plot_parser(
+        __doc__, "Path to GP2 .txt.gz file",
+        gnomad_default=GNOMAD_PATH, gnomad_help="Path to gnomAD bgz file", af_plot_flag=False,
+    ).parse_args()
 
 
 def read_sumstats(filepath: str) -> pl.DataFrame:
@@ -53,9 +46,9 @@ def read_sumstats(filepath: str) -> pl.DataFrame:
         ignore_errors=True,
     )
 
-    # map X→23 and convert chr to int
+    # a contig with no numeric code casts to null and is dropped
     df = df.with_columns(
-        pl.col("chromosome").str.replace("X", "23").cast(pl.Int32, strict=False),
+        chrom_code_expr("chromosome").cast(pl.Int32, strict=False).alias("chromosome"),
     )
     df = df.filter(pl.col("chromosome").is_not_null())
 
@@ -83,58 +76,6 @@ def read_sumstats(filepath: str) -> pl.DataFrame:
         )
 
     return df
-
-
-def stream_gnomad(gnomad_path: str, variant_keys: set[str], save_path: str) -> pl.DataFrame:
-    """Stream gnomAD, keeping rows matching variant_keys (chr:pos:ref:alt)."""
-    proc = subprocess.Popen(
-        f"zcat '{gnomad_path}'",
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=4_000_000,
-    )
-
-    header_line = proc.stdout.readline().strip()
-    header = header_line.split("\t")
-    col_idx = {}
-    for col in GNOMAD_KEEP_COLS:
-        if col in header:
-            col_idx[col] = header.index(col)
-
-    chr_idx = col_idx["#chr"]
-    pos_idx = col_idx["pos"]
-    ref_idx = col_idx["ref"]
-    alt_idx = col_idx["alt"]
-
-    out_header = "\t".join(col_idx.keys())
-    outf = open(save_path, "w")
-    outf.write(out_header + "\n")
-
-    n_lines = 0
-    n_matches = 0
-    for line in proc.stdout:
-        n_lines += 1
-        if n_lines % 10_000_000 == 0:
-            print(f"  gnomAD: {n_lines / 1e6:.0f}M lines scanned, {n_matches} matches", flush=True)
-
-        fields = line.split("\t")
-        if len(fields) <= alt_idx:
-            continue
-
-        key = f"{fields[chr_idx]}:{fields[pos_idx]}:{fields[ref_idx]}:{fields[alt_idx]}"
-        if key in variant_keys:
-            out_fields = [fields[idx].rstrip("\n") for idx in col_idx.values()]
-            outf.write("\t".join(out_fields) + "\n")
-            n_matches += 1
-
-    outf.close()
-    proc.wait()
-    print(f"  gnomAD: done. {n_lines / 1e6:.1f}M lines scanned, {n_matches} matches", flush=True)
-    print(f"  saved filtered gnomAD to {save_path}")
-
-    return read_gnomad_filtered(save_path)
 
 
 def join_with_gnomad(
@@ -201,46 +142,6 @@ def join_with_gnomad(
     return result
 
 
-def create_af_af_plot(
-    df: pl.DataFrame,
-    af_col: str,
-    output_path: str,
-    input_name: str,
-) -> None:
-    """Create AF-AF scatter plot with separate panels for SNPs and indels."""
-    snps = df.filter(pl.col("is_snp"))
-    indels = df.filter(~pl.col("is_snp"))
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
-
-    for ax, subset, label in [(axes[0], snps, "SNPs"), (axes[1], indels, "Indels")]:
-        sample_n = min(200_000, subset.height)
-        if sample_n == 0:
-            ax.set_title(f"{label}: no data")
-            continue
-        sample = subset.sample(n=sample_n, seed=42)
-
-        ax.scatter(
-            sample["af"].to_numpy(),
-            sample[af_col].to_numpy(),
-            alpha=0.3, s=1, c="blue",
-            rasterized=True,
-        )
-        ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=0.5)
-        ax.set_xlabel("GP2 alt AF (after flip)")
-        ax.set_ylabel(f"gnomAD {af_col}")
-        ax.set_title(f"{label} (n={subset.height:,})")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_aspect("equal")
-
-    fig.suptitle(f"AF-AF: {input_name}", fontsize=14)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  plot saved to {output_path}")
-
-
 def _prepare_output(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns(
         pl.col("beta").map_elements(lambda x: f"{x:.3e}" if x is not None else None, return_dtype=pl.Utf8).alias("beta"),
@@ -293,7 +194,8 @@ def main():
         print(f"  {len(keys)} unique variant keys")
 
         print(f"Streaming gnomAD from {args.gnomad}...")
-        gnomad = stream_gnomad(args.gnomad, keys, gnomad_save_path)
+        save_gnomad_by_variant_key(args.gnomad, keys, gnomad_save_path)
+        gnomad = read_gnomad_filtered(gnomad_save_path)
 
     print(f"  {gnomad.height} gnomAD rows loaded")
 
@@ -301,7 +203,7 @@ def main():
     df = join_with_gnomad(df, gnomad, args.af_col, args.gnomad_source)
 
     print("Creating AF-AF plot...")
-    create_af_af_plot(df, args.af_col, plot_path, input_stem)
+    create_af_af_plot_by_type(df, args.af_col, plot_path, input_stem, "GP2 alt AF (after flip)")
 
     print("Writing output...")
     write_sumstat_output(_prepare_output(df), output_path)

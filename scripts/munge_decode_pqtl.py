@@ -52,7 +52,7 @@ Output
 
     #chr pos ref alt mlog10p beta se
 
-with `X` mapped to `23`, `mlog10p` rounded to 4 decimals and `beta`/`se` formatted `.3e`.
+with the chromosome coded (`X` is `23`), `mlog10p` rounded to 4 decimals and `beta`/`se` formatted `.3e`.
 No `mlog10p > 4` companion is written: autoreporting reads the full file, and the API
 does not serve these.
 
@@ -110,7 +110,7 @@ from pathlib import Path
 
 import polars as pl
 
-from sumstat_utils import fetch_gs, write_bgzip
+from sumstat_utils import chrom_code_expr, fetch_gs, write_bgzip
 
 INPUT_DEFAULT = "gs://finngen-commons/decode/deCODE_pQTLs_NatGen2021_aligned_p0.005.tsv.gz"
 CACHE_DIR_DEFAULT = "/mnt/disks/data/decode"
@@ -211,10 +211,10 @@ def split_input(input_path: Path, split_dir: Path, buckets: int, jobs: int, keep
 
 
 def munge_aptamer(df: pl.DataFrame, out: Path) -> dict:
-    """Dedup, map X→23, format and write one aptamer's rows."""
+    """Dedup, code the chromosome, format and write one aptamer's rows."""
     n_in = df.height
     df = df.with_columns(
-        pl.col("chr").str.replace(r"(?i)^chr", "").str.replace(r"^X$", "23").cast(pl.Int32, strict=False).alias("#chr")
+        chrom_code_expr("chr").cast(pl.Int32, strict=False).alias("#chr")
     )
     n_null_chr = df["#chr"].null_count()
     df = (

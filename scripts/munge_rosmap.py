@@ -55,7 +55,7 @@ convention (cf. munge_hpa.py `#dataset`, sumstats `#chr`): it makes the header a
 so `tabix -p bed` skips it while the logical column name stays `chrom`.
 
 Field rules for ROSMAP / Xiong 2023 (see task genetics-results-suite-bzl.18):
-  chrom            NUMERIC hg38, no "chr" prefix (1..22, X->23, Y->24, M/MT->25); REQUIRED by
+  chrom            NUMERIC hg38, no "chr" prefix (1..22, X->23, Y->24, M/MT->26); REQUIRED by
                    the tabix contract.
   start,end        peak interval, hg38, BED 0-based half-open (kept verbatim; no liftOver).
   peak_id          f"{chrom}-{start}-{end}" with the numeric chrom (e.g. "23-100-200").
@@ -96,7 +96,15 @@ from pathlib import Path
 
 import polars as pl
 
-from peak_utils import filter_canonical, numeric_chrom_expr, upload_to_gcs, write_open_chromatin
+from peak_utils import (
+    OPEN_CHROMATIN_COLUMNS,
+    load_gene_links,
+    normalize_coords,
+    open_chromatin_gcs_paths,
+    peak_key,
+    stage_or_skip,
+    write_open_chromatin,
+)
 
 DATASET = "rosmap_open_chromatin"
 RESOURCE = "rosmap_brain"
@@ -107,17 +115,9 @@ LIFE_STAGE = "adult"
 ASSAY = "snATAC"
 
 # canonical open_chromatin column order; first header token is comment-prefixed for tabix
-OUTPUT_COLUMNS = [
-    "chrom", "start", "end", "peak_id", "dataset", "cell_type", "tissue", "life_stage",
-    "condition", "assay", "score", "score_type", "n_cells", "cell_ontology_id",
-    "uberon_id", "target_gene", "target_gene_id", "version",
-]
+OUTPUT_COLUMNS = OPEN_CHROMATIN_COLUMNS
 
-GCS_FINNGEN = f"gs://finngen-commons/results_api_data/open_chromatin/{RESOURCE}/{DATASET}.tsv.gz"
-GCS_DALY = f"gs://daly-genetics-results/open_chromatin/{RESOURCE}/{DATASET}.tsv.gz"
-
-# "chr1:1000-2000", "chr1-1000-2000", "chr1_1000_2000"; "chr" prefix optional, normalized on.
-_ID_RE = re.compile(r"^(?:chr)?([^:_\-]+)[:_\-](\d+)[_\-](\d+)$")
+GCS_FINNGEN, GCS_DALY = open_chromatin_gcs_paths(RESOURCE, DATASET)
 
 # bed-ish suffixes stripped when a cell-type label defaults to the filename stem
 _BED_SUFFIXES = (
@@ -178,32 +178,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
-    """Parse chrom/start/end from a single id column like chr1:1000-2000 (chrom -> numeric)."""
-    parsed = df.select(
-        pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")
-    ).unnest("_g")
-    return filter_canonical(df.with_columns(
-        numeric_chrom_expr(parsed["1"]).alias("chrom"),
-        parsed["2"].cast(pl.Int64).alias("start"),
-        parsed["3"].cast(pl.Int64).alias("end"),
-    ))
-
-
-def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
-    """Rename explicit coordinate columns to chrom/start/end and enforce numeric chrom + int coords."""
-    df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return filter_canonical(df.with_columns(
-        numeric_chrom_expr().alias("chrom"),
-        pl.col("start").cast(pl.Int64),
-        pl.col("end").cast(pl.Int64),
-    ))
-
-
-def _peak_key() -> pl.Expr:
-    return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
-
-
 def _normalize_condition(col: pl.Expr) -> pl.Expr:
     """Map free-text condition labels to the canonical {AD, control, unknown} axis."""
     c = col.cast(pl.Utf8).str.to_lowercase().str.strip_chars()
@@ -258,7 +232,7 @@ def load_peak_file(path: str, args: argparse.Namespace) -> pl.DataFrame:
     celltype_c = cols[args.celltype_idx] if args.celltype_idx is not None else None
     condition_c = cols[args.condition_idx] if args.condition_idx is not None else None
 
-    df = _normalize_coords(df, chrom_c, start_c, end_c)
+    df = normalize_coords(df, chrom_c, start_c, end_c)
 
     if score_c is not None:
         df = df.with_columns(pl.col(score_c).cast(pl.Float64, strict=False).alias("score"))
@@ -294,57 +268,12 @@ def load_peaks(args: argparse.Namespace) -> pl.DataFrame:
     return long
 
 
-def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
-    """Read peak->gene links and aggregate to one comma-joined gene list per peak key.
-
-    Symbol and id are paired JOINTLY (never independently sorted): a (symbol, id) struct is built
-    per link, deduped and sorted as a unit, so the i-th target_gene token always corresponds to
-    the i-th target_gene_id token.
-    """
-    df = pl.read_csv(args.links, separator="\t", infer_schema_length=10_000)
-    if args.links_id_col:
-        df = _coords_from_id(df, args.links_id_col)
-    else:
-        df = _normalize_coords(df, args.links_chrom_col, args.links_start_col, args.links_end_col)
-
-    df = df.with_columns(_peak_key().alias("_key"))
-    gene = pl.col(args.links_gene_col).cast(pl.Utf8) if args.links_gene_col in df.columns else pl.lit(None, dtype=pl.Utf8)
-    geneid = pl.col(args.links_geneid_col).cast(pl.Utf8) if args.links_geneid_col in df.columns else pl.lit(None, dtype=pl.Utf8)
-    # normalize nulls to empty strings so a missing symbol or id still keeps its pair and emits an
-    # empty token on the missing side, keeping the two comma-joined lists aligned
-    df = df.with_columns(
-        gene.fill_null("").alias("_gene"),
-        geneid.fill_null("").alias("_geneid"),
-    )
-    agg = (
-        df.group_by("_key")
-        .agg(pl.struct("_gene", "_geneid").unique().sort().alias("_pairs"))
-        .with_columns(
-            pl.col("_pairs").list.eval(pl.element().struct.field("_gene")).list.join(",").alias("target_gene"),
-            pl.col("_pairs").list.eval(pl.element().struct.field("_geneid")).list.join(",").alias("target_gene_id"),
-        )
-        .drop("_pairs")
-    )
-    # empty-cell -> NA convention: a joined list with no real token (only commas/whitespace, e.g.
-    # when the source provides gene symbols but no Ensembl ids) becomes NA, not "" / "," / ",,".
-    # applied symmetrically; rows that DO have real tokens keep their positional pairing intact.
-    return agg.with_columns(
-        *[
-            pl.when(pl.col(c).str.replace_all(r"[,\s]", "").str.len_chars() == 0)
-            .then(pl.lit(None, dtype=pl.Utf8))
-            .otherwise(pl.col(c))
-            .alias(c)
-            for c in ("target_gene", "target_gene_id")
-        ]
-    )
-
-
 def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     """Assemble the 18 canonical columns in order from the long (peak, cell_type) table."""
     score_type = args.score_type or ("score" if args.score_idx is not None else "presence")
 
     df = long.with_columns(
-        _peak_key().alias("peak_id"),
+        peak_key().alias("peak_id"),
         _normalize_condition(pl.col("_condition_raw")).alias("condition"),
     )
     # presence semantics: never emit a numeric score under a presence score_type
@@ -352,8 +281,8 @@ def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
         df = df.with_columns(pl.lit(None, dtype=pl.Float64).alias("score"))
 
     if args.links:
-        links = load_gene_links(args)
-        df = df.with_columns(_peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
+        links = load_gene_links(args.links, args)
+        df = df.with_columns(peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
     else:
         df = df.with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("target_gene"),
@@ -534,12 +463,7 @@ def main() -> None:
     write_open_chromatin(out, output_path, OUTPUT_COLUMNS)
 
 
-    if args.stage:
-        print("Staging to GCS (both buckets) ...")
-        upload_to_gcs(output_path, args.gcs_finngen)
-        upload_to_gcs(output_path, args.gcs_daly)
-    else:
-        print("  --stage not set: skipping GCS upload")
+    stage_or_skip(output_path, args)
     print("Done.")
 
 

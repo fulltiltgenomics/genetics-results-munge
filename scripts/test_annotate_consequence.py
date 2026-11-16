@@ -15,12 +15,12 @@ from pathlib import Path
 import pytest
 
 import annotate_consequence
+from create_caqtl_gene_indexed_qtl_file import CS_SCHEMA, OUTPUT_COLUMNS as QTL
 
 SCRIPT = Path(annotate_consequence.__file__)
-COMBINED = ["#dataset", "data_type", "trait", "trait_original", "cell_type", "chr", "pos", "ref", "alt",
-            "mlog10p", "beta", "se", "pip", "cs_id", "cs_size", "cs_min_r2", "aaf", "most_severe",
-            "gene_most_severe"]
-QTL = COMBINED + ["trait_chr", "trait_start", "trait_end"]
+# the two layouts annotate_consequence.py is run on: the combined credible set file and its
+# gene-indexed QTL extension
+COMBINED = list(CS_SCHEMA)
 CONS_COLUMNS = ["#chr", "pos", "ref", "alt", "most_severe", "gene_most_severe"]
 CONS = [
     ["1", "99", "A", "C", "upstream_gene_variant", "NEIGHBOUR"],

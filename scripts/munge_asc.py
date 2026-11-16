@@ -57,13 +57,11 @@ Usage:
 """
 
 import argparse
-import resource
-from pathlib import Path
 
 import polars as pl
 
-from munge_ibd_exome import read_gencode
-from sumstat_utils import write_exome_output
+from exome_utils import run_gene_and_variant_munge
+from sumstat_utils import chrom_code_expr, write_exome_output
 
 DATASET = "ASC2"
 TRAIT = "ASD"
@@ -203,9 +201,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
         raise SystemExit("hgvsc is no longer all-NA; stop dropping it")
 
     df = df.with_columns(
-        pl.col("locus").str.split(":").list.first().str.replace(r"(?i)^chr", "")
-            .str.replace(r"^X$", "23").str.replace(r"^Y$", "24").str.replace(r"^MT?$", "26")
-            .cast(pl.Int32, strict=False).alias("chr"),
+        chrom_code_expr(pl.col("locus").str.split(":").list.first()).cast(pl.Int32, strict=False).alias("chr"),
         pl.col("locus").str.split(":").list.last().cast(pl.Int64).alias("pos"),
         pl.col("alleles").str.strip_chars("[]").str.replace_all('"', "").str.split(",").alias("allele_list"),
     ).with_columns(
@@ -238,23 +234,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
 
 
 def main() -> None:
-    args = parse_args()
-    max_bytes = args.max_memory_gb * 1024 ** 3
-    resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
-
-    if not args.gene_input and not args.variant_input:
-        raise SystemExit("at least one of --gene-input or --variant-input is required")
-    output_dir = args.output_dir or str(Path(args.gene_input or args.variant_input).parent)
-
-    print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
-    print(f"  {gencode.height} genes")
-
-    if args.gene_input:
-        process_gene_results(args.gene_input, gencode, output_dir)
-    if args.variant_input:
-        process_variant_results(args.variant_input, gencode, output_dir)
-    print("\nDone.")
+    run_gene_and_variant_munge(parse_args(), process_gene_results, process_variant_results)
 
 
 if __name__ == "__main__":

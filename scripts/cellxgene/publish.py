@@ -83,7 +83,6 @@ the inputs directly, which is what makes the marker panel take seconds.
 """
 import argparse
 import datetime
-import hashlib
 import json
 import os
 import shutil
@@ -102,6 +101,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 import aggregate  # noqa: E402
 from peak_utils import TabixIndex  # noqa: E402
+from sumstat_utils import sha256  # noqa: E402
 
 RELEASE_FORMAT_VERSION = 1
 BLOCK_GENES = 500
@@ -134,14 +134,6 @@ DATASET_COLUMNS = ["dataset_key", "dataset_id", "dataset_version_id", "collectio
 
 
 # ---------------------------------------------------------------- inputs
-
-def sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for b in iter(lambda: fh.read(1 << 20), b""):
-            h.update(b)
-    return h.hexdigest()
-
 
 # GCS goes through google-cloud-storage, never the gcloud CLI: the worker image the driver runs
 # this in has the library and no gcloud binary

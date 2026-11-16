@@ -12,14 +12,13 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
 from sumstat_utils import (
-    GNOMAD_AF_COLS, GNOMAD_DEFAULT, GNOMAD_KEEP_COLS,
-    build_rsid_set, write_exome_output,
+    GNOMAD_AF_COLS, GNOMAD_KEEP_COLS,
+    build_rsid_set, chrom_code_expr, create_af_af_plot, gnomad_plot_parser, write_exome_output,
 )
 
 # gnomAD columns to keep: standard + annotation
@@ -28,15 +27,7 @@ GNOMAD_COLS = GNOMAD_KEEP_COLS + GNOMAD_ANNOT_COLS
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Path to Data-S1.tab or Data-S3.tab")
-    parser.add_argument("--gnomad", default=GNOMAD_DEFAULT, help="GCS path to gnomAD bgz file")
-    parser.add_argument("--af-col", default="AF", choices=GNOMAD_AF_COLS, help="gnomAD AF column for plot (default: AF)")
-    parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
-    parser.add_argument("--gnomad-af-plot", action="store_true", help="Stream gnomAD and create AF-AF plot")
-    parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
-    parser.add_argument("--gnomad-source", default="g", choices=["g", "e"], help="Use gnomAD genomes (g) or exomes (e) (default: g)")
-    parser.add_argument("--plot", help="Output AF-AF plot PNG path (default: derived from input)")
+    parser = gnomad_plot_parser(__doc__, "Path to Data-S1.tab or Data-S3.tab")
     parser.add_argument("--norm-mapping", help="Normalization mapping TSV from normalize_asmqtl.py")
     return parser.parse_args()
 
@@ -167,10 +158,9 @@ def read_asmqtl(filepath: str) -> tuple[pl.DataFrame, str]:
         },
     )
 
-    # chr: strip "chr" prefix, X->23, cast to Int32
     # numeric columns: read as Float64 (handles scientific notation) then cast to Int32
     df = df.with_columns(
-        pl.col("Chrom").str.replace("^chr", "").str.replace("^X$", "23").cast(pl.Int32, strict=False).alias("#chr"),
+        chrom_code_expr("Chrom").cast(pl.Int32, strict=False).alias("#chr"),
         pl.col("SeqVariant_start").cast(pl.Int32).alias("SeqVariant_start"),
         pl.col("SeqVariant_end").cast(pl.Int32).alias("SeqVariant_end"),
         pl.col("n_haplotypes").cast(pl.Int32).alias("n_haplotypes"),
@@ -277,31 +267,6 @@ def join_gnomad(
     return result
 
 
-def create_af_af_plot(
-    df: pl.DataFrame, af_col: str, output_path: str, input_name: str,
-) -> None:
-    """Create AF-AF scatter plot: study alt AF vs gnomAD alt AF."""
-    sample_n = min(200_000, df.height)
-    sample = df.sample(n=sample_n, seed=42)
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.scatter(
-        sample["af"].to_numpy(),
-        sample[af_col].to_numpy(),
-        alpha=0.3, s=1, c="blue", rasterized=True,
-    )
-    ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=0.5)
-    ax.set_xlabel("ASM-QTL alt AF (after flip)")
-    ax.set_ylabel(f"gnomAD {af_col}")
-    ax.set_title(f"AF-AF: {input_name} (n={df.height:,})")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect("equal")
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  plot saved to {output_path}")
-
-
 def _prepare_output(df: pl.DataFrame) -> pl.DataFrame:
     """Format and select output columns."""
     # ensure annotation columns exist (NA if no gnomAD match)
@@ -342,7 +307,7 @@ def main():
                            schema_overrides={"pos": pl.Int32, "norm_pos": pl.Int32})
         # chrom in mapping has "chr" prefix, #chr in df is Int32
         norm = norm.with_columns(
-            pl.col("chrom").str.replace("^chr", "").str.replace("^X$", "23").cast(pl.Int32).alias("#chr"),
+            chrom_code_expr("chrom").cast(pl.Int32).alias("#chr"),
         )
         print(f"  {norm.height} indels to normalize")
         n_before = df.height
@@ -376,7 +341,7 @@ def main():
         joined = join_gnomad(deduped, gnomad, args.af_col, args.gnomad_source)
 
         print("Creating AF-AF plot...")
-        create_af_af_plot(joined, args.af_col, plot_path, input_stem)
+        create_af_af_plot(joined, args.af_col, plot_path, input_stem, "ASM-QTL alt AF (after flip)")
 
         # extract variant-level annotations from gnomAD match
         annot = joined.select(

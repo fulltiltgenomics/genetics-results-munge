@@ -104,7 +104,8 @@ import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
-CHR_MAP = {"X": "23"}
+from sumstat_utils import chrom_code_expr, sci_expr, tabix_header
+
 
 ALPHA_COLUMNS = [f"alpha{i}" for i in range(1, 11)]
 
@@ -185,45 +186,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _sci(expr: pl.Expr) -> pl.Expr:
-    """Format a float expression as %.3e in one numpy call rather than per row, keeping nulls null."""
-    formatted = expr.fill_null(0.0).map_batches(
-        lambda s: pl.Series(np.char.mod("%.3e", s.to_numpy())), return_dtype=pl.String
-    )
-    return pl.when(expr.is_null()).then(None).otherwise(formatted)
-
-
 def read_finemapping(path: str) -> pl.DataFrame:
-    """Read the credible set variants, mapping X to 23 and picking each set's own alpha.
+    """Read the credible set variants, coding the chromosome and picking each set's own alpha.
 
     cs_index names which of SuSiE's L single effects this credible set is ("L1".."L10"), so the
     variant's weight within it is the correspondingly numbered alpha column. Everything after
     this point uses that, not the file's overall `pip`.
     """
     df = pl.read_parquet(path, columns=INPUT_COLUMNS).rename({"variant": "variant_key"}).with_columns(
-        pl.col("chromosome").replace(CHR_MAP).cast(pl.Int32, strict=False).alias("chr"),
+        chrom_code_expr("chromosome").cast(pl.Int32, strict=False).alias("chr"),
         pl.col("position").cast(pl.Int64).alias("pos"),
         pl.col("cs_index").str.strip_prefix("L").cast(pl.Int32).alias("cs_number"),
     )
 
     n_bad_chr = df.filter(pl.col("chr").is_null()).height
     if n_bad_chr:
-        sys.exit(f"{n_bad_chr} rows have a chromosome that is neither an autosome nor X")
+        sys.exit(f"{n_bad_chr} rows have a chromosome with no numeric code")
 
     return df.with_columns(
         pl.concat_list(ALPHA_COLUMNS).list.get(pl.col("cs_number") - 1).alias("alpha_cs"),
         pl.concat_str("region", "cs_number", separator="_").alias("cs_id"),
         pl.concat_str("chr", "pos", "ref", "alt", separator=":").alias("variant_id"),
     ).drop(ALPHA_COLUMNS)
-
-
-def annotation_header(path: str) -> list[str]:
-    return (
-        subprocess.run(["tabix", "-H", path], capture_output=True, text=True, check=True)
-        .stdout.strip()
-        .lstrip("#")
-        .split("\t")
-    )
 
 
 def read_annotation(path: str, variants: pl.DataFrame) -> pl.DataFrame:
@@ -244,7 +228,7 @@ def read_annotation(path: str, variants: pl.DataFrame) -> pl.DataFrame:
             io.BytesIO(proc.stdout.encode()),
             separator="\t",
             has_header=False,
-            new_columns=annotation_header(path),
+            new_columns=tabix_header(path),
             null_values=["NA"],
             schema_overrides={
                 "variant": pl.Utf8,
@@ -445,9 +429,9 @@ def main() -> None:
         pl.col("molecular_trait_id").alias("trait"),
         pl.col("molecular_trait_id").alias("trait_original"),
         pl.lit(args.cell_type).alias("cell_type"),
-        _sci(pl.col("beta_num")).alias("beta"),
-        _sci(pl.col("se_num")).alias("se"),
-        _sci(pl.col("aaf_num")).alias("aaf"),
+        sci_expr(pl.col("beta_num")).alias("beta"),
+        sci_expr(pl.col("se_num")).alias("se"),
+        sci_expr(pl.col("aaf_num")).alias("aaf"),
         pl.col("alpha_cs").round(4).alias("pip"),
         # region_cs is the house cs_id spelling and repeats across traits by design, so the
         # size has to be counted per trait as well -- over cs_id alone it merges 123,899

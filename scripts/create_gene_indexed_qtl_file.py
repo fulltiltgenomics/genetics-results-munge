@@ -1,5 +1,7 @@
 import polars as pl
 
+from sumstat_utils import chrom_code_expr
+
 
 def merge(
     data_file: str,
@@ -97,12 +99,7 @@ gene_mapping = (
         },
     )
     .with_columns(
-        pl.col("chrom")
-        .str.replace(r"^X$", "23")
-        .str.replace(r"^Y$", "24")
-        .str.replace(r"^M$", "26")
-        .cast(pl.Int8)
-        .alias("trait_chr")
+        chrom_code_expr("chrom").cast(pl.Int8).alias("trait_chr")
     )
     .filter(pl.col("trait_chr").lt(24))
     .rename(

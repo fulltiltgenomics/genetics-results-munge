@@ -14,7 +14,7 @@ Steps, each a subcommand, each streaming or an external sort, so 146M rows fit a
 
   normalize  read the submitted GWAS-SSF file; trim the shared suffix then the shared prefix of
              each allele pair (one base always kept, the position advancing with the prefix),
-             map X to 23, drop other contigs, write and externally sort by chr, pos
+             code the chromosome, drop contigs without a code, write and externally sort by chr, pos
   lookup     one BigQuery query: the normalized rows (a GCS external table) joined to the gnomAD
              table on chr, pos and the allele pair in either orientation, exported back to GCS
              and sorted locally
@@ -56,7 +56,7 @@ from collections import Counter
 from pathlib import Path
 
 from munge_gwas_catalog import OUTPUT_HEADER, BgzipWriter, chromosome_number, mlog10p_from_z
-from sumstat_utils import upload_to_gcs
+from sumstat_utils import CHROM_NAMES, upload_to_gcs
 
 GNOMAD_TABLE = "daly-finngenie.genetics_results.gnomad_variant_annotation"
 ROW_HEADER = "chr\tpos\ta1\ta2\tbeta\tse\teaf\tp\n"
@@ -228,7 +228,7 @@ def orient(args: argparse.Namespace) -> None:
 
     def reference_matches(chrom: int, pos: int, allele: str) -> bool:
         # the whole chromosome is held as one string: 146M rows of pyfaidx seeks would take hours
-        name = "chrX" if chrom == 23 else f"chr{chrom}"
+        name = f"chr{CHROM_NAMES.get(str(chrom), chrom)}"
         if sequence["name"] != name:
             sequence["name"], sequence["seq"] = name, fasta[name][:]
         return sequence["seq"][pos - 1: pos - 1 + len(allele)] == allele

@@ -47,7 +47,7 @@ import polars as pl
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from create_eqtl_catalogue_files import QUANT_DATA_TYPE
-from create_open_targets_files import CHR_MAP, OUTPUT_COLUMNS, _mlog10p, _sci
+from create_open_targets_files import OUTPUT_COLUMNS, credible_set_variants, with_variant_columns
 
 # projectId -> the prefix its studyIds carry and the sub-study name prefix written here
 PROJECTS = {
@@ -179,47 +179,12 @@ def read_gene_names(path: str) -> pl.DataFrame:
 
 def convert_pq_to_df(parquet_path: str, studies: pl.DataFrame) -> pl.DataFrame:
     """Read one credible set parquet file into one row per 95 % credible set variant of a kept study."""
-    df = (
-        pl.read_parquet(parquet_path, columns=PARQUET_COLUMNS)
-        .filter(pl.col("studyId").is_in(studies["studyId"].implode()))
-        .filter(
-            pl.col("finemappingMethod").str.to_lowercase().str.contains("susie", literal=True)
-            & pl.col("locus").is_not_null()
-        )
-        .rename(
-            {
-                "variantId": "lead_variant_id",
-                "pValueMantissa": "cs_p_mantissa",
-                "pValueExponent": "cs_p_exponent",
-            }
-        )
-        .with_row_index("_cs_row")
-        .explode("locus")
-        .unnest("locus")
-        .filter(pl.col("is95CredibleSet"))
-        .rename({"standardError": "se"})
-        .join(studies, on="studyId")
+    kept = pl.read_parquet(parquet_path, columns=PARQUET_COLUMNS).filter(
+        pl.col("studyId").is_in(studies["studyId"].implode())
     )
-    df = df.with_columns(pl.col("variantId").str.split("_").alias("_cpra"))
-    return df.with_columns(
-        pl.col("_cpra").list.get(0).replace(CHR_MAP).cast(pl.Int32, strict=False).alias("chr"),
-        pl.col("_cpra").list.get(1).cast(pl.Int64, strict=False).alias("pos"),
-        pl.col("_cpra").list.get(2).alias("ref"),
-        pl.col("_cpra").list.get(3).alias("alt"),
-        # every QTL credible set variant carries its own p-value in this release; the fallback
-        # is kept so that a release where one does not still gets a lead p-value
-        pl.when(pl.col("pValueMantissa").is_not_null() & pl.col("pValueExponent").is_not_null())
-        .then(_mlog10p(pl.col("pValueMantissa"), pl.col("pValueExponent")))
-        .when(pl.col("variantId") == pl.col("lead_variant_id"))
-        .then(_mlog10p(pl.col("cs_p_mantissa"), pl.col("cs_p_exponent")))
-        .alias("mlog10p"),
-        _sci("beta"),
-        _sci("se"),
-        pl.col("posteriorProbability").round(4).alias("pip"),
-        pl.col("studyLocusId").alias("cs_id"),
-        pl.len().over("_cs_row").cast(pl.Int32).alias("cs_size"),
-        pl.col("purityMinR2").round(4).alias("cs_min_r2"),
-    )
+    # every QTL credible set variant carries its own p-value in this release; the lead variant's
+    # fallback is kept so that a release where one does not still gets a lead p-value
+    return with_variant_columns(credible_set_variants(kept).join(studies, on="studyId"))
 
 
 def append_per_substudy(df: pl.DataFrame, dataset: str, out_dir: str) -> None:

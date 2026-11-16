@@ -64,7 +64,6 @@ Outputs in `--out`: `cell_type_rollup.tsv`, `tissue_rollup.tsv`, `development_st
 import argparse
 import csv
 import datetime
-import hashlib
 import importlib.metadata
 import json
 import os
@@ -72,7 +71,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from sumstat_utils import fetch
+from sumstat_utils import fetch, sha256
 
 HERE = Path(__file__).resolve().parent / "rollup"
 LISTING_URL = "https://api.cellxgene.cziscience.com/curation/v1/datasets"
@@ -158,6 +157,16 @@ def read_pins(path, labels, targets):
     return pins
 
 
+def ancestors(term, parents, memo):
+    """is_a ancestors-or-self of `term`, cached in `memo`, which must not outlive `parents`."""
+    if term not in memo:
+        out = {term}
+        for p in parents.get(term, ()):
+            out |= ancestors(p, parents, memo)
+        memo[term] = out
+    return memo[term]
+
+
 class CellTypeRollup:
     def __init__(self, parents, labels, obsolete, targets, pins):
         self.parents, self.labels, self.obsolete = parents, labels, obsolete
@@ -166,13 +175,7 @@ class CellTypeRollup:
         self._anc = {}
 
     def ancestors(self, term):
-        """is_a ancestors-or-self."""
-        if term not in self._anc:
-            out = {term}
-            for p in self.parents.get(term, ()):
-                out |= self.ancestors(p)
-            self._anc[term] = out
-        return self._anc[term]
+        return ancestors(term, self.parents, self._anc)
 
     def finer_targets(self, term, own=None):
         """Targets other than `own` that `term` is an is_a ancestor-or-self of."""
@@ -237,14 +240,6 @@ def prenatal_stage(term, parser):
     if not ancestors:
         return False, "not_in_ontology"
     return (True, "ancestor") if ancestors & set(PRENATAL_ROOTS) else (False, "none")
-
-
-def sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for b in iter(lambda: f.read(1 << 20), b""):
-            h.update(b)
-    return h.hexdigest()
 
 
 def write_tsv(path, header, rows):

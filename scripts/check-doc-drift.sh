@@ -2,32 +2,10 @@
 # Warns when a commit changes something the docs describe but leaves the doc
 # untouched. Mappings mirror the "Documentation ownership" table in CLAUDE.md.
 #
-# This never blocks. A warning that is occasionally ignored beats a gate that
-# gets bypassed with --no-verify, because a bypassed gate is both absent and
-# assumed present.
+# The rules are this repo's own; `check` and the rest of the mechanism live in
+# scripts/doc-drift-lib.sh, which is the same file in every repo of the suite.
 
-set -u
-
-root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-cd "$root" || exit 0
-
-staged=$(git diff --cached --name-only --diff-filter=ACMRD)
-[ -n "$staged" ] || exit 0
-
-hit() {
-    printf '%s\n' "$staged" | grep -qE "$1"
-}
-
-found=0
-check() {
-    if hit "$1" && ! hit "$2"; then
-        if [ "$found" -eq 0 ]; then
-            printf '\ndoc-drift warning — this commit changes code the docs describe:\n\n' >&2
-            found=1
-        fi
-        printf '  %s\n' "$3" >&2
-    fi
-}
+. "$(dirname "$0")/doc-drift-lib.sh"
 
 DOC_README='^README\.md$'
 
@@ -37,8 +15,8 @@ check '^scripts/munge_[^/]*\.(py|sh)$' "$DOC_README" \
 check '^scripts/create_[^/]*\.(py|sh)$' "$DOC_README" \
     'scripts/create_*.{py,sh} -> README.md (output products, the per-script run instructions and their arguments)'
 
-check '^scripts/(sumstat|peak)_utils\.py$' '^CLAUDE\.md$' \
-    'scripts/{sumstat,peak}_utils.py -> CLAUDE.md (shared helper list, required columns, index mode, tabix and GCS output rules)'
+check '^scripts/(sumstat|peak|exome)_utils\.py$' '^CLAUDE\.md$' \
+    'scripts/{sumstat,peak,exome}_utils.py -> CLAUDE.md (shared helper list, required columns, index mode, tabix and GCS output rules)'
 
 check '^scripts/peak_utils\.py$' "$DOC_README" \
     'scripts/peak_utils.py -> README.md (the open-chromatin dataset entry names it as the peak family shared writer)'
@@ -67,9 +45,4 @@ check '^wdl/(create_pseudo_credible_sets|autoreporting)' '^docs/pseudo-credible-
 check '^scripts/r14_meta_phenotypes\.py$' '^docs/r14-meta-serving\.md$' \
     'scripts/r14_meta_phenotypes.py -> docs/r14-meta-serving.md (which keys are omitted for quantitative traits, the contributing_cohorts naming, header-derived cohort presence and the TSV/header disagreement result)'
 
-if [ "$found" -eq 1 ]; then
-    printf '\n  Update the doc in this commit, or note why it does not apply.\n' >&2
-    printf '  Not blocking. Mappings live in CLAUDE.md > Documentation ownership.\n\n' >&2
-fi
-
-exit 0
+doc_drift_finish

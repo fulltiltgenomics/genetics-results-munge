@@ -113,11 +113,10 @@ def test_output_is_in_numeric_contig_order_whatever_the_input_order(tmp_path):
     assert not list(tmp_path.glob("*.part.*"))
 
 
-def test_mitochondrion_code_is_a_choice_and_scaffolds_are_dropped(tmp_path):
+def test_mitochondrion_is_26_and_scaffolds_are_dropped(tmp_path):
     rows = [row(1, 1, "A", "C", 10, "g"), row("chr1_KI270706v1_random", 5, "A", "C", 10, "g"),
             row("chrM", 9, "A", "C", 10, "g")]
-    assert [r[0] for r in build_ok(tmp_path, rows)[0][1:]] == ["1", "25"]
-    assert [r[0] for r in build_ok(tmp_path, rows, "--mito-code", "26")[0][1:]] == ["1", "26"]
+    assert [r[0] for r in build_ok(tmp_path, rows)[0][1:]] == ["1", "26"]
 
 
 def test_same_source_duplicate_fails(tmp_path):

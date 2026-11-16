@@ -16,8 +16,8 @@ script cannot verify, so they are dropped and counted per code. Indel representa
 the submitter's; `check_sumstat_vs_gnomad.py` measures it against gnomAD afterwards
 instead of this script re-deriving it.
 
-Chromosomes: `chr` prefix stripped case-insensitively, X -> 23; any other non-numeric
-contig (Y, MT, scaffolds) is dropped and counted. mlog10p = -log10(p) rounded to 4
+Chromosomes: coded by `sumstat_utils.chrom_code` (`chr` prefix stripped, X -> 23, Y -> 24,
+M/MT -> 26); a contig still non-numeric after that is dropped and counted. mlog10p = -log10(p) rounded to 4
 decimals, recomputed from beta/se where p underflows to 0.
 
 The file is read line by line and written through bgzip, because a Catalog file can hold
@@ -51,7 +51,7 @@ from pathlib import Path
 
 from scipy.special import log_ndtr
 
-from sumstat_utils import upload_to_gcs
+from sumstat_utils import chrom_code, upload_to_gcs
 
 REQUIRED_COLUMNS = [
     "chromosome", "base_pair_location", "effect_allele", "other_allele",
@@ -110,10 +110,8 @@ class BgzipWriter:
 
 
 def chromosome_number(value: str) -> int | None:
-    name = value[3:] if value[:3].lower() == "chr" else value
-    if name == "X":
-        return 23
-    return int(name) if name.isdigit() else None
+    code = chrom_code(value)
+    return int(code) if code.isdigit() else None
 
 
 def munge(input_path: str, output_path: str, max_rows: int | None) -> dict:

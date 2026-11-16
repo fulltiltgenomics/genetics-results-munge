@@ -9,7 +9,7 @@ upper bound on annotation coverage: a present variant can still lack a consequen
 Usage: measure_gnomad_coverage.py <workdir> <gnomad_sites_tsv_gz>...
 
 The sites files need #CHROM/POS/REF/ALT as their first four columns, chromosomes spelled
-chr1..chr22/chrX, and may be gs:// paths. They are streamed once each and never held in
+chr1..chr22/chrX/chrY/chrM, and may be gs:// paths. They are streamed once each and never held in
 memory; only the credible set variant keys are.
 """
 
@@ -20,6 +20,8 @@ import sys
 import polars as pl
 from google.cloud import bigquery
 from google.oauth2.credentials import Credentials
+
+from sumstat_utils import CHROM_NAMES
 
 PROJECT = "phewas-development"
 TABLE = f"{PROJECT}.genetics_results.credible_sets"
@@ -90,7 +92,7 @@ def main(workdir: str, sites_files: list[str]) -> None:
     variants = pl.read_parquet(variants_path).with_columns(
         pl.concat_str(
             pl.lit("chr"),
-            pl.col("chr").cast(pl.String).replace("23", "X"),
+            pl.col("chr").cast(pl.String).replace(CHROM_NAMES),
             pl.lit(":"),
             pl.col("pos").cast(pl.String),
             pl.lit(":"),

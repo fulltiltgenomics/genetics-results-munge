@@ -25,6 +25,18 @@ To stop the cluster:
 import hail as hl
 import argparse
 
+# this file is submitted to Dataproc on its own, so it cannot import sumstat_utils; these are
+# that module's CHROM_CODES as integers
+CHROM_CODES = {"X": 23, "Y": 24, "M": 26, "MT": 26}
+
+
+def chrom_code(chrom):
+    """Hail int32 code of a contig name whose `chr` prefix is already stripped."""
+    switch = hl.switch(chrom)
+    for name, code in CHROM_CODES.items():
+        switch = switch.when(name, code)
+    return switch.default(hl.int32(chrom))
+
 
 def load_blacklist(path):
     """Load phenotype blacklist from a text file (one trait per line)."""
@@ -152,12 +164,7 @@ def main():
     print("Adding computed columns...")
     entries = entries.annotate(
         chr=hl.bind(
-            lambda chrom: hl.switch(chrom)
-            .when("X", 23)
-            .when("Y", 24)
-            .when("MT", 26)
-            .when("M", 26)
-            .default(hl.int32(chrom)),
+            chrom_code,
             hl.if_else(
                 entries.locus.contig.startswith("chr"),
                 entries.locus.contig[3:],

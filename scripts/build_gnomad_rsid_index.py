@@ -19,7 +19,7 @@ Output
 one row per (rsID, allele), sorted by `id` (the rs number) and indexed on a pseudo-contig
 `rs` with `id` as the position, so `tabix --csi <output> rs:N-N` answers "which variants
 carry rsN". results-api's `RsidDB` parses columns 4-7 of every returned row, so the column
-order is a contract. `chr` is coded the way the served files are: X is 23, Y is 24.
+order is a contract. `chr` is coded the way the served files are: `sumstat_utils.CHROM_CODES`.
 
 Format assumptions (checked against the delivered sites file)
 -------------------------------------------------------------
@@ -27,7 +27,7 @@ Format assumptions (checked against the delivered sites file)
 - an allele present in both genomes and exomes appears as two rows, which may differ only
   in `filters`;
 - `filters` is empty or a comma-separated subset of `AC0`, `AS_VQSR`, `InbreedingCoeff`;
-- contigs are 1-22, X and Y; a contig that is still non-numeric after the X/Y mapping is
+- contigs are 1-22, X and Y; a contig that is still non-numeric after the coding is
   dropped and counted, because results-api would reject it anyway.
 
 One row per allele, and the AC0 rule
@@ -80,17 +80,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from sumstat_utils import AWK_CHROM_CODES
+
 BUCKET_PREFIX = "rsid_bucket_"
 HEADER = b"#rs\tid\trsid\tchr\tpos\tref\talt\n"
 
 # the rs number is kept as the string `substr(id, 3)` and only used numerically for the
 # bucket index: mawk prints a numeric value through CONVFMT (%.6g), which would turn
 # rs1638893388 into 1.63889e+09
-PASS1_AWK = r"""
+PASS1_AWK = "BEGIN { " + AWK_CHROM_CODES + " }" + r"""
 NR > 1 && $5 != "NA" {
     chr = $1
-    if (chr == "X") chr = 23
-    else if (chr == "Y") chr = 24
+    if (chr in code) chr = code[chr]
     if (chr !~ /^[0-9]+$/) { skipped++; next }
     ac0 = (index($6, "AC0") > 0) ? 1 : 0
     n = split($5, ids, ",")

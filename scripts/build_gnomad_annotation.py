@@ -34,11 +34,10 @@ ruling for it.
 
 Chromosome coding
 -----------------
-The `chr` prefix is stripped case-insensitively, X is written as 23 and Y as 24, which is
-what every reader and writer in the suite agrees on. The suite does not agree on the
-mitochondrion — the peak family and results-api's tabix readers use 25, the exome munges
-26 — so it is `--mito-code`, defaulting to 25 because results-api's tabix reader is what
-serves this file. A contig still non-numeric after the mapping is dropped and counted.
+The `chr` prefix is stripped case-insensitively and the letter chromosomes are written as
+`sumstat_utils.CHROM_CODES` has them — X 23, Y 24, M/MT 26 — which is the one coding every
+writer in this repo uses and the one results-api's tabix reader, which serves this file, is
+being moved to. A contig still non-numeric after the mapping is dropped and counted.
 
 Format assumptions (checked against the delivered v4.0 file)
 -----------------------------------------------------------
@@ -77,6 +76,8 @@ import shutil
 import subprocess
 import sys
 import time
+
+from sumstat_utils import CHROM_CODES
 
 TAB = b"\t"
 KEY_COLUMNS = [b"#chr", b"pos", b"ref", b"alt"]
@@ -129,9 +130,8 @@ class Layout:
 class ChromCoder:
     """Contig name -> numeric code as bytes, or None for a contig that has none."""
 
-    def __init__(self, mito_code: int):
-        mito = str(mito_code).encode()
-        self.special = {b"X": b"23", b"Y": b"24", b"M": mito, b"MT": mito}
+    def __init__(self):
+        self.special = {name.encode(): code.encode() for name, code in CHROM_CODES.items()}
         self.cache: dict[bytes, bytes | None] = {}
 
     def __call__(self, name: bytes) -> bytes | None:
@@ -359,7 +359,6 @@ def main() -> None:
     p.add_argument("--exomes", help="exomes-only sites TSV (bgzip); give together with --genomes")
     p.add_argument("--output", required=True, help="deduplicated sites file (.bgz); the .tbi is written next to it")
     p.add_argument("--consequence-output", required=True, help="consequence file (.bgz); the .tbi is written next to it")
-    p.add_argument("--mito-code", type=int, choices=(25, 26), default=25, help="numeric code written for M/MT")
     p.add_argument("--threads", type=int, default=os.cpu_count(), help="bgzip threads, for decompression and for the sites output")
     p.add_argument("--compress-level", type=int, default=6, help="bgzip level of both outputs")
     p.add_argument("--max-rss-gb", type=float, default=2.0,
@@ -389,7 +388,7 @@ def main() -> None:
                 os.remove(stale)
 
     stats = {"dropped_contig_rows": 0}
-    coder = ChromCoder(args.mito_code)
+    coder = ChromCoder()
     procs, layout, lines = open_sources(args, coder, stats)
     sites = PartWriter(args.output, args.threads, args.compress_level)
     cons = PartWriter(args.consequence_output, 1, args.compress_level)

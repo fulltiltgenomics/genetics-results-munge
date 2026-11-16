@@ -24,7 +24,7 @@ Output (LONG): one row per variant x cell_line where cell_line in {meta,K562,HEP
 
 Output conventions (mirroring munge_marderstein.py so the results-api tabix engine + the BQ
   CHR_STRING_TABLES load treat this file identically to variant_effect):
-  - `chrom` is NUMERIC (strip "chr"; X->23, Y->24, M/MT->25) and is column 1 so `tabix -s1 -b2 -e2`
+  - `chrom` is NUMERIC (strip "chr"; X->23, Y->24, M/MT->26) and is column 1 so `tabix -s1 -b2 -e2`
     indexes on (chrom, pos). Non-canonical hg38 contigs (alt/random/scaffold) are DROPPED — the
     platform is primary-assembly only and loads chr as INT64.
   - `variant` is the colon form with numeric chrom and NO "chr" prefix (e.g. "19:662327:G:C"),

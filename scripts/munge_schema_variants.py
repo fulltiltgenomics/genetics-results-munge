@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Munge SCHEMA variant results into genebass-compatible format."""
 
-import argparse
 import warnings
-from pathlib import Path
 
 import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
-from sumstat_utils import write_exome_output
+from exome_utils import run_schema_variant_munge
+from sumstat_utils import chrom_code_expr
 
 
 CODING_CONSEQUENCES = {
@@ -21,25 +20,6 @@ CODING_CONSEQUENCES = {
 }
 
 MLOG10P_THRESHOLD = 4
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Path to SCHEMA variant results .bgz file")
-    parser.add_argument("--gencode", default="/mnt/disks/data/gencode.v19.annotation.genes.tsv",
-                        help="Path to gencode annotation genes TSV")
-    parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
-    return parser.parse_args()
-
-
-def read_gencode(path: str) -> pl.DataFrame:
-    """Read gencode annotation, strip version from gene_id."""
-    df = pl.read_csv(path, separator="\t")
-    df = df.with_columns(
-        pl.col("gene_id").str.split(".").list.first().alias("gene_id_base"),
-        pl.col("gene_name").alias("gene"),
-    ).select("gene_id_base", "gene")
-    return df.unique(subset=["gene_id_base"], keep="first")
 
 
 def read_schema_variants(path: str) -> pl.DataFrame:
@@ -60,9 +40,7 @@ def read_schema_variants(path: str) -> pl.DataFrame:
 
     # parse locus "CHR:POS" → chr, pos
     df = df.with_columns(
-        pl.col("locus").str.split(":").list.first()
-            .str.replace("X", "23").str.replace("Y", "24").str.replace("MT", "26")
-            .cast(pl.Int32).alias("chr"),
+        chrom_code_expr(pl.col("locus").str.split(":").list.first()).cast(pl.Int32).alias("chr"),
         pl.col("locus").str.split(":").list.last().cast(pl.Int32).alias("pos"),
     )
 
@@ -117,57 +95,11 @@ def compute_stats(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
-    """Join with gencode and build final output."""
-    n_before = df.height
-    df = df.join(gencode, left_on="gene_id", right_on="gene_id_base", how="inner")
-    n_unmatched = n_before - df.height
-    if n_unmatched > 0:
-        print(f"  warning: {n_unmatched} variants not matched to gencode")
-
-    out = df.select(
-        pl.lit("SCHEMA").alias("#dataset"),
-        "chr", "pos", "ref", "alt",
-        "gene",
-        pl.col("consequence").alias("annotation"),
-        "mlog10p",
-        pl.col("est").alias("beta"),
-        "se",
-        "af_overall", "af_cases", "af_controls",
-        "ac", "an",
-        pl.lit(None, dtype=pl.Utf8).alias("n_cases"),
-        pl.lit(None, dtype=pl.Utf8).alias("n_controls"),
-        pl.lit("Schizophrenia").alias("trait"),
-        pl.lit("SCZ").alias("trait_original"),
-    ).sort("chr", "pos", "ref", "alt")
-
-    return out
-
-
 def main():
-    args = parse_args()
-
-    output_path = args.output or str(
-        Path(args.input).parent / "SCHEMA_variant_results.munged.tsv.gz"
+    run_schema_variant_munge(
+        __doc__, "SCHEMA", "/mnt/disks/data/gencode.v19.annotation.genes.tsv",
+        read_schema_variants, compute_stats, beta_col="est",
     )
-
-    print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
-    print(f"  {gencode.height} genes")
-
-    print(f"Reading SCHEMA variants from {args.input}...")
-    df = read_schema_variants(args.input)
-
-    print("Computing stats...")
-    df = compute_stats(df)
-
-    print("Building output...")
-    out = build_output(df, gencode)
-
-    print("Writing results...")
-    write_exome_output(out, output_path, tabix_args=["-s2", "-b3", "-e3"])
-
-    print("Done.")
 
 
 if __name__ == "__main__":

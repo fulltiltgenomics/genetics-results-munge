@@ -71,13 +71,12 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
 from sumstat_utils import (
-    GNOMAD_AF_COLS, read_gnomad_filtered, write_sumstat_output,
+    AWK_CHROM_CODES, GNOMAD_AF_COLS, chrom_code, chrom_code_expr, create_af_af_plot_by_type, read_gnomad_filtered, write_sumstat_output,
 )
 
 
@@ -135,9 +134,9 @@ def read_sumstats(filepath: str) -> pl.DataFrame:
         ignore_errors=True,
     ).rename({"SNP": "rsid", "BP": "pos", "N": "n"})
 
-    # chrX is already 23 in these files; map it anyway in case a delivery differs
+    # chrX is already 23 in these files; code it anyway in case a delivery differs
     df = df.with_columns(
-        pl.col("CHR").str.replace("X", "23").cast(pl.Int32, strict=False).alias("chr"),
+        chrom_code_expr("CHR").cast(pl.Int32, strict=False).alias("chr"),
     ).drop("CHR")
     n_bad_chr = df.filter(pl.col("chr").is_null()).height
     if n_bad_chr:
@@ -162,10 +161,14 @@ def read_sumstats(filepath: str) -> pl.DataFrame:
 
 
 def write_position_union(inputs: list[str], positions_path: str) -> int:
-    """Write the sorted union of (chr, pos) over all inputs, X mapped to 23."""
+    """Write the sorted union of (chr, pos) over all inputs, chr as its numeric code.
+
+    The awk lookup is exact, so unlike `chrom_code_expr` a `chr`-prefixed or lower-case name
+    stays as it is here and finds no gnomAD rows."""
     cat = " ".join(f"zcat {shell_quote(f)};" for f in inputs)
     cmd = (
-        f"({cat}) | mawk 'NR>1 && $1!=\"SNP\" {{ c=($2==\"X\")?23:$2; print c\"\\t\"$3 }}' "
+        f"({cat}) | mawk 'BEGIN {{ {AWK_CHROM_CODES} }} "
+        f"NR>1 && $1!=\"SNP\" {{ c=($2 in code)?code[$2]:$2; print c\"\\t\"$3 }}' "
         f"| sort -u -S 2G -k1,1n -k2,2n > {shell_quote(positions_path)}"
     )
     subprocess.run(["bash", "-c", cmd], check=True)
@@ -192,14 +195,14 @@ def stream_gnomad(gnomad_path: str, positions_path: str, save_path: str, jobs: i
         ["tabix", "-l", gnomad_path], capture_output=True, text=True, check=True,
     ).stdout.split()
 
-    # one position file per chromosome, named by the gnomAD contig name (X, not 23)
+    # one position file per chromosome, named by its numeric code; a gnomAD contig is paired
+    # with its file through the same coding the sumstat rows got
     subprocess.run(
         ["bash", "-c",
-         f"mawk -v d={shell_quote(tmpdir)} '{{ c = ($1 == 23) ? \"X\" : $1; "
-         f"print $2 > (d \"/pos_\" c) }}' {shell_quote(positions_path)}"],
+         f"mawk -v d={shell_quote(tmpdir)} '{{ print $2 > (d \"/pos_\" $1) }}' {shell_quote(positions_path)}"],
         check=True,
     )
-    chroms = [c for c in chroms if Path(tmpdir, f"pos_{c}").exists()]
+    chroms = [c for c in chroms if Path(tmpdir, f"pos_{chrom_code(c)}").exists()]
     print(f"  scanning {gnomad_path} for {len(chroms)} chromosomes, {jobs} at a time...", flush=True)
 
     # gnomAD column numbers, 1-based, in GNOMAD_FILTER_COLS order
@@ -212,14 +215,13 @@ def stream_gnomad(gnomad_path: str, positions_path: str, save_path: str, jobs: i
     )
     worker = (
         f"tabix {shell_quote(gnomad_path)} \"$1\" "
-        f"| mawk -v posfile={shell_quote(tmpdir)}\"/pos_$1\" "
-        f"-v c=\"$(test \"$1\" = X && echo 23 || echo \"$1\")\" {shell_quote(awk)} "
+        f"| mawk -v posfile={shell_quote(tmpdir)}\"/pos_$2\" -v c=\"$2\" {shell_quote(awk)} "
         f"| bgzip -c > {shell_quote(tmpdir)}\"/out_$1.gz\""
     )
     subprocess.run(
         ["bash", "-c",
-         f"printf '%s\\n' {' '.join(shell_quote(c) for c in chroms)} "
-         f"| xargs -P {jobs} -I{{}} bash -c {shell_quote(worker)} _ {{}}"],
+         f"printf '%s\\n' {' '.join(shell_quote(f'{c} {chrom_code(c)}') for c in chroms)} "
+         f"| xargs -P {jobs} -L1 bash -c {shell_quote(worker)} _"],
         check=True,
     )
 
@@ -320,41 +322,6 @@ def dedup_variants(df: pl.DataFrame) -> pl.DataFrame:
     return out
 
 
-def create_af_af_plot(df: pl.DataFrame, output_path: str, input_name: str, af_col: str) -> None:
-    """AF-AF scatter of the flipped study alt AF against gnomAD, SNPs and indels apart."""
-    df = df.with_columns(
-        ((pl.col("ref").str.len_chars() == 1) & (pl.col("alt").str.len_chars() == 1)).alias("is_snp"),
-    )
-    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
-
-    for ax, subset, label in [
-        (axes[0], df.filter(pl.col("is_snp")), "SNPs"),
-        (axes[1], df.filter(~pl.col("is_snp")), "indels"),
-    ]:
-        sample_n = min(200_000, subset.height)
-        if sample_n == 0:
-            ax.set_title(f"{label}: no data")
-            continue
-        sample = subset.sample(n=sample_n, seed=42)
-        ax.scatter(
-            sample["af"].to_numpy(), sample["af_gnomad"].to_numpy(),
-            alpha=0.3, s=1, c="blue", rasterized=True,
-        )
-        ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=0.5)
-        ax.set_xlabel("study alt AF (after flip)")
-        ax.set_ylabel(f"gnomAD {af_col}")
-        ax.set_title(f"{label} (n={subset.height:,})")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_aspect("equal")
-
-    fig.suptitle(f"AF-AF: {input_name}", fontsize=14)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  plot saved to {output_path}")
-
-
 def prepare_output(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns(
         pl.col("BETA").map_elements(lambda x: f"{x:.3e}" if x is not None else None, return_dtype=pl.Utf8).alias("beta"),
@@ -412,7 +379,11 @@ def main():
 
         if args.gnomad_af_plot:
             print("Creating AF-AF plot...")
-            create_af_af_plot(df, f"{plot_dir}/{stem}.af_af.png", stem, args.af_col)
+            is_snp = (pl.col("ref").str.len_chars() == 1) & (pl.col("alt").str.len_chars() == 1)
+            create_af_af_plot_by_type(
+                df.with_columns(is_snp.alias("is_snp")), args.af_col, f"{plot_dir}/{stem}.af_af.png", stem,
+                "study alt AF (after flip)", gnomad_af_col="af_gnomad", indel_label="indels",
+            )
 
         print("Writing output...")
         write_sumstat_output(prepare_output(df), output_path)

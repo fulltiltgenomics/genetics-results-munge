@@ -23,6 +23,8 @@ import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
+from sumstat_utils import chrom_code_expr
+
 GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
 
 # p-value floor in the input data
@@ -58,11 +60,8 @@ def read_als(filepath: str) -> pl.DataFrame:
         },
     )
 
-    # strip "chr" prefix and convert to int
     df = df.with_columns(
-        pl.col("CHROM").str.replace("chr", "")
-            .str.replace("X", "23").str.replace("Y", "24").str.replace("MT", "26")
-            .cast(pl.Int32).alias("chr"),
+        chrom_code_expr("CHROM").cast(pl.Int32).alias("chr"),
     )
 
     with warnings.catch_warnings():

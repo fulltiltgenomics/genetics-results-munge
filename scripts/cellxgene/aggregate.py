@@ -145,16 +145,16 @@ def head(url):
             "last_modified": r.headers.get("Last-Modified")}
 
 
-def download(url, dest, parts=16, piece=64 << 20):
+def download(url, dest, parts=16, piece=64 << 20, pin_etag=True):
     """Parallel byte-range GET, pinned to the HEAD's ETag so a mid-download replacement fails.
 
     `sumstat_utils.fetch` is single-stream; the multi-GB files here need the parallel ranges
-    to reach the measured ~275 MB/s.
+    to reach the measured ~275 MB/s. `pin_etag=False` sends the ranges unconditionally.
     """
     import requests
     src = head(url)
     size = src["bytes"]
-    pin = {"If-Match": src["etag"]} if src["etag"] else {}
+    pin = {"If-Match": src["etag"]} if pin_etag and src["etag"] else {}
     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     os.ftruncate(fd, size)
 
