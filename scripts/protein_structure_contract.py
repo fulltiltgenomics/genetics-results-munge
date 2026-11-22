@@ -356,7 +356,8 @@ VIEW_COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}\Z")
 # reports what is past them, so a script learns at write time and not in the browser
 VIEW_MAX_BYTES = 1_000_000  # the file; a larger one is not parsed
 VIEW_MAX_RESIDUES = 2000  # distinct file positions; later ones are not drawn
-VIEW_MAX_LABELS = 40  # labels drawn in the scene; later ones are told on hover only
+VIEW_MAX_LABELS = 40  # labels listed in the viewer's legend; later ones are told on hover only
+VIEW_MAX_REGIONS = 50  # named residue ranges; later ones are not shown
 VIEW_MAX_TEXT_LENGTH = 80  # label, gene, accession, in UTF-16 code units; longer is cut
 VIEW_MAX_POSITION = 100_000  # any file position, the sphere centre included
 VIEW_MAX_SPHERE_RADIUS = 100  # angstrom

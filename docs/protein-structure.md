@@ -344,11 +344,17 @@ A script writes a JSON object; it persists in chat history, so the viewer must r
         {"file_position": 415, "colour": "#d62728"}
       ],
       "sphere": {"centre": 412, "radius": 15.0}, // optional; centre is a file position, radius in A
+      "regions": [                               // optional; start and end are file positions, inclusive
+        {"name": "Cadherin 1", "start": 80, "end": 185, "colour": "#2ca02c"},
+        {"name": "EGF-like", "start": 150, "end": 210}
+      ],
       "colour_mode": "plddt"                     // optional; plddt is the default
     }
 
 A residue carries `role` (one of `VIEW_ROLES`) or `colour`, not both; roles let the viewer
 own the palette. `colour_mode` is one of `VIEW_COLOUR_MODES`: `plddt` (the default) or `uniform`.
+A region is a named range of residues, a protein domain for one: `name`, and `start` and `end`
+in the numbering `file_position` uses, both ends included. `colour` is optional.
 
 What the viewer does with a spec, which a writer has to know to predict the picture. The
 constants are `VIEW_*` in `scripts/protein_structure_contract.py`; the viewer's parser
@@ -362,15 +368,22 @@ import them, so it carries them by hand.
   neighbourhood sphere in `VIEW_SPHERE_COLOUR`. A residue with neither `role` nor `colour` is
   drawn as `neutral`.
 - **Labels.** A residue is labelled only when it carries a `label` that is not blank; nothing
-  is derived from its position or role.
+  is derived from its position or role. Labels are not text in the 3D scene: they are listed
+  in a legend under it, and hovering an entry emphasises its residue.
+- **Regions.** Each is a legend entry whose hover emphasises its range. With a `colour`
+  (`VIEW_COLOUR_RE`) the cartoon over the range is painted in it permanently; without one the
+  cartoon keeps its colouring and the region shows only while its entry is hovered. Regions
+  may overlap and keep the order they were written in. A region needs a `name` that is not
+  blank, whole `start` and `end` from 1 to `VIEW_MAX_POSITION`, and `start <= end`.
 - **Repeated positions.** Entries with the same `file_position` are one residue: the first
   entry's role or colour stands (neutral, if the first entry gave neither), and the label is
   the first non-blank one any of the entries gives.
 - **Limits.** A file over `VIEW_MAX_BYTES` is not parsed. Any position above
   `VIEW_MAX_POSITION` and a radius above `VIEW_MAX_SPHERE_RADIUS` make the view invalid. Past
   `VIEW_MAX_RESIDUES` distinct positions the later ones are not drawn, and past
-  `VIEW_MAX_LABELS` the later labels are shown on hover only; the viewer says how many of
-  each. `label`, `gene` and `accession` longer than `VIEW_MAX_TEXT_LENGTH` are cut to it, the
+  `VIEW_MAX_LABELS` the later labels are left out of the legend and shown on hover only; the
+  viewer says how many of each. Regions past `VIEW_MAX_REGIONS` are not shown. `label`, a
+  region's `name`, `gene` and `accession` longer than `VIEW_MAX_TEXT_LENGTH` are cut to it, the
   last character an ellipsis. A writer treats all of these as errors or reports them, rather
   than leaning on what the viewer does past a limit.
 - **One invalid residue invalidates the view.** A residue that is not an object, has no
@@ -379,7 +392,9 @@ import them, so it carries them by hand.
   same holds for a malformed `sphere`, an unknown `colour_mode` and a `model_file_id` outside
   `MODEL_FILE_ID_RE`. `null` for an optional key reads as the key being absent.
 - **Versions.** A `version` above the viewer's own is refused with a message to reload the
-  page, not drawn as the newest shape it knows.
+  page, not drawn as the newest shape it knows. `regions` came without a new version: a
+  viewer that does not know the key ignores it and draws the rest, so the same file reads
+  under both.
 
 A view reaches the browser as a chat artifact, and the chat delivers no artifact over 512 KiB,
 so that, not `VIEW_MAX_BYTES`, is what a writer in the sandbox has to stay under.
@@ -389,7 +404,8 @@ for a partner outside the centre's owned range from another window (`pair_window
 drawn in one file's coordinates does not reproduce the computed neighbourhood; a script shows a
 computed neighbourhood by listing its residues. Every position is a file position in `model_file_id`, so a
 neighbourhood that spans windows is drawn in the window that owns its centre and residues
-outside that model are not drawn. The viewer refuses a `model_file_id` the current release does
+outside that model are not drawn. A region is written as the part of it the model file holds,
+and not at all when the file holds none of it. The viewer refuses a `model_file_id` the current release does
 not hold rather than drawing another model.
 
 ## What a consumer checks before trusting a release
