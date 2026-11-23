@@ -187,6 +187,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
     # gencode for gene name lookup only
     gencode_names = gencode.select("gene_id_base", "gene")
 
+    by_group = []
     for group in GROUPS:
         print(f"\nProcessing {group} variant results...")
         print("  scanning file...")
@@ -254,6 +255,14 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
         ).sort("chr", "pos", "ref", "alt")
 
         write_exome_output(out, f"{output_dir}/IBD_exome_{group}_variant_results.munged.tsv.gz",
+                           tabix_args=["-s2", "-b3", "-e3"])
+        by_group.append(out)
+
+    # every trait in one position-indexed file: the API's by-gene, by-region and by-variant
+    # exome routes read a resource's combined file and have no way into the per-trait ones
+    if by_group:
+        combined = pl.concat(by_group).sort("chr", "pos", "ref", "alt", "trait_original")
+        write_exome_output(combined, f"{output_dir}/IBD_exome_variant_results.munged.tsv.gz",
                            tabix_args=["-s2", "-b3", "-e3"])
 
 
