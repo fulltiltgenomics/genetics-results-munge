@@ -21,10 +21,10 @@ python3 munge_schema2.py \
 	--output-dir $GCS/schema \
 	--per-trait-dir $GCS/schema/gene_burden_per_trait
 
-# --- SCHEMA2 variant results ---
-python3 munge_schema2_variants.py \
+# --- SCHEMA2 variant counts (no p-values; BigQuery-only, loaded beside the ASC counts) ---
+python3 munge_schema2_variant_counts.py \
 	--input /mnt/disks/data/SCHEMA/SCHEMA2_variant_results.tsv.bgz \
-	--output $GCS/schema/SCHEMA2_variant_results.munged.tsv.gz
+	--output-dir $GCS/schema
 
 # --- BipEx gene burden ---
 python3 munge_bipex.py \
