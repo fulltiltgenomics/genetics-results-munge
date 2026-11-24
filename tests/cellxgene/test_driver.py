@@ -288,8 +288,28 @@ def task_env(store, item, run_id="r1"):
 ITEM = {"dataset_id": "d1", "dataset_version_id": "v1", "url": "https://x/v1.h5ad", "filesize": 10}
 
 
+def aggregate_arguments():
+    seen = []
+    real = argparse.ArgumentParser.parse_args
+
+    def capture(self, argv=None):
+        seen.extend(x for x in self._actions if x.dest != "help")
+        raise SystemExit(0)
+
+    argparse.ArgumentParser.parse_args = capture
+    try:
+        with pytest.raises(SystemExit):
+            aggregate.main([])
+    finally:
+        argparse.ArgumentParser.parse_args = real
+    return seen
+
+
 def fake_aggregate(tmp_path, reject=False):
     def run(ns):
+        # the stub would hide an argument the real worker reads and the task forgot to pass
+        missing = {a.dest for a in aggregate_arguments()} - set(vars(ns))
+        assert not missing, missing
         src = tmp_path / "in.h5ad"
         aggregate.download(ns.input, str(src))
         if reject:

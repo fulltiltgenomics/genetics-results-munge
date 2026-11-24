@@ -118,12 +118,16 @@ def test_broad_targets_and_summary_exclusion(cell_types):
     assert meta["broad_targets"] == broad
     assert meta["inputs_sha256"]["broad_targets.tsv"] == rollup.sha256(TABLES / "broad_targets.tsv")
     for term, r in cell_types.items():
-        want = (r["method"] in ("self", "ancestor", "pin", "pin_descendant")
-                and r["rollup_term_id"] in broad and bool(ct.finer_targets(term, r["rollup_term_id"])))
+        want = rollup.ABNORMAL_CELL in ct.ancestors(term) or (
+            r["method"] in ("self", "ancestor", "pin", "pin_descendant")
+            and r["rollup_term_id"] in broad and bool(ct.finer_targets(term, r["rollup_term_id"])))
         assert (r["summary_excluded"] == "true") == want, term
     assert meta["n_summary_excluded"] == sum(r["summary_excluded"] == "true" for r in cell_types.values())
     excluded = {t for t, r in cell_types.items() if r["summary_excluded"] == "true"}
     assert {"CL:0000738", "CL:0000763", "CL:0000766", "CL:0000066"} <= excluded
+    # abnormal cell and its descendants neoplastic and malignant cell: tumour cells are not a
+    # normal tissue's cell type, whatever the donor's disease label says
+    assert {"CL:0001061", "CL:0001063", "CL:0001064"} <= excluded
     # T cell has no target below it; endothelial cell and macrophage do but are not listed; pro-B
     # cell rolls up to the broad hematopoietic cell yet has nothing finer, so it still pools;
     # neural cell and stem cell have no target, and no_target terms are never excluded

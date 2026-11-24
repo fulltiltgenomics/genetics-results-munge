@@ -43,6 +43,10 @@ curated list is needed because being an ancestor of another target is not enough
 cell, macrophage and neuron are ancestors of targets too, yet are the resolution most datasets
 label at. Matching on the native term rather than the roll-up keeps a type that merely has no
 finer target (pro-B cell -> hematopoietic cell) in the summary.
+A second, unconditional rule: `ABNORMAL_CELL` and its is_a descendants (neoplastic cell,
+malignant cell) are excluded. The summary is normal tissue by the donor's disease label, and
+datasets do label tumour cells from a `normal` sample; pooled as a cell type they outrank the
+tissue's real cell types for the genes a tumour over-expresses.
 
 Tissue rule: CELLxGENE Census's own (`TissueMapper.get_high_level_tissue` in the census
 builder): the first term of the guide's curated `tissue_general` list that is an
@@ -78,6 +82,7 @@ LISTING_URL = "https://api.cellxgene.cziscience.com/curation/v1/datasets"
 CL_OBO_URL = "https://github.com/obophenotype/cell-ontology/releases/download/{version}/cl-basic.obo"
 HUMAN = "NCBITaxon:9606"
 UNKNOWN = "unknown"
+ABNORMAL_CELL = "CL:0001061"
 PRENATAL_ROOTS = {"HsapDv:0000045": "prenatal stage", "UBERON:0000068": "embryo stage"}
 
 
@@ -182,8 +187,9 @@ class CellTypeRollup:
         return [t for t in self.targets if t != own and term in self.ancestors(t)]
 
     def summary_excluded(self, term, rollup, method, broad):
-        return (method in ("self", "ancestor", "pin", "pin_descendant") and rollup in broad
-                and bool(self.finer_targets(term, rollup)))
+        return ABNORMAL_CELL in self.ancestors(term) or (
+            method in ("self", "ancestor", "pin", "pin_descendant") and rollup in broad
+            and bool(self.finer_targets(term, rollup)))
 
     def _most_specific(self, cands):
         best = [t for t in cands if not any(o != t and t in self.ancestors(o) for o in cands)]
@@ -341,7 +347,8 @@ def build(listing, cl_obo, out, targets_path=HERE / "cell_type_targets.tsv", pin
                           "no target -> self; a term absent from or obsolete in the pinned CL release -> self "
                           "(method not_in_ontology)",
         "summary_excluded_rule": "native term that rolls up to a target in broad_targets.tsv and is an is_a "
-                                 "ancestor-or-self of another target; no_target terms are never excluded; "
+                                 "ancestor-or-self of another target (no_target terms are otherwise never excluded), "
+                                 f"or any term that is {ABNORMAL_CELL} abnormal cell or an is_a descendant; "
                                  "left out of the cross-dataset summary only",
         "n_summary_excluded": sum(r[6] == "true" for r in ct_rows),
         "tissue_rule": "CELLxGENE Census TissueMapper: first tissue_general list entry that is an "

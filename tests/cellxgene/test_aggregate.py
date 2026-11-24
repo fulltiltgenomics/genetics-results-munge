@@ -17,6 +17,8 @@ import aggregate as agg  # noqa: E402
 V3, VISIUM, SNMC, UNKNOWN = "EFO:0009922", "EFO:0022857", "EFO:0030027", "EFO:9999999"
 BD_WTA, BD_TARGETED = "EFO:0700003", "EFO:0700004"
 N_CELLS, N_GENES = 400, 30
+# scaled to the fixture (about 15 of 30 genes detected per cell): drops roughly half the cells
+MIN_GENES = 15
 NONPRIMARY_ONLY, NEVER = 1, 2  # gene columns with special expression patterns
 GENE_IDS = [f"ENSG{i:011d}" for i in range(N_GENES)]
 
@@ -113,7 +115,8 @@ def write_h5ad(path, obs, counts, normalised_x=False, feature_is_filtered=None, 
 
 
 def expected(obs, counts):
-    keep = obs["is_primary_data"] & np.isin(obs["assay_ontology_term_id"], list(agg.ASSAYS))
+    keep = (obs["is_primary_data"] & np.isin(obs["assay_ontology_term_id"], list(agg.ASSAYS))
+            & ((counts > 0).sum(1) >= MIN_GENES))
     lib = counts.sum(1)
     with np.errstate(divide="ignore", invalid="ignore"):
         logcp = np.where(lib[:, None] > 0, np.log1p(counts * 1e4 / lib[:, None]), 0.0)
@@ -141,7 +144,7 @@ def read_out(out):
 def run(tmp_path, h5ad, *extra):
     out = tmp_path / "out"
     agg.main(["--input", str(h5ad), "--out", str(out), "--dataset-id", "ds1",
-              "--dataset-version-id", "dv1", *extra])
+              "--dataset-version-id", "dv1", "--min-genes", str(MIN_GENES), *extra])
     return out
 
 
@@ -212,7 +215,10 @@ def test_is_primary_data_filter(tmp_path, data):
     groups, _, gg, gdon, gdg, succ = read_out(out)
     allowed = np.isin(obs["assay_ontology_term_id"], list(agg.ASSAYS))
     assert succ["cells_not_primary"] == int((~obs["is_primary_data"]).sum())
-    assert succ["cells_kept"] == int((obs["is_primary_data"] & allowed).sum()) == groups.n_cells.sum()
+    deep = (counts > 0).sum(1) >= MIN_GENES
+    assert succ["cells_kept"] == int((obs["is_primary_data"] & allowed & deep).sum()) == groups.n_cells.sum()
+    assert succ["cells_low_depth"] == int((obs["is_primary_data"] & allowed & ~deep).sum()) > 0
+    assert succ["min_genes"] == MIN_GENES
     # expressed in non-primary cells only
     assert NONPRIMARY_ONLY not in set(gg.gene) and NONPRIMARY_ONLY not in set(gdg.gene)
 
@@ -345,6 +351,26 @@ def test_missing_mandatory_column_rejected(tmp_path, data, missing):
     with pytest.raises(SystemExit) as e:
         run(tmp_path, write_h5ad(tmp_path / "d.h5ad", obs, counts))
     assert e.value.code == 3
+
+
+def test_default_depth_threshold(tmp_path, data):
+    obs, counts = data
+    assert agg.MIN_GENES == 500
+    # at the real threshold the 30-gene fixture has no deep-enough cell: a valid empty result
+    out = tmp_path / "default"
+    agg.main(["--input", str(write_h5ad(tmp_path / "d.h5ad", obs, counts)), "--out", str(out),
+              "--dataset-id", "ds1", "--dataset-version-id", "dv1"])
+    succ = read_out(out)[-1]
+    assert succ["cells_kept"] == 0 and succ["cells_low_depth"] > 0
+
+
+def test_dense_matrix_depth_matches_csr(tmp_path, data):
+    obs, counts = data
+    path = write_h5ad(tmp_path / "d.h5ad", obs, counts)
+    with h5py.File(path, "a") as f:
+        del f["X"]
+        f.create_dataset("X", data=counts.astype(np.float32))
+    assert_matches(run(tmp_path, path), obs, counts)
 
 
 @pytest.mark.parametrize("case", ["no-primary", "only-excluded-assays"])

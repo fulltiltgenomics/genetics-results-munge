@@ -4,8 +4,8 @@
 # itself an is_a ancestor-or-self of some other target (it is coarser than the target list:
 # 'leukocyte', 'myeloid leukocyte', 'erythroid lineage cell') is left out of the cross-dataset
 # summary; a native type with nothing finer in the target list (pro-B cell, urothelial cell)
-# still pools there. A native term with no target ('neural cell', 'stem cell') is never left out,
-# even when it sits above targets.
+# still pools there. A native term with no target ('neural cell', 'stem cell') is never left out
+# by this list, even when it sits above targets.
 # A target that is an ancestor of other targets but is the natural resolution of many datasets
 # (e.g. endothelial cell, macrophage, neuron, stromal cell) is deliberately not listed.
 term_id	label	reason

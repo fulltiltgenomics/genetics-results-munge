@@ -61,7 +61,8 @@ def write_dataset(root, dvid, groups, donors, gene_ids, gg, gdg, measured=None):
         {"gd": "int32", "gene": "int32", "counts": "float32"}).to_parquet(d / "group_donor_gene.parquet")
     (d / "_SUCCESS.json").write_text(json.dumps({"aggregation_format_version": aggregate.FORMAT_VERSION,
                                                  "dataset_id": "id-" + dvid, "dataset_version_id": dvid,
-                                                 "cells_kept": sum(g[2] for g in groups), "n_groups": len(groups)}))
+                                                 "cells_kept": sum(g[2] for g in groups), "n_groups": len(groups),
+                                                 "min_genes": aggregate.MIN_GENES}))
 
 
 @pytest.fixture
@@ -216,7 +217,7 @@ def test_suppression(inputs):
     assert summary_row(s1, G1).tau == pytest.approx(round(1 - (220 / 460) / 1.0, 4))
     m = json.loads((rel / "manifest.json").read_text())
     assert m["thresholds"] == {"min_cells": 50, "min_donors": 3, "min_pseudobulk_donors": 3,
-                               "summary_include_spatial": False}
+                               "summary_include_spatial": False, "min_genes_per_cell": aggregate.MIN_GENES}
 
 
 def test_gencode_drop_counting(inputs):

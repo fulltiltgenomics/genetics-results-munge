@@ -36,8 +36,8 @@ Rules
   measuring datasets. Rows below are dropped, not shown as NA
 - summary: groups with disease `PATO:0000461` (normal), tissue_type `tissue`, cell type not
   `unknown`, not `summary_excluded` in the roll-up table (a native label coarser than the target
-  list, such as 'leukocyte', whose pooled row would outrank the finer types it contains; see
-  rollup.py), not a spatial assay (a Visium spot is not a cell; `--summary-include-spatial`
+  list, such as 'leukocyte', whose pooled row would outrank the finer types it contains, or an
+  abnormal, neoplastic or malignant cell; see rollup.py), not a spatial assay (a Visium spot is not a cell; `--summary-include-spatial`
   admits them), and not from an all-prenatal dataset (one whose every development stage in the
   listing is `prenatal` in `rollup/development_stage.tsv`: a fetal atlas otherwise outranks adult
   tissue for markers such as ALB, hepatoblast over hepatocyte; a dataset mixing prenatal and
@@ -228,6 +228,17 @@ def prenatal_datasets(listing, prenatal):
         if stages and stages <= prenatal:
             out.append(x["dataset_version_id"])
     return sorted(out)
+
+
+def worker_min_genes(agg_dir, names):
+    """The per-cell depth threshold the workers ran with; one release never mixes two."""
+    seen = {}
+    for n in names:
+        with open(os.path.join(agg_dir, n, "_SUCCESS.json")) as fh:
+            seen.setdefault(json.load(fh).get("min_genes"), n)
+    if len(seen) > 1:
+        raise SystemExit(f"worker min_genes differs between datasets: {seen}")
+    return next(iter(seen), None)
 
 
 def discover(agg_dir, only=None):
@@ -694,7 +705,8 @@ def run(a):
                     "per_dataset_dropped": {n: len(s["unmatched"]) for n, s in zip(names, inp.gene_stats)}},
         "thresholds": {"min_cells": a.min_cells, "min_donors": a.min_donors,
                        "min_pseudobulk_donors": a.min_pseudobulk_donors,
-                       "summary_include_spatial": a.summary_include_spatial},
+                       "summary_include_spatial": a.summary_include_spatial,
+                       "min_genes_per_cell": worker_min_genes(inp.agg_dir, names)},
         "genes_mode": {"requested": a.genes.split(","), "not_in_gencode": missing} if a.genes else None,
         "rows": {**rel.rows, "groups": inp.groups.height, "datasets": len(names),
                  "measured_genes": bq_measured.height,
