@@ -23,9 +23,11 @@ import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
-from sumstat_utils import chrom_code_expr
+from sumstat_utils import (
+    GNOMAD_LOCAL_DEFAULT, GNOMAD_SOURCE_HELP, GNOMAD_SOURCES, chrom_code_expr, pick_gnomad_rows,
+)
 
-GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
+GNOMAD_PATH = GNOMAD_LOCAL_DEFAULT
 
 # p-value floor in the input data
 P_FLOOR = 1e-16
@@ -35,8 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="Path to ALS exome CSV")
     parser.add_argument("--gnomad", default=GNOMAD_PATH, help="Path to gnomAD tabix-indexed file")
-    parser.add_argument("--gnomad-source", default="e", choices=["g", "e"],
-                        help="Use gnomAD genomes (g) or exomes (e) (default: e)")
+    parser.add_argument("--gnomad-source", default="any", choices=GNOMAD_SOURCES, help=GNOMAD_SOURCE_HELP)
     parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
     parser.add_argument("--plot", help="Output AF-AF plot PNG path (default: derived from input)")
     return parser.parse_args()
@@ -139,11 +140,7 @@ def query_gnomad(df: pl.DataFrame, gnomad_path: str, gnomad_source: str) -> pl.D
               "most_severe": "gnomad_most_severe",
               "gene_most_severe": "gnomad_gene_most_severe"})
 
-    # filter to requested source
-    gnomad = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
-    print(f"  {gnomad.height} gnomAD rows ({('exomes' if gnomad_source == 'e' else 'genomes')})")
-
-    return gnomad
+    return pick_gnomad_rows(gnomad, gnomad_source, key=("gnomad_chr", "gnomad_pos", "gnomad_ref", "gnomad_alt"))
 
 
 def match_alleles(df: pl.DataFrame, gnomad: pl.DataFrame) -> pl.DataFrame:

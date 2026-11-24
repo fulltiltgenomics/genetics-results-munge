@@ -26,7 +26,7 @@ import subprocess
 import sys
 from collections import Counter
 
-GNOMAD_DEFAULT = "gs://daly-genetics-results/gnomad/gnomad.genomes.exomes.v4.1.1.sites.vep115.tsv.bgz"
+GNOMAD_DEFAULT = "gs://daly-genetics-results/gnomad/gnomad.genomes.exomes.v4.1.1.sites.vep115.canonical.tsv.bgz"
 
 # GRCh38 primary assembly lengths, chromosome X coded 23 as in the munged files and gnomAD
 CHROMOSOME_LENGTHS = {

@@ -19,7 +19,17 @@ import numpy as np
 import polars as pl
 
 
-GNOMAD_DEFAULT = "gs://finngen-commons/results_api_data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
+# the served gnomAD sites file, as build_gnomad_annotation.py writes it: one row per variant,
+# sex chromosomes coded 23/24, consequence from the canonical transcript
+GNOMAD_FILE = "gnomad.genomes.exomes.v4.1.1.sites.vep115.canonical.tsv.bgz"
+GNOMAD_DEFAULT = f"gs://daly-genetics-results/gnomad/{GNOMAD_FILE}"
+GNOMAD_LOCAL_DEFAULT = f"/mnt/disks/data/gnomad/4.1.1/out/{GNOMAD_FILE}"
+
+GNOMAD_SOURCES = ["any", "g", "e"]
+GNOMAD_SOURCE_HELP = (
+    "gnomAD rows to use: any (default) takes whichever row a variant has, genomes first where the "
+    "file carries both; g / e restrict to genomes / exomes"
+)
 
 GNOMAD_AF_COLS = ["AF", "AF_afr", "AF_amr", "AF_asj", "AF_eas", "AF_fin", "AF_mid", "AF_nfe", "AF_remaining", "AF_sas"]
 
@@ -433,9 +443,33 @@ def gnomad_plot_parser(
     if af_plot_flag:
         parser.add_argument("--gnomad-af-plot", action="store_true", help="Stream gnomAD and create AF-AF plot")
     parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
-    parser.add_argument("--gnomad-source", default="g", choices=["g", "e"], help="Use gnomAD genomes (g) or exomes (e) (default: g)")
+    parser.add_argument("--gnomad-source", default="any", choices=GNOMAD_SOURCES, help=GNOMAD_SOURCE_HELP)
     parser.add_argument("--plot", help="Output AF-AF plot PNG path (default: derived from input)")
     return parser
+
+
+def pick_gnomad_rows(
+    gnomad: pl.DataFrame, source: str = "any", key: tuple[str, ...] = ("chr", "pos", "ref", "alt"),
+) -> pl.DataFrame:
+    """The gnomAD rows a munge joins against, from rows that carry `genome_or_exome`.
+
+    `any` keeps one row per `key`: the only row where the file has one per variant, the genomes
+    row where it carries a genomes and an exomes row. `g` / `e` keep that source's rows only. On
+    a file already cut to one row per variant that drops every variant whose surviving row came
+    from the other source, with nothing to show for it but a lower match count, which is why it
+    is a restriction to ask for and not the default.
+    """
+    if source == "any":
+        # "g" sorts after "e", so descending puts the genomes row first
+        out = gnomad.sort("genome_or_exome", descending=True, maintain_order=True).unique(
+            subset=list(key), keep="first", maintain_order=True,
+        )
+        print(f"  gnomAD, one row per variant (genomes before exomes): {out.height} rows (of {gnomad.height})")
+    else:
+        label = "genomes" if source == "g" else "exomes"
+        out = gnomad.filter(pl.col("genome_or_exome") == source)
+        print(f"  gnomAD {label} only: {out.height} rows (of {gnomad.height})")
+    return out
 
 
 def _pyplot():
@@ -508,13 +542,11 @@ def create_af_af_plot_by_type(
 
 
 def join_gnomad_by_rsid(
-    sumstats: pl.DataFrame, gnomad: pl.DataFrame, freq_cols: list[str], gnomad_source: str = "g",
+    sumstats: pl.DataFrame, gnomad: pl.DataFrame, freq_cols: list[str], gnomad_source: str = "any",
 ) -> pl.DataFrame:
     """Join daner-style sumstats (A1 effect allele, A2 other) with gnomAD on rsid, classify allele
     orientation, and flip `beta`, `af` and every column of `freq_cols` to the alt allele."""
-    source_label = "genomes" if gnomad_source == "g" else "exomes"
-    gnomad_dedup = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
-    print(f"  using gnomAD {source_label}: {gnomad_dedup.height} rows (from {gnomad.height} total)")
+    gnomad_dedup = pick_gnomad_rows(gnomad, gnomad_source)
 
     # gnomAD rsids are comma-separated: one row per rsid
     gnomad_exploded = gnomad_dedup.with_columns(

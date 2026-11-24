@@ -3,7 +3,7 @@ set -euo pipefail
 
 DATA_DIR=/mnt/disks/data/CPGMethylation/Publish
 REF=/mnt/disks/data/ref/GRCh38.fa
-GNOMAD=/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz
+GNOMAD=/mnt/disks/data/gnomad/4.1.1/out/gnomad.genomes.exomes.v4.1.1.sites.vep115.canonical.tsv.bgz
 SCRIPTS_DIR=$(dirname "$0")
 
 echo "=== Normalizing Data-S1 (CpG QTLs) ==="

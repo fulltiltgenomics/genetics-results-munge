@@ -18,7 +18,8 @@ from scipy.special import log_ndtr
 
 from sumstat_utils import (
     GNOMAD_AF_COLS, GNOMAD_KEEP_COLS,
-    build_rsid_set, chrom_code_expr, create_af_af_plot, gnomad_plot_parser, write_exome_output,
+    build_rsid_set, chrom_code_expr, create_af_af_plot, gnomad_plot_parser, pick_gnomad_rows,
+    write_exome_output,
 )
 
 # gnomAD columns to keep: standard + annotation
@@ -32,7 +33,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-MIN_GNOMAD_LINES = 800_000_000  # gnomAD genomes+exomes v4.0 has ~855M lines
+# a truncated stream ends early without an error. the served v4.1.1 file has 909M lines
+# (the two-row v4.0 one had ~855M)
+MIN_GNOMAD_LINES = 800_000_000
 
 
 def stream_gnomad_with_annot(
@@ -222,15 +225,13 @@ def read_asmqtl(filepath: str) -> tuple[pl.DataFrame, str]:
 
 
 def join_gnomad(
-    deduped: pl.DataFrame, gnomad: pl.DataFrame, af_col: str, gnomad_source: str = "g",
+    deduped: pl.DataFrame, gnomad: pl.DataFrame, af_col: str, gnomad_source: str = "any",
 ) -> pl.DataFrame:
     """Join deduplicated variants with gnomAD on rsid.
 
     Returns joined DataFrame with AF for plot and annotation columns.
     """
-    source_label = "genomes" if gnomad_source == "g" else "exomes"
-    gnomad_src = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
-    print(f"  using gnomAD {source_label}: {gnomad_src.height} rows")
+    gnomad_src = pick_gnomad_rows(gnomad, gnomad_source)
 
     gnomad_exploded = gnomad_src.with_columns(
         pl.col("rsids").str.split(",").alias("rsid_list"),

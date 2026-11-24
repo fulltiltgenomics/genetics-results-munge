@@ -19,8 +19,8 @@ import polars as pl
 from scipy.special import log_ndtr
 
 from sumstat_utils import (
-    GNOMAD_AF_COLS, GNOMAD_DEFAULT, GNOMAD_KEEP_COLS,
-    chrom_code, read_gnomad_filtered, upload_to_gcs,
+    GNOMAD_AF_COLS, GNOMAD_DEFAULT, GNOMAD_KEEP_COLS, GNOMAD_SOURCE_HELP, GNOMAD_SOURCES,
+    chrom_code, pick_gnomad_rows, read_gnomad_filtered, upload_to_gcs,
 )
 
 
@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gnomad-af-plot", action="store_true", help="Stream gnomAD and create AF-AF plot")
     parser.add_argument("--gnomad-filter-only", action="store_true", help="Stream gnomAD and save filtered TSV, without creating plot")
     parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
-    parser.add_argument("--gnomad-source", default="g", choices=["g", "e"], help="Use gnomAD genomes (g) or exomes (e) (default: g)")
+    parser.add_argument("--gnomad-source", default="any", choices=GNOMAD_SOURCES, help=GNOMAD_SOURCE_HELP)
     parser.add_argument("--plot", help="Output AF-AF plot PNG path (default: derived from output)")
     parser.add_argument("--max-memory-gb", type=int, default=24, help="Max virtual memory in GB (default: 24)")
     return parser.parse_args()
@@ -327,7 +327,7 @@ def join_with_gnomad(
     ibd: pl.DataFrame, gnomad: pl.DataFrame, af_col: str,
 ) -> pl.DataFrame:
     """Join study data with gnomAD on chr/pos, classify allele orientation, flip AF if needed.
-    Expects gnomAD already filtered to genomes/exomes.
+    Expects gnomAD already cut to the rows to join against (`pick_gnomad_rows`).
     Returns DataFrame with af_study (Float64) and gnomAD af_col for plotting."""
     ibd = ibd.with_columns(
         pl.col("af").replace("NA", None).cast(pl.Float64).alias("af_study"),
@@ -477,10 +477,8 @@ def main():
             del cpra_set
             gnomad = read_gnomad_filtered(gnomad_save_path, columns=gnomad_cols)
 
-        # filter to genomes/exomes early and drop the column to free memory
-        source_label = "genomes" if args.gnomad_source == "g" else "exomes"
-        gnomad = gnomad.filter(pl.col("genome_or_exome") == args.gnomad_source).drop("genome_or_exome")
-        print(f"  {gnomad.height} gnomAD {source_label} rows loaded")
+        # pick the rows early and drop the column to free memory
+        gnomad = pick_gnomad_rows(gnomad, args.gnomad_source).drop("genome_or_exome")
         _log_memory()
 
         ibd_cols = ["#chr", "pos", "ref", "alt", "af"]

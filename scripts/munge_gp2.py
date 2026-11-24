@@ -12,12 +12,12 @@ import polars as pl
 from scipy.special import log_ndtr
 
 from sumstat_utils import (
-    chrom_code_expr, create_af_af_plot_by_type, gnomad_plot_parser, read_gnomad_filtered,
-    save_gnomad_by_variant_key, write_sumstat_output,
+    GNOMAD_LOCAL_DEFAULT, chrom_code_expr, create_af_af_plot_by_type, gnomad_plot_parser,
+    pick_gnomad_rows, read_gnomad_filtered, save_gnomad_by_variant_key, write_sumstat_output,
 )
 
 
-GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
+GNOMAD_PATH = GNOMAD_LOCAL_DEFAULT
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,12 +79,10 @@ def read_sumstats(filepath: str) -> pl.DataFrame:
 
 
 def join_with_gnomad(
-    df: pl.DataFrame, gnomad: pl.DataFrame, af_col: str, gnomad_source: str = "g",
+    df: pl.DataFrame, gnomad: pl.DataFrame, af_col: str, gnomad_source: str = "any",
 ) -> pl.DataFrame:
     """Join with gnomAD on chr:pos:alleles, flip SNPs if effect_allele is ref."""
-    source_label = "genomes" if gnomad_source == "g" else "exomes"
-    gnomad_filt = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
-    print(f"  using gnomAD {source_label}: {gnomad_filt.height} rows (from {gnomad.height} total)")
+    gnomad_filt = pick_gnomad_rows(gnomad, gnomad_source)
 
     # join on chr+pos+ref+alt (SNP_ID alleles match gnomAD since both are build 38)
     joined = df.join(

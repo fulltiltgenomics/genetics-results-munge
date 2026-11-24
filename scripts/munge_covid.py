@@ -16,10 +16,13 @@ import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
-from sumstat_utils import chrom_code_expr, save_gnomad_by_variant_key, write_sumstat_output
+from sumstat_utils import (
+    GNOMAD_LOCAL_DEFAULT, GNOMAD_SOURCE_HELP, GNOMAD_SOURCES, chrom_code_expr, pick_gnomad_rows,
+    save_gnomad_by_variant_key, write_sumstat_output,
+)
 
 
-GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
+GNOMAD_PATH = GNOMAD_LOCAL_DEFAULT
 
 GNOMAD_KEEP_COLS = [
     "#chr", "pos", "ref", "alt", "rsids",
@@ -31,8 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="Path to COVID HGI .tsv.gz file")
     parser.add_argument("--gnomad", default=GNOMAD_PATH, help="Path to gnomAD file (local bgz or plain)")
-    parser.add_argument("--gnomad-source", default="g", choices=["g", "e"],
-                        help="Use gnomAD genomes (g) or exomes (e) (default: g)")
+    parser.add_argument("--gnomad-source", default="any", choices=GNOMAD_SOURCES, help=GNOMAD_SOURCE_HELP)
     parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
     parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
     return parser.parse_args()
@@ -111,9 +113,7 @@ def _read_gnomad_filtered(filepath: str) -> pl.DataFrame:
 
 def join_with_gnomad(df: pl.DataFrame, gnomad: pl.DataFrame, gnomad_source: str) -> pl.DataFrame:
     """Join sumstats with gnomAD on chr:pos:ref:alt to get consequence/gene."""
-    gnomad_filt = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
-    source_label = "genomes" if gnomad_source == "g" else "exomes"
-    print(f"  using gnomAD {source_label}: {gnomad_filt.height} rows (from {gnomad.height} total)")
+    gnomad_filt = pick_gnomad_rows(gnomad, gnomad_source)
 
     joined = df.join(
         gnomad_filt.select(

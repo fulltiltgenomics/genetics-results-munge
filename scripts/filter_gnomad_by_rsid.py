@@ -14,7 +14,7 @@ import argparse
 import gzip
 import subprocess
 
-GNOMAD_DEFAULT = "gs://finngen-commons/results_api_data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
+GNOMAD_DEFAULT = "gs://daly-genetics-results/gnomad/gnomad.genomes.exomes.v4.1.1.sites.vep115.canonical.tsv.bgz"
 
 
 def load_rsids(filepath: str) -> set[str]:

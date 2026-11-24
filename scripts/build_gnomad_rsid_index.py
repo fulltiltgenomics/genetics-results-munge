@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Build the rsID -> variant tabix file behind results-api's `/rsid/variants`.
 
-Source file
------------
-The gnomAD v4.0 genomes+exomes sites table served by results-api
-(`gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz`, bgzip + tabix), tab separated with header
+Source files
+------------
+The gnomAD v4.1.1 genomes and exomes sites exports that genetics-results-browser's
+`scripts/gnomad_tsv.py` writes (`gnomad.{genomes,exomes}.v4.1.1.sites.vep115.tsv.bgz`, bgzip),
+both given to `--gnomad`, each tab separated with header
 
     #chr pos ref alt rsids filters AN AF AF_afr ...
 
-Only the first six columns are read.
+Only the first six columns are read, and the files need not be sorted or merged. A sites
+file that holds both sources' rows (the v4.0 layout) is the same input in one file.
+
+Not the served sites file: `build_gnomad_annotation.py` cuts that to one row per variant,
+the one with the larger `AN`, and the AC0 rule below needs both. Where the exomes row
+survives and is `AC0` while the genomes have carriers, the allele looks unobserved and is
+dropped beside its siblings. Over 1:1-60M the two inputs resolve the same 13,648,941 rsIDs,
+and the one-row file loses 15,787 of 15,151,645 alleles that way and keeps 2,528 it should
+not.
 
 Output
 ------
@@ -24,11 +33,12 @@ order is a contract. `chr` is coded the way the served files are: `sumstat_utils
 Format assumptions (checked against the delivered sites file)
 -------------------------------------------------------------
 - `rsids` is `NA` or a comma-separated list of rs ids; a few in ten thousand rows carry two;
-- an allele present in both genomes and exomes appears as two rows, which may differ only
-  in `filters`;
+- an allele present in both genomes and exomes appears as two rows, one per file, which
+  differ in `filters` and may differ in `rsids`;
 - `filters` is empty or a comma-separated subset of `AC0`, `AS_VQSR`, `InbreedingCoeff`;
-- contigs are 1-22, X and Y; a contig that is still non-numeric after the coding is
-  dropped and counted, because results-api would reject it anyway.
+- contigs are 1-22, X and Y, or already coded 23 and 24; a contig that is still
+  non-numeric after the coding is dropped and counted, because results-api would reject
+  it anyway. The count includes the header line of every file after the first.
 
 One row per allele, and the AC0 rule
 ------------------------------------
@@ -56,11 +66,12 @@ at the defaults. Run it under a memory cap anyway on a shared machine, e.g.
 Usage
 -----
     python scripts/build_gnomad_rsid_index.py \\
-        --gnomad gs://daly-genetics-results/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz \\
-        --output /mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.rsid.v2.tsv.gz \\
+        --gnomad /mnt/disks/data/gnomad/4.1.1/raw/gnomad.genomes.v4.1.1.sites.vep115.tsv.bgz \\
+                 /mnt/disks/data/gnomad/4.1.1/raw/gnomad.exomes.v4.1.1.sites.vep115.tsv.bgz \\
+        --output /mnt/disks/data/gnomad/rsid/gnomad.genomes.exomes.v4.1.1.rsid.tsv.gz \\
         --upload gs://daly-genetics-results/gnomad/
 
-`--gnomad` may be a local path or `gs://`, streamed in retried byte ranges with the
+Each `--gnomad` file may be a local path or `gs://`, streamed in retried byte ranges with the
 credentials of `gcloud auth`. `--upload` copies the output and its `.csi` to that
 directory when the build and its self-check pass.
 Upload under a new name rather than over the served file: results-api caches the parsed
@@ -162,7 +173,7 @@ def stream_gcs(gs_path: str, out, chunk_bytes: int = 256 << 20) -> None:
             raise OSError(f"giving up on {gs_path} at byte {pos}")
 
 
-def partition(gnomad: str, tmp_dir: str, bucket_width: int, threads: int) -> None:
+def partition(gnomad: list[str], tmp_dir: str, bucket_width: int, threads: int) -> None:
     os.makedirs(tmp_dir, exist_ok=True)
     stale = [f for f in os.listdir(tmp_dir) if f.startswith(BUCKET_PREFIX)]
     if stale:
@@ -173,14 +184,18 @@ def partition(gnomad: str, tmp_dir: str, bucket_width: int, threads: int) -> Non
     )
     # bgzip's threaded decompression is ~4x zcat on this file, which was the next bottleneck
     cmd = f"set -o pipefail; bgzip -d -c -@{threads} | cut -f1-6 | {awk}"
-    log("pass 1: partitioning into buckets")
     pipeline = subprocess.Popen(["bash", "-c", cmd], stdin=subprocess.PIPE)
     try:
-        if gnomad.startswith("gs://"):
-            stream_gcs(gnomad, pipeline.stdin)
-        else:
-            with open(gnomad, "rb") as f:
-                shutil.copyfileobj(f, pipeline.stdin, 8 << 20)
+        # the files go down one pipe: concatenated bgzip files are one bgzip stream, the row
+        # order does not matter to the buckets, and a later file's header line has a contig
+        # (`#chr`) the awk drops as non-numeric
+        for path in gnomad:
+            log(f"pass 1: partitioning {path} into buckets")
+            if path.startswith("gs://"):
+                stream_gcs(path, pipeline.stdin)
+            else:
+                with open(path, "rb") as f:
+                    shutil.copyfileobj(f, pipeline.stdin, 8 << 20)
     finally:
         pipeline.stdin.close()
     if pipeline.wait() != 0:
@@ -271,7 +286,7 @@ def upload(output: str, dest: str) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--gnomad", required=True, help="gnomAD sites TSV (bgzip), local path or gs://")
+    p.add_argument("--gnomad", required=True, nargs="+", help="gnomAD sites TSVs (bgzip), local paths or gs://: the genomes and the exomes export")
     p.add_argument("--output", required=True, help="output .tsv.gz path; the .csi is written next to it")
     p.add_argument("--tmp-dir", help="bucket directory (default: next to --output)")
     p.add_argument("--bucket-width", type=int, default=10_000_000, help="rs numbers per bucket")

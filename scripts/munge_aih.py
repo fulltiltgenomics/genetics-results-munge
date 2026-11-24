@@ -57,7 +57,8 @@ Flags
 --gnomad-filtered     previously saved filtered gnomAD TSV, skips the streaming pass
 --gnomad-filter-only  only stream gnomAD for the union of the inputs' positions and exit
 --jobs                chromosomes scanned in parallel by --gnomad-filter-only (default 2)
---gnomad-source       g / e / any (default any: prefer genomes, fall back to exomes)
+--gnomad-source       any / g / e (default any: whichever row a variant has, genomes first
+                      where the file carries both)
 --af-col              gnomAD AF column used on the AF-AF plot (default AF)
 --gnomad-af-plot      also draw the AF-AF plot against gnomAD
 """
@@ -76,11 +77,13 @@ import polars as pl
 from scipy.special import log_ndtr
 
 from sumstat_utils import (
-    AWK_CHROM_CODES, GNOMAD_AF_COLS, chrom_code, chrom_code_expr, create_af_af_plot_by_type, read_gnomad_filtered, write_sumstat_output,
+    AWK_CHROM_CODES, GNOMAD_AF_COLS, GNOMAD_LOCAL_DEFAULT, GNOMAD_SOURCE_HELP, GNOMAD_SOURCES,
+    chrom_code, chrom_code_expr, create_af_af_plot_by_type, pick_gnomad_rows, read_gnomad_filtered,
+    write_sumstat_output,
 )
 
 
-GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
+GNOMAD_PATH = GNOMAD_LOCAL_DEFAULT
 
 # the subset of gnomAD columns the filtered file keeps, in output order
 GNOMAD_FILTER_COLS = ["#chr", "pos", "ref", "alt", "rsids", "genome_or_exome"] + GNOMAD_AF_COLS
@@ -101,7 +104,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
     parser.add_argument("--gnomad-filter-only", action="store_true", help="Stream gnomAD for the union of the inputs' positions, save it and exit")
     parser.add_argument("--jobs", type=int, default=2, help="Chromosomes scanned in parallel by --gnomad-filter-only (default: 2)")
-    parser.add_argument("--gnomad-source", default="any", choices=["g", "e", "any"], help="gnomAD genomes (g), exomes (e), or prefer genomes and fall back to exomes (any, default)")
+    parser.add_argument("--gnomad-source", default="any", choices=GNOMAD_SOURCES, help=GNOMAD_SOURCE_HELP)
     parser.add_argument("--af-col", default="AF", choices=GNOMAD_AF_COLS, help="gnomAD AF column for the plot (default: AF)")
     parser.add_argument("--gnomad-af-plot", action="store_true", help="Draw the AF-AF plot against gnomAD")
     parser.add_argument("--plot-dir", help="Directory for AF-AF plots (default: directory of the first input)")
@@ -237,21 +240,6 @@ def stream_gnomad(gnomad_path: str, positions_path: str, save_path: str, jobs: i
     print(f"  saved filtered gnomAD to {save_path}")
 
 
-def dedup_gnomad(gnomad: pl.DataFrame, gnomad_source: str) -> pl.DataFrame:
-    """One row per (chr, pos, ref, alt). With 'any', prefer genomes over exomes."""
-    if gnomad_source in ("g", "e"):
-        label = "genomes" if gnomad_source == "g" else "exomes"
-        out = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
-        print(f"  gnomAD {label}: {out.height} rows (of {gnomad.height})")
-    else:
-        # "g" sorts after "e", so descending puts the genomes row first
-        out = gnomad.sort("genome_or_exome", descending=True).unique(
-            subset=["chr", "pos", "ref", "alt"], keep="first", maintain_order=True,
-        )
-        print(f"  gnomAD genomes preferred, exomes as fallback: {out.height} rows (of {gnomad.height})")
-    return out.drop("genome_or_exome")
-
-
 def join_with_gnomad(df: pl.DataFrame, gnomad: pl.DataFrame, af_col: str) -> pl.DataFrame:
     """Match each variant to gnomAD on (chr, pos) and an exact allele pair in either
     orientation, take ref/alt from gnomAD and flip beta/af when A1 is the ref allele.
@@ -364,7 +352,7 @@ def main():
         columns=["#chr", "pos", "ref", "alt", "genome_or_exome", args.af_col],
     )
     print(f"  {gnomad.height} gnomAD rows loaded")
-    gnomad = dedup_gnomad(gnomad, args.gnomad_source)
+    gnomad = pick_gnomad_rows(gnomad, args.gnomad_source).drop("genome_or_exome")
 
     for filepath in args.input:
         stem = Path(filepath).name.replace(".txt.gz", "").replace(".gz", "")
