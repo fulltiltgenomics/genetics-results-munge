@@ -1,43 +1,18 @@
-import polars as pl
 import sys
+from pathlib import Path
+
+import polars as pl
+
+# sumstat_utils lives one directory up, which is not on the path when this is run as a script
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from sumstat_utils import chrom_code_expr  # noqa: E402
+
+from munge_coloc_file import FINNGEN_DATASETS, QUANT_DATA_TYPE
 
 # R14 coloc credible set munging.
 # Input columns: trait region rsid cs low_purity p beta se mlogp cs_specific_prob dataset tissue quant
 # dataset/tissue/quant are now explicit columns (in R13 they were packed into one string).
 
-# quant method -> data_type (applies to all rows; in R13 this was derived from dataset suffixes)
-QUANT_DATA_TYPE = {
-    "genome": "GWAS",
-    "metabolite": "metaboQTL",
-    "protein": "pQTL",
-    "aptamer": "pQTL",
-    "ge": "eQTL",
-    "exon": "eQTL",
-    "tx": "eQTL",
-    "txrev": "eQTL",
-    "microarray": "eQTL",
-    "leafcutter": "sQTL",
-    "majiq": "sQTL",
-}
-
-# FinnGen-internal / external datasets: bare dataset name -> (#dataset display name, cell_type).
-# Everything not listed here is treated as eQTL Catalogue and resolved via the catalogue metadata.
-# cell_type is None for GWAS datasets (no cell type), constant otherwise.
-FINNGEN_DATASETS = {
-    "FIN-R12-Metabolism": ("FinnGen_NMR", "plasma"),
-    "FIN-R12-Somascan": ("FinnGen_SomaScan", "plasma"),
-    "FIN-R12-Olink-3K": ("FinnGen_Olink_3K", "plasma"),
-    "FIN-R14-Olink-5K-b1-b2": ("FinnGen_Olink_5K", "plasma"),
-    "FinnGen-Olink-pQTL-meta": ("FinnGen_Olink", "plasma"),
-    "FinnGen-R14": ("FinnGen_R14", None),
-    "GeneRisk": ("GeneRisk", None),
-    "Kanta_labs_v3": ("FinnGen_kanta", None),
-    "UKB-finucane": ("UKB_Finucane", None),
-    "UKB-PPP": ("UKB_PPP", "plasma"),
-    "INTERVAL": ("INTERVAL", "plasma"),
-    "FIN-SingleCell-b1": ("FinnGen_snRNAseq", "PBMC"),
-    "FinnLiver": ("FinnLiver", "liver"),
-}
 # FinnLiver is FinnGen-internal but a multi-quant molecular QTL, so its trait_original
 # also gets the quant suffix (like eQTL Catalogue traits)
 QUANT_TAG_FINNGEN = {"FinnLiver"}
@@ -91,7 +66,7 @@ def main(filename, eqtl_cat_metadata_filename, output_filename):
         .with_columns(
             pl.col("mlogp").round(4).alias("mlog10p"),
             pl.concat_str(pl.col("region"), pl.col("cs"), separator="_").alias("cs_id"),
-            pl.col("rsid").str.split("_").list.get(0).str.replace("chr", "").str.replace("X", "23").cast(pl.Int8).alias("chr"),
+            chrom_code_expr(pl.col("rsid").str.split("_").list.get(0)).cast(pl.Int8).alias("chr"),
             pl.col("rsid").str.split("_").list.get(1).cast(pl.Int32).alias("pos"),
             pl.col("rsid").str.split("_").list.get(2).alias("ref"),
             pl.col("rsid").str.split("_").list.get(3).alias("alt"),

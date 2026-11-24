@@ -18,6 +18,9 @@ import gzip
 import io
 import urllib.request
 
+# defined in the Dataproc script because `hailctl dataproc submit` ships that one file alone
+from convert_genebass_variant_results_dataproc import CHROM_CODES, load_blacklist
+
 TMP_DIR = "/mnt/disks/data/hail_tmp" # need some space for sorting
 GENCODE_URL = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_35/gencode.v35.annotation.gff3.gz"
 
@@ -35,8 +38,10 @@ def load_gencode_gene_positions():
         s = line.strip().split("\t")
         if s[2] != "gene":
             continue
-        chrom = s[0].replace("chr", "").replace("X", "23").replace("Y", "24").replace("M", "26")
-        chrom = int(chrom)
+        # the hail environment has no polars, which sumstat_utils needs, so the codes come from the
+        # sibling that has to keep its own copy
+        chrom = s[0].removeprefix("chr")
+        chrom = int(CHROM_CODES.get(chrom, chrom))
         gene_start = int(s[3])
         gene_end = int(s[4])
         fields = s[8].split(";")
@@ -50,20 +55,6 @@ def load_gencode_gene_positions():
     gencode_ht = hl.Table.parallelize(genes)
     gencode_ht = gencode_ht.key_by("gene_name")
     return gencode_ht
-
-
-def load_blacklist(path):
-    """Load phenotype blacklist from a text file (one trait per line)."""
-    if path.startswith("gs://"):
-        import subprocess
-        result = subprocess.run(
-            ["gsutil", "cat", path], capture_output=True, text=True, check=True
-        )
-        lines = result.stdout.strip().split("\n")
-    else:
-        with open(path) as f:
-            lines = f.read().strip().split("\n")
-    return set(line.strip() for line in lines if line.strip())
 
 
 def main():

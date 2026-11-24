@@ -5,6 +5,8 @@
 live here because a second module for two functions is how the copies start.
 """
 
+import argparse
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -13,6 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 
 
@@ -21,6 +24,43 @@ GNOMAD_DEFAULT = "gs://finngen-commons/results_api_data/gnomad/gnomad.genomes.ex
 GNOMAD_AF_COLS = ["AF", "AF_afr", "AF_amr", "AF_asj", "AF_eas", "AF_fin", "AF_mid", "AF_nfe", "AF_remaining", "AF_sas"]
 
 GNOMAD_KEEP_COLS = ["#chr", "pos", "ref", "alt", "rsids", "genome_or_exome"] + GNOMAD_AF_COLS
+
+# the suite's one numeric coding of the non-autosomes, as the `chr` INT64 columns in BigQuery and
+# the tabix seqnames carry it. 25 is not a code.
+CHROM_CODES = {"X": "23", "Y": "24", "M": "26", "MT": "26"}
+
+# code -> name, taking each code's first spelling above, so the mitochondrion is M: the reverse
+# direction is used to address `chr`-prefixed references (gnomAD, GENCODE, UCSC), which say chrM
+CHROM_NAMES: dict[str, str] = {}
+for _name, _code in CHROM_CODES.items():
+    CHROM_NAMES.setdefault(_code, _name)
+
+# CHROM_CODES as awk statements filling an array `code`, for the scripts whose row loop is awk
+AWK_CHROM_CODES = " ".join(f'code["{_name}"] = {_code};' for _name, _code in CHROM_CODES.items())
+
+
+def chrom_code(name: str) -> str:
+    """`chrom_code_expr` for one value, for the scripts that read a file line by line."""
+    base = name[3:] if name[:3].lower() == "chr" else name
+    return CHROM_CODES.get(base.upper(), base)
+
+
+def chrom_code_expr(col: str | pl.Expr | pl.Series = "chr") -> pl.Expr:
+    """Chromosome token from a seqname: strip a leading `chr`, then X=23, Y=24, M/MT=26
+    (`CHROM_CODES`), anything else as it was.
+
+    The result stays a string, so the caller chooses the cast and what a contig that will not
+    cast means: a strict cast makes a scaffold an error, a non-strict one a null to drop or count.
+    """
+    expr = pl.col(col) if isinstance(col, str) else col
+    # case-insensitive like CHR_STRING_TO_INT_SQL in genetics-results-db, so a seqname coded here
+    # is one the BigQuery load also accepts. a case-sensitive match drops an unbounded class
+    # instead: ANY case-variant `chr` prefix on an otherwise canonical chromosome casts to null or
+    # fails the canonical filter as if it were a scaffold. wrong only if a source used case to
+    # distinguish two different contigs, which no reference assembly does.
+    base = expr.cast(pl.Utf8).str.replace("(?i)^chr", "")
+    upper = base.str.to_uppercase()
+    return pl.when(upper.is_in(list(CHROM_CODES))).then(upper.replace(CHROM_CODES)).otherwise(base)
 
 
 def upload_to_gcs(local_path: str, gcs_path: str) -> None:
@@ -82,6 +122,32 @@ def fetch_gs(uri: str, cache_dir: Path, *, billing_project: str | None = None) -
     subprocess.run(command, check=True)
     part.rename(local)
     return local
+
+
+def sha256(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for b in iter(lambda: fh.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def tabix_header(path: str) -> list[str]:
+    """Column names from the header line of a tabix-indexed file."""
+    return (
+        subprocess.run(["tabix", "-H", path], capture_output=True, text=True, check=True)
+        .stdout.strip()
+        .lstrip("#")
+        .split("\t")
+    )
+
+
+def sci_expr(expr: pl.Expr) -> pl.Expr:
+    """Format a float expression as %.3e in one numpy call rather than per row, keeping nulls null."""
+    formatted = expr.fill_null(0.0).map_batches(
+        lambda s: pl.Series(np.char.mod("%.3e", s.to_numpy())), return_dtype=pl.String
+    )
+    return pl.when(expr.is_null()).then(None).otherwise(formatted)
 
 
 def write_bgzip(df: pl.DataFrame, local_path: str) -> None:
@@ -288,3 +354,270 @@ def stream_gnomad_by_rsid(
     print(f"  saved filtered gnomAD to {save_path}")
 
     return read_gnomad_filtered(save_path)
+
+
+def save_gnomad_by_variant_key(
+    gnomad_path: str,
+    variant_keys: set[str],
+    save_path: str,
+    keep_cols: list[str] = GNOMAD_KEEP_COLS,
+) -> None:
+    """Stream a local gnomAD file, saving the `keep_cols` of rows whose chr:pos:ref:alt is in
+    variant_keys to save_path as a TSV for reuse."""
+    proc = subprocess.Popen(
+        f"zcat '{gnomad_path}'",
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=4_000_000,
+    )
+
+    header_line = proc.stdout.readline().strip()
+    header = header_line.split("\t")
+    col_idx = {}
+    for col in keep_cols:
+        if col in header:
+            col_idx[col] = header.index(col)
+
+    chr_idx = col_idx["#chr"]
+    pos_idx = col_idx["pos"]
+    ref_idx = col_idx["ref"]
+    alt_idx = col_idx["alt"]
+
+    out_header = "\t".join(col_idx.keys())
+    outf = open(save_path, "w")
+    outf.write(out_header + "\n")
+
+    n_lines = 0
+    n_matches = 0
+    for line in proc.stdout:
+        n_lines += 1
+        if n_lines % 10_000_000 == 0:
+            print(f"  gnomAD: {n_lines / 1e6:.0f}M lines scanned, {n_matches} matches", flush=True)
+
+        fields = line.split("\t")
+        if len(fields) <= alt_idx:
+            continue
+
+        key = f"{fields[chr_idx]}:{fields[pos_idx]}:{fields[ref_idx]}:{fields[alt_idx]}"
+        if key in variant_keys:
+            out_fields = [fields[idx].rstrip("\n") for idx in col_idx.values()]
+            outf.write("\t".join(out_fields) + "\n")
+            n_matches += 1
+
+    outf.close()
+    proc.wait()
+    print(f"  gnomAD: done. {n_lines / 1e6:.1f}M lines scanned, {n_matches} matches", flush=True)
+    print(f"  saved filtered gnomAD to {save_path}")
+
+
+def gnomad_plot_parser(
+    description: str | None,
+    input_help: str,
+    *,
+    gnomad_default: str = GNOMAD_DEFAULT,
+    gnomad_help: str = "GCS path to gnomAD bgz file",
+    af_plot_flag: bool = True,
+) -> argparse.ArgumentParser:
+    """The flags of a munge that aligns one sumstat file against gnomAD and plots AF against AF.
+
+    `af_plot_flag=False` is for a munge that cannot write its output without the gnomAD join, so
+    has nothing to make optional.
+    """
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--input", required=True, help=input_help)
+    parser.add_argument("--gnomad", default=gnomad_default, help=gnomad_help)
+    parser.add_argument("--af-col", default="AF", choices=GNOMAD_AF_COLS, help="gnomAD AF column for plot (default: AF)")
+    parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
+    if af_plot_flag:
+        parser.add_argument("--gnomad-af-plot", action="store_true", help="Stream gnomAD and create AF-AF plot")
+    parser.add_argument("--gnomad-filtered", help="Path to previously saved filtered gnomAD TSV (skip streaming)")
+    parser.add_argument("--gnomad-source", default="g", choices=["g", "e"], help="Use gnomAD genomes (g) or exomes (e) (default: g)")
+    parser.add_argument("--plot", help="Output AF-AF plot PNG path (default: derived from input)")
+    return parser
+
+
+def _pyplot():
+    # imported on use: matplotlib is not installed everywhere this module is (the cellxgene image)
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    return plt
+
+
+def _af_af_axis(ax, df: pl.DataFrame, gnomad_af_col: str, xlabel: str, ylabel: str, title: str) -> None:
+    sample = df.sample(n=min(200_000, df.height), seed=42)
+    ax.scatter(
+        sample["af"].to_numpy(),
+        sample[gnomad_af_col].to_numpy(),
+        alpha=0.3, s=1, c="blue",
+        rasterized=True,
+    )
+    ax.plot([0, 1], [0, 1], "k--", alpha=0.3, linewidth=0.5)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect("equal")
+
+
+def create_af_af_plot(df: pl.DataFrame, af_col: str, output_path: str, input_name: str, xlabel: str) -> None:
+    """AF-AF scatter: the study's alt AF (`af`) against gnomAD's `af_col`."""
+    plt = _pyplot()
+    fig, ax = plt.subplots(figsize=(8, 8))
+    _af_af_axis(ax, df, af_col, xlabel, f"gnomAD {af_col}", f"AF-AF: {input_name} (n={df.height:,})")
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  plot saved to {output_path}")
+
+
+def create_af_af_plot_by_type(
+    df: pl.DataFrame,
+    af_col: str,
+    output_path: str,
+    input_name: str,
+    xlabel: str,
+    *,
+    gnomad_af_col: str | None = None,
+    indel_label: str = "Indels",
+) -> None:
+    """AF-AF scatter with separate panels for SNPs and indels, split on the boolean `is_snp` column.
+
+    `gnomad_af_col` names the column holding the gnomAD frequency when the join renamed it away
+    from `af_col`, which still labels the axis.
+    """
+    plt = _pyplot()
+    fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+
+    for ax, subset, label in [
+        (axes[0], df.filter(pl.col("is_snp")), "SNPs"),
+        (axes[1], df.filter(~pl.col("is_snp")), indel_label),
+    ]:
+        if subset.height == 0:
+            ax.set_title(f"{label}: no data")
+            continue
+        _af_af_axis(ax, subset, gnomad_af_col or af_col, xlabel, f"gnomAD {af_col}", f"{label} (n={subset.height:,})")
+
+    fig.suptitle(f"AF-AF: {input_name}", fontsize=14)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  plot saved to {output_path}")
+
+
+def join_gnomad_by_rsid(
+    sumstats: pl.DataFrame, gnomad: pl.DataFrame, freq_cols: list[str], gnomad_source: str = "g",
+) -> pl.DataFrame:
+    """Join daner-style sumstats (A1 effect allele, A2 other) with gnomAD on rsid, classify allele
+    orientation, and flip `beta`, `af` and every column of `freq_cols` to the alt allele."""
+    source_label = "genomes" if gnomad_source == "g" else "exomes"
+    gnomad_dedup = gnomad.filter(pl.col("genome_or_exome") == gnomad_source)
+    print(f"  using gnomAD {source_label}: {gnomad_dedup.height} rows (from {gnomad.height} total)")
+
+    # gnomAD rsids are comma-separated: one row per rsid
+    gnomad_exploded = gnomad_dedup.with_columns(
+        pl.col("rsids").str.split(",").alias("rsid_list"),
+    ).explode("rsid_list").rename({"rsid_list": "rsid"})
+
+    joined = sumstats.join(
+        gnomad_exploded,
+        on="rsid",
+        how="inner",
+        suffix="_gnomad",
+    )
+
+    joined = joined.with_columns(
+        pl.when(
+            (pl.col("A1").str.to_uppercase() == pl.col("ref").str.to_uppercase())
+            & (pl.col("A2").str.to_uppercase() == pl.col("alt").str.to_uppercase())
+        ).then(pl.lit("A1_is_ref"))
+        .when(
+            (pl.col("A1").str.to_uppercase() == pl.col("alt").str.to_uppercase())
+            & (pl.col("A2").str.to_uppercase() == pl.col("ref").str.to_uppercase())
+        ).then(pl.lit("A1_is_alt"))
+        .otherwise(pl.lit("mismatch"))
+        .alias("allele_match")
+    )
+
+    n_a1_ref = joined.filter(pl.col("allele_match") == "A1_is_ref").height
+    n_a1_alt = joined.filter(pl.col("allele_match") == "A1_is_alt").height
+    n_mismatch = joined.filter(pl.col("allele_match") == "mismatch").height
+    matched_rsids = joined["rsid"].unique().len()
+    n_unmatched = sumstats["rsid"].unique().len() - matched_rsids
+    print(f"  A1=ref (flip): {n_a1_ref}, A1=alt (no flip): {n_a1_alt}, mismatch: {n_mismatch}, no gnomAD match: {n_unmatched}")
+
+    result = joined.filter(pl.col("allele_match") != "mismatch")
+
+    # use gnomAD chr/pos (build 38) for all rows
+    result = result.with_columns(
+        pl.col("chr_gnomad").alias("chr"),
+        pl.col("pos_gnomad").alias("pos"),
+    )
+
+    # A1_is_ref: A1 is ref, A2 is alt — flip beta and AFs so effect is on alt
+    # A1_is_alt: A1 is alt, A2 is ref — beta/AFs already represent alt effect
+    is_flip = pl.col("allele_match") == "A1_is_ref"
+    return result.with_columns(
+        pl.when(is_flip).then(-pl.col("beta")).otherwise(pl.col("beta")).alias("beta"),
+        *[
+            pl.when(is_flip).then((1.0 - pl.col(c)).round(6)).otherwise(pl.col(c)).alias(c)
+            for c in ["af", *freq_cols]
+        ],
+    )
+
+
+def prepare_rsid_output(df: pl.DataFrame, freq_cols: list[str]) -> pl.DataFrame:
+    """Format beta/SE and select the output columns, `freq_cols` between `af` and `INFO`."""
+    return df.with_columns(
+        pl.col("beta").map_elements(lambda x: f"{x:.3e}" if x is not None else None, return_dtype=pl.Utf8).alias("beta"),
+        pl.col("SE").map_elements(lambda x: f"{x:.3e}" if x is not None else None, return_dtype=pl.Utf8).alias("se"),
+    ).select(
+        "chr", "pos", "ref", "alt", "rsid",
+        "beta", "se", "mlog10p",
+        "af", *freq_cols, "INFO",
+        "neff", "n_cases", "n_controls",
+    ).rename({"chr": "#chr"}).sort(
+        "#chr", "pos", "ref", "alt",
+    )
+
+
+def run_rsid_munge(description: str | None, input_help: str, read_sumstats, freq_cols: list[str], plot_xlabel: str) -> None:
+    """The whole command line of a daner-style sumstat munge: parse the `gnomad_plot_parser` flags,
+    read --input with `read_sumstats`, optionally align to gnomAD by rsid and plot, write the output."""
+    args = gnomad_plot_parser(description, input_help).parse_args()
+    input_stem = Path(args.input).name.replace(".gz", "")
+    output_dir = Path(args.input).parent
+    output_path = args.output or str(output_dir / f"{input_stem}.munged.tsv.gz")
+    plot_path = args.plot or str(output_dir / f"{input_stem}.af_af.png")
+    gnomad_save_path = str(output_dir / f"{input_stem}.gnomad_filtered.tsv")
+
+    print(f"Reading {args.input}...")
+    sumstats = read_sumstats(args.input)
+    print(f"  {sumstats.height} variants loaded")
+
+    if args.gnomad_af_plot:
+        if args.gnomad_filtered:
+            print(f"Reading filtered gnomAD from {args.gnomad_filtered}...")
+            gnomad = read_gnomad_filtered(args.gnomad_filtered)
+        else:
+            print("Building rsid set...")
+            rsids = build_rsid_set(sumstats)
+            print(f"  {len(rsids)} unique rsids")
+
+            print(f"Streaming gnomAD from {args.gnomad}...")
+            gnomad = stream_gnomad_by_rsid(args.gnomad, rsids, gnomad_save_path)
+
+        print(f"  {gnomad.height} gnomAD rows loaded")
+
+        print("Joining with gnomAD...")
+        sumstats = join_gnomad_by_rsid(sumstats, gnomad, freq_cols, args.gnomad_source)
+
+        print("Creating AF-AF plot...")
+        create_af_af_plot(sumstats, args.af_col, plot_path, input_stem, plot_xlabel)
+
+    print("Writing output...")
+    write_sumstat_output(prepare_rsid_output(sumstats, freq_cols), output_path)
+
+    print("Done.")

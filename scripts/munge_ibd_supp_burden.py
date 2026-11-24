@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from exome_utils import read_gencode
 from sumstat_utils import write_exome_output
 
 GROUPS = ["IBD", "CD", "UC"]
@@ -42,21 +43,6 @@ def parse_args() -> argparse.Namespace:
                         help="Number of cases for IBD, CD, UC")
     parser.add_argument("--n-controls", required=True, type=int, help="Number of controls (shared)")
     return parser.parse_args()
-
-
-def read_gencode(path: str) -> pl.DataFrame:
-    """Read gencode annotation, convert chr to numeric."""
-    df = pl.read_csv(path, separator="\t")
-    df = df.with_columns(
-        pl.col("gene_id").str.split(".").list.first().alias("gene_id_base"),
-        pl.col("chrom").cast(pl.Utf8)
-            .str.replace("X", "23").str.replace("Y", "24").str.replace("M", "26")
-            .cast(pl.Int32).alias("gene_chr"),
-        pl.col("gene_start").cast(pl.Int32).alias("gene_start_pos"),
-        pl.col("gene_end").cast(pl.Int32).alias("gene_end_pos"),
-        pl.col("gene_name").alias("gene"),
-    ).select("gene_id_base", "gene", "gene_chr", "gene_start_pos", "gene_end_pos")
-    return df.unique(subset=["gene"], keep="first")
 
 
 def read_burden(path: str) -> pl.DataFrame:
@@ -156,7 +142,7 @@ def main():
     output_dir = args.output_dir or str(Path(args.input).parent)
 
     print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
+    gencode = read_gencode(args.gencode, unique_on="gene")
     print(f"  {gencode.height} genes")
 
     print(f"Reading burden data from {args.input}...")

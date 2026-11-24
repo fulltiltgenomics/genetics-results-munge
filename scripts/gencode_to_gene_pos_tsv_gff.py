@@ -8,6 +8,8 @@ import gzip
 import io
 import urllib.request
 
+from sumstat_utils import chrom_code
+
 gencode_gff_file = sys.argv[1]
 output_tsv_file = sys.argv[2]
 
@@ -29,9 +31,7 @@ for line in f:
     s = line.strip().split("\t")
     if s[2] != "gene":
         continue
-    chrom = (
-        s[0].replace("chr", "").replace("X", "23").replace("Y", "24").replace("M", "26")
-    )
+    chrom = chrom_code(s[0])
     gene_start = s[3]
     gene_end = s[4]
     gene_strand = s[6]

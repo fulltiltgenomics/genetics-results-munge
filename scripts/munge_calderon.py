@@ -62,7 +62,7 @@ convention (cf. munge_hpa.py `#dataset`, sumstats `#chr`): it makes the header a
 `tabix -p bed` skips it while the logical column name stays `chrom`.
 
 Field rules for Calderon (see task genetics-results-suite-bzl.17):
-  chrom            NUMERIC hg38, no "chr" prefix (1..22, X->23, Y->24, M/MT->25); converted from
+  chrom            NUMERIC hg38, no "chr" prefix (1..22, X->23, Y->24, M/MT->26); converted from
                    the chr-prefixed liftOver output at the final write. REQUIRED by the tabix contract.
   start,end        peak interval, hg38 (AFTER liftOver), BED 0-based half-open.
   peak_id          f"{chrom}-{start}-{end}" using the numeric hg38 chrom (e.g. "23-100-200").
@@ -120,8 +120,11 @@ from pathlib import Path
 import polars as pl
 
 from peak_utils import (
+    OPEN_CHROMATIN_COLUMNS,
     filter_canonical,
     numeric_chrom_expr,
+    open_chromatin_gcs_paths,
+    peak_key,
     upload_to_gcs,
     write_open_chromatin,
     write_open_chromatin_lazy,
@@ -142,14 +145,9 @@ DA_SCORE_TYPE = "stim_log2fc"
 DEFAULT_CHAIN_URL = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz"
 
 # canonical open_chromatin column order; first header token is comment-prefixed for tabix
-OUTPUT_COLUMNS = [
-    "chrom", "start", "end", "peak_id", "dataset", "cell_type", "tissue", "life_stage",
-    "condition", "assay", "score", "score_type", "n_cells", "cell_ontology_id",
-    "uberon_id", "target_gene", "target_gene_id", "version",
-]
+OUTPUT_COLUMNS = OPEN_CHROMATIN_COLUMNS
 
-GCS_FINNGEN = f"gs://finngen-commons/results_api_data/open_chromatin/{RESOURCE}/{DATASET}.tsv.gz"
-GCS_DALY = f"gs://daly-genetics-results/open_chromatin/{RESOURCE}/{DATASET}.tsv.gz"
+GCS_FINNGEN, GCS_DALY = open_chromatin_gcs_paths(RESOURCE, DATASET)
 
 # "chr1:1000-2000", "chr1-1000-2000", "chr1_1000_2000"; the "chr" prefix is optional and gets
 # normalized on in _coords_from_id so ids like "1:1000-2000" are not dropped.
@@ -236,10 +234,6 @@ def _normalize_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col:
         pl.col("start").cast(pl.Int64),
         pl.col("end").cast(pl.Int64),
     )
-
-
-def _peak_key() -> pl.Expr:
-    return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +359,8 @@ def load_da_peaks(args: argparse.Namespace) -> pl.DataFrame:
 
 def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
     """Read peak->gene links (hg38) and aggregate to one comma-joined gene list per hg38 peak key,
-    pairing symbol and id positionally (identical logic to munge_li_brain.py / munge_catlas.py)."""
+    pairing symbol and id positionally (as peak_utils.load_gene_links does, without its
+    empty-list -> NA step)."""
     df = pl.read_csv(args.links, separator="\t", infer_schema_length=10_000)
     if args.links_id_col:
         df = _coords_from_id(df, args.links_id_col)
@@ -374,7 +369,7 @@ def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
 
     # links are already hg38; convert to numeric chrom so the key matches the final hg38 peak_key
     df = df.with_columns(numeric_chrom_expr().alias("chrom"))
-    df = df.with_columns(_peak_key().alias("_key"))
+    df = df.with_columns(peak_key().alias("_key"))
     gene = pl.col(args.links_gene_col).cast(pl.Utf8) if args.links_gene_col in df.columns else pl.lit(None, dtype=pl.Utf8)
     geneid = pl.col(args.links_geneid_col).cast(pl.Utf8) if args.links_geneid_col in df.columns else pl.lit(None, dtype=pl.Utf8)
     # normalize nulls to empty strings so a missing symbol or id still keeps its pair and emits an
@@ -402,7 +397,7 @@ def liftover_intervals(intervals: pl.DataFrame, args: argparse.Namespace) -> pl.
     Drops unmapped, multi-mapped, and cross-chromosome (inconsistent) intervals.
     When --skip-liftover is set the coordinates pass through unchanged (testing on hg38 input).
     """
-    intervals = intervals.with_columns(_peak_key().alias("_hg19key")).unique(subset=["_hg19key"])
+    intervals = intervals.with_columns(peak_key().alias("_hg19key")).unique(subset=["_hg19key"])
 
     if args.skip_liftover:
         print("  --skip-liftover: passing coordinates through unchanged (TESTING; real run must liftOver)")
@@ -471,11 +466,11 @@ def build_output(long_hg38: pl.LazyFrame, args: argparse.Namespace) -> pl.LazyFr
     # liftOver can map an hg19 primary locus onto an hg38 alt/random contig, so the canonical filter
     # has to run AFTER it rather than at ingest
     df = filter_canonical(df)
-    df = df.with_columns(_peak_key().alias("peak_id"))
+    df = df.with_columns(peak_key().alias("peak_id"))
 
     if args.links:
         links = load_gene_links(args).lazy()
-        df = df.with_columns(_peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
+        df = df.with_columns(peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
     else:
         df = df.with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("target_gene"),
@@ -512,7 +507,7 @@ def transform(args: argparse.Namespace, work_dir: Path) -> pl.LazyFrame:
     mapping = liftover_intervals(peaks, args)  # small: one row per unique hg19 interval
 
     lifted = (
-        lf.with_columns(_peak_key().alias("_hg19key"))
+        lf.with_columns(peak_key().alias("_hg19key"))
         .join(mapping.lazy(), on="_hg19key", how="inner")
         .drop("_hg19key", "chrom", "start", "end")
         .rename({"new_chrom": "chrom", "new_start": "start", "new_end": "end"})

@@ -333,7 +333,7 @@ def run_task(env=os.environ, client=None, aggregate_run=None):
         (aggregate_run or aggregate.run)(argparse.Namespace(
             input=item["url"], out=lay.uri(lay.agg(vid)), dataset_id=item["dataset_id"],
             dataset_version_id=vid, workdir=None, chunk_nnz=aggregate.CHUNK_NNZ,
-            max_accum_bytes=aggregate.MAX_ACCUM_BYTES))
+            max_accum_bytes=aggregate.MAX_ACCUM_BYTES, min_genes=aggregate.MIN_GENES))
     except aggregate.InputRejected as e:
         put_json(bkt, lay.rejected(vid), {
             "dataset_id": item["dataset_id"], "dataset_version_id": vid, "reason": str(e),

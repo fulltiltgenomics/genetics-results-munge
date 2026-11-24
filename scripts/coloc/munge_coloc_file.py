@@ -1,5 +1,11 @@
-import polars as pl
 import sys
+from pathlib import Path
+
+import polars as pl
+
+# sumstat_utils lives one directory up, which is not on the path when this is run as a script
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from sumstat_utils import chrom_code_expr  # noqa: E402
 
 # R14 colocQC (H4 / QC table) munging.
 # dataset/tissue/quant are explicit per side (dataset1/tissue1/quant1, dataset2/tissue2/quant2);
@@ -7,6 +13,19 @@ import sys
 # old comma-packed hit1_info/hit2_info. Trait gene-name mapping happens in the second pass
 # (munge_coloc_file_map_traits.py).
 
+# "chr1:1000-2000"; the chromosome is parsed on its own, so here it only has to be a chr-prefixed
+# token and the letter chromosomes need no recoding to match
+REGION_RE = r"^chr[^:]+:(-?\d+)-(\d+)$"
+
+
+def _variant_id(col: str) -> pl.Expr:
+    """chrX_100_A_G -> 23:100:A:G, a value with no separator passing through as it is."""
+    parts = pl.col(col).str.replace_all("_", ":").str.splitn(":", 2).struct
+    chrom, rest = chrom_code_expr(parts.field("field_0")), parts.field("field_1")
+    return pl.when(rest.is_null()).then(chrom).otherwise(pl.concat_str(chrom, rest, separator=":")).alias(col)
+
+
+# quant method -> data_type
 QUANT_DATA_TYPE = {
     "genome": "GWAS",
     "metabolite": "metaboQTL",
@@ -21,6 +40,9 @@ QUANT_DATA_TYPE = {
     "majiq": "sQTL",
 }
 
+# FinnGen-internal / external datasets: bare dataset name -> (#dataset display name, cell_type).
+# Everything not listed here is treated as eQTL Catalogue and resolved via the catalogue metadata.
+# cell_type is None for GWAS datasets (no cell type), constant otherwise.
 FINNGEN_DATASETS = {
     "FIN-R12-Metabolism": ("FinnGen_NMR", "plasma"),
     "FIN-R12-Somascan": ("FinnGen_SomaScan", "plasma"),
@@ -135,13 +157,13 @@ def main(filename, eqtl_cat_metadata_filename, output_filename):
         .with_columns(
             pl.concat_str(pl.col("region1"), pl.col("cs1"), separator="_").alias("cs1_id"),
             pl.concat_str(pl.col("region2"), pl.col("cs2"), separator="_").alias("cs2_id"),
-            pl.col("region1").str.split(":").list.get(0).str.replace("chr", "").str.replace("X", "23").cast(pl.Int8).alias("chr"),
-            pl.col("region1").str.replace(r"X", "23").str.extract(r"^(chr\d+):(-?\d+)-(\d+)$", 2).cast(pl.Int32).alias("region1_start"),
-            pl.col("region1").str.replace(r"X", "23").str.extract(r"^(chr\d+):(-?\d+)-(\d+)$", 3).cast(pl.Int32).alias("region1_end"),
-            pl.col("region2").str.replace(r"X", "23").str.extract(r"^(chr\d+):(-?\d+)-(\d+)$", 2).cast(pl.Int32).alias("region2_start"),
-            pl.col("region2").str.replace(r"X", "23").str.extract(r"^(chr\d+):(-?\d+)-(\d+)$", 3).cast(pl.Int32).alias("region2_end"),
-            pl.col("hit1").str.replace_all("_", ":").str.replace("chr", "").str.replace("X", "23").alias("hit1"),
-            pl.col("hit2").str.replace_all("_", ":").str.replace("chr", "").str.replace("X", "23").alias("hit2"),
+            chrom_code_expr(pl.col("region1").str.split(":").list.get(0)).cast(pl.Int8).alias("chr"),
+            pl.col("region1").str.extract(REGION_RE, 1).cast(pl.Int32).alias("region1_start"),
+            pl.col("region1").str.extract(REGION_RE, 2).cast(pl.Int32).alias("region1_end"),
+            pl.col("region2").str.extract(REGION_RE, 1).cast(pl.Int32).alias("region2_start"),
+            pl.col("region2").str.extract(REGION_RE, 2).cast(pl.Int32).alias("region2_end"),
+            _variant_id("hit1"),
+            _variant_id("hit2"),
         )
         .with_columns(
             pl.max_horizontal([pl.col("region1_start"), pl.lit(1)]).alias("region1_start"),

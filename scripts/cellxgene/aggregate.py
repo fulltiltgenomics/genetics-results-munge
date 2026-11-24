@@ -22,10 +22,16 @@ Cells kept
 - `assay_ontology_term_id` in `ASSAYS`. Cells of any other assay are dropped and counted per
   assay in `_SUCCESS.json`; an assay nobody has classified is dropped rather than guessed
   at, so a new one needs adding to the allow-list. Spatial assays are kept and flagged
+- at least `--min-genes` (500) genes with a stored count, the per-cell depth rule of CZ
+  CELLxGENE's own gene-expression pipeline (its Census `nnz >= 500`). Cells below it are
+  dropped and counted in `_SUCCESS.json`
 
 Groups: the distinct values of `GROUP_KEYS` among kept cells, with the schema's label column
 beside each ontology id. Within a group, per cell: CP10k = count * 1e4 / library size, then
-log1p. Library size is the cell's total over every feature in the matrix.
+log1p. Library size is the cell's total over every feature in the matrix. That pipeline's
+other rule, dropping per-cell values below 3 CP10k, is deliberately not applied: it erases a
+single count in any cell deeper than 3,333 counts and keeps it in a shallower one, which on
+real liver atlases cut the hepatocyte fraction expressing PCSK9 from 0.16 to 0.01.
 
 Output files (Parquet, plus `_SUCCESS.json` written last as the completion marker)
 - `groups.parquet`: one row per group — keys, labels, `spatial`, `n_cells`, `n_donors`
@@ -53,7 +59,7 @@ proving ground — not this script — measured the heaviest dataset at 5.4 GB p
 accumulator, so roughly 2.4 GB of everything else; with the default 4 GB cap the estimate is
 ~6.5 GB, inside an 8 GB e2-standard-2. Not yet measured with this script on that dataset.
 
-A dataset with no kept cells (all non-primary, or only excluded assays) is a valid empty
+A dataset with no kept cells (all non-primary, only excluded assays, or all too shallow) is a valid empty
 result: empty outputs and a `_SUCCESS.json` with `cells_kept` 0, so it is not re-fetched.
 
 Exit codes: 0 done, 3 input rejected (retrying cannot help: non-count matrix, missing
@@ -72,9 +78,10 @@ import time
 import numpy as np
 
 # bump when any output file's columns or meaning change; the publish step refuses a mix
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 CHUNK_NNZ = 25_000_000
 MAX_ACCUM_BYTES = 4_000_000_000
+MIN_GENES = 500
 
 GROUP_KEYS = ["tissue_ontology_term_id", "tissue_type", "cell_type_ontology_term_id",
               "disease_ontology_term_id", "assay_ontology_term_id", "suspension_type"]
@@ -145,16 +152,16 @@ def head(url):
             "last_modified": r.headers.get("Last-Modified")}
 
 
-def download(url, dest, parts=16, piece=64 << 20):
+def download(url, dest, parts=16, piece=64 << 20, pin_etag=True):
     """Parallel byte-range GET, pinned to the HEAD's ETag so a mid-download replacement fails.
 
     `sumstat_utils.fetch` is single-stream; the multi-GB files here need the parallel ranges
-    to reach the measured ~275 MB/s.
+    to reach the measured ~275 MB/s. `pin_etag=False` sends the ranges unconditionally.
     """
     import requests
     src = head(url)
     size = src["bytes"]
-    pin = {"If-Match": src["etag"]} if src["etag"] else {}
+    pin = {"If-Match": src["etag"]} if pin_etag and src["etag"] else {}
     fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     os.ftruncate(fd, size)
 
@@ -276,6 +283,16 @@ def read_chunk(X, layout, indptr, a, b, n_genes):
                          shape=(b - a, n_genes))
 
 
+def genes_per_cell(X, layout, indptr, n_cells, n_genes, chunk_nnz):
+    """Stored entries per row, which is what Census's `nnz` counts; a dense matrix needs a pass."""
+    if layout == "csr":
+        return np.diff(indptr)
+    out = np.zeros(n_cells, np.int64)
+    for a, b in row_chunks(indptr, n_cells, layout, chunk_nnz):
+        out[a:b] = read_chunk(X, layout, indptr, a, b, n_genes).getnnz(axis=1)
+    return out
+
+
 def check_counts(data):
     bad = data < 0
     if data.dtype.kind == "f":
@@ -332,7 +349,8 @@ def row_blocks(n_rows, n_cols):
 
 # ---------------------------------------------------------------- aggregate
 
-def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES):
+def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES,
+              min_genes=MIN_GENES):
     """Write the per-dataset Parquet files into outdir; return the metrics for _SUCCESS.json."""
     import h5py
     import pandas as pd
@@ -350,7 +368,9 @@ def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES
     cols = {c: read_col(obs, c) for c in GROUP_KEYS + ["donor_id"]}
     assay = cols["assay_ontology_term_id"][1][cols["assay_ontology_term_id"][0]]
     assay_ok = np.isin(assay, list(ASSAYS))
-    keep = primary & assay_ok
+    indptr = X["indptr"][()].astype(np.int64) if layout == "csr" else None
+    deep = genes_per_cell(X, layout, indptr, n_cells, n_genes, chunk_nnz) >= min_genes
+    keep = primary & assay_ok & deep
     excluded = pd.Series(assay[primary & ~assay_ok]).value_counts()
     kidx = np.flatnonzero(keep)
     grp_u, inv = np.unique(np.stack([cols[c][0][kidx] for c in GROUP_KEYS], 1).reshape(-1, len(GROUP_KEYS)),
@@ -377,7 +397,6 @@ def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES
         measured = np.asarray(col_values(var, "feature_is_filtered")).astype(str) != "True"
     genes["measured"] = measured
 
-    indptr = X["indptr"][()].astype(np.int64) if layout == "csr" else None
     # no kept cells: nothing to accumulate, so no pass over the matrix at all
     blocks = gene_blocks(n_groups, n_gd, n_genes, max_accum_bytes) if len(kidx) else []
     met = {"matrix": which, "layout": layout,
@@ -385,6 +404,8 @@ def aggregate(path, outdir, chunk_nnz=CHUNK_NNZ, max_accum_bytes=MAX_ACCUM_BYTES
            "n_cells": int(n_cells), "cells_kept": int(len(kidx)),
            "cells_not_primary": int((~primary).sum()),
            "cells_assay_excluded": {k: int(v) for k, v in excluded.items()},
+           "cells_low_depth": int((primary & assay_ok & ~deep).sum()),
+           "min_genes": min_genes,
            "n_groups": int(n_groups), "n_group_donor": int(n_gd), "n_genes": int(n_genes),
            "n_genes_measured": int(measured.sum()),
            "nnz": int(indptr[-1]) if layout == "csr" else None,
@@ -537,7 +558,8 @@ def run(args):
         else:
             path = args.input
             source = {"url": None, "bytes": os.path.getsize(path), "etag": None, "last_modified": None}
-        met = aggregate(path, local, chunk_nnz=args.chunk_nnz, max_accum_bytes=args.max_accum_bytes)
+        met = aggregate(path, local, chunk_nnz=args.chunk_nnz, max_accum_bytes=args.max_accum_bytes,
+                        min_genes=args.min_genes)
         met["phases"] = dl | met["phases"]
         if fetched:
             shutil.rmtree(os.path.dirname(fetched))
@@ -574,6 +596,7 @@ def main(argv=None):
     p.add_argument("--workdir", default=None, help="scratch for the download and staged output")
     p.add_argument("--chunk-nnz", type=int, default=CHUNK_NNZ)
     p.add_argument("--max-accum-bytes", type=int, default=MAX_ACCUM_BYTES)
+    p.add_argument("--min-genes", type=int, default=MIN_GENES, help="drop cells with fewer genes detected")
     args = p.parse_args(argv)
     try:
         run(args)

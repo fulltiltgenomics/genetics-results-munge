@@ -32,11 +32,11 @@ import os
 import sys
 import unicodedata
 
-import numpy as np
 import polars as pl
 
+from sumstat_utils import chrom_code_expr, sci_expr
+
 # variant ids spell the X chromosome out, everything downstream uses 23
-CHR_MAP = {"X": "23"}
 
 PARQUET_COLUMNS = [
     "studyLocusId",
@@ -73,77 +73,8 @@ OUTPUT_COLUMNS = [
 ]
 
 
-def _sci(col: str) -> pl.Expr:
-    """Format a float column as %.3e in one numpy call rather than per row, keeping nulls null."""
-    formatted = pl.col(col).fill_null(0.0).map_batches(
-        lambda s: pl.Series(np.char.mod("%.3e", s.to_numpy())), return_dtype=pl.String
-    )
-    return pl.when(pl.col(col).is_null()).then(None).otherwise(formatted).alias(col)
-
-
 def _mlog10p(mantissa: pl.Expr, exponent: pl.Expr) -> pl.Expr:
     return (-mantissa.cast(pl.Float64).log10() - exponent).round(4)
-
-
-def convert_pq_to_df(parquet_path: str) -> pl.DataFrame:
-    """Read one credible set parquet file into one row per 95 % credible set variant."""
-    df = (
-        pl.read_parquet(parquet_path, columns=PARQUET_COLUMNS)
-        .filter(
-            (pl.col("studyType") == "gwas")
-            & ~pl.col("studyId").str.contains("FINNGEN", literal=True)
-            & pl.col("finemappingMethod").str.to_lowercase().str.contains("susie", literal=True)
-            & pl.col("locus").is_not_null()
-        )
-        .rename(
-            {
-                "variantId": "lead_variant_id",
-                "pValueMantissa": "cs_p_mantissa",
-                "pValueExponent": "cs_p_exponent",
-            }
-        )
-        # the row index identifies the credible set a locus variant came from, which is what
-        # cs_size counts over; studyLocusId is not relied on to be unique
-        .with_row_index("_cs_row")
-        .explode("locus")
-        .unnest("locus")
-        .filter(pl.col("is95CredibleSet"))
-        .rename({"standardError": "se"})
-    )
-
-    df = df.with_columns(pl.col("variantId").str.split("_").alias("_cpra"))
-    return df.with_columns(
-        pl.col("studyId").alias("trait_original"),
-        pl.col("_cpra").list.get(0).replace(CHR_MAP).cast(pl.Int32, strict=False).alias("chr"),
-        pl.col("_cpra").list.get(1).cast(pl.Int64, strict=False).alias("pos"),
-        pl.col("_cpra").list.get(2).alias("ref"),
-        pl.col("_cpra").list.get(3).alias("alt"),
-        # only the lead variant falls back to the credible set level p-value
-        pl.when(pl.col("pValueMantissa").is_not_null() & pl.col("pValueExponent").is_not_null())
-        .then(_mlog10p(pl.col("pValueMantissa"), pl.col("pValueExponent")))
-        .when(pl.col("variantId") == pl.col("lead_variant_id"))
-        .then(_mlog10p(pl.col("cs_p_mantissa"), pl.col("cs_p_exponent")))
-        .alias("mlog10p"),
-        _sci("beta"),
-        _sci("se"),
-        pl.col("posteriorProbability").round(4).alias("pip"),
-        pl.col("studyLocusId").alias("cs_id"),
-        pl.len().over("_cs_row").cast(pl.Int32).alias("cs_size"),
-        pl.col("purityMinR2").round(4).alias("cs_min_r2"),
-    ).select(
-        "trait_original",
-        "chr",
-        "pos",
-        "ref",
-        "alt",
-        "mlog10p",
-        "beta",
-        "se",
-        "pip",
-        "cs_id",
-        "cs_size",
-        "cs_min_r2",
-    )
 
 
 def sanitize_trait_name(name: str | None) -> str:
@@ -170,6 +101,74 @@ def trait_label(study_id: str, name: str | None) -> str:
     """`<sanitized name>_(<studyId>)`, or the bare studyId when the study has no usable name."""
     sanitized = sanitize_trait_name(name)
     return f"{sanitized}_({study_id})" if sanitized else study_id
+
+
+def credible_set_variants(sets: pl.DataFrame) -> pl.DataFrame:
+    """One row per 95 % credible set variant of the SuSiE credible sets among the rows of `sets`."""
+    return (
+        sets.filter(
+            pl.col("finemappingMethod").str.to_lowercase().str.contains("susie", literal=True)
+            & pl.col("locus").is_not_null()
+        )
+        .rename(
+            {
+                "variantId": "lead_variant_id",
+                "pValueMantissa": "cs_p_mantissa",
+                "pValueExponent": "cs_p_exponent",
+            }
+        )
+        # the row index identifies the credible set a locus variant came from, which is what
+        # cs_size counts over; studyLocusId is not relied on to be unique
+        .with_row_index("_cs_row")
+        .explode("locus")
+        .unnest("locus")
+        .filter(pl.col("is95CredibleSet"))
+        .rename({"standardError": "se"})
+    )
+
+
+def with_variant_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Add the output columns derived per variant to the rows of `credible_set_variants`."""
+    df = df.with_columns(pl.col("variantId").str.split("_").alias("_cpra"))
+    return df.with_columns(
+        chrom_code_expr(pl.col("_cpra").list.get(0)).cast(pl.Int32, strict=False).alias("chr"),
+        pl.col("_cpra").list.get(1).cast(pl.Int64, strict=False).alias("pos"),
+        pl.col("_cpra").list.get(2).alias("ref"),
+        pl.col("_cpra").list.get(3).alias("alt"),
+        # only the lead variant falls back to the credible set level p-value
+        pl.when(pl.col("pValueMantissa").is_not_null() & pl.col("pValueExponent").is_not_null())
+        .then(_mlog10p(pl.col("pValueMantissa"), pl.col("pValueExponent")))
+        .when(pl.col("variantId") == pl.col("lead_variant_id"))
+        .then(_mlog10p(pl.col("cs_p_mantissa"), pl.col("cs_p_exponent")))
+        .alias("mlog10p"),
+        sci_expr(pl.col("beta")).alias("beta"),
+        sci_expr(pl.col("se")).alias("se"),
+        pl.col("posteriorProbability").round(4).alias("pip"),
+        pl.col("studyLocusId").alias("cs_id"),
+        pl.len().over("_cs_row").cast(pl.Int32).alias("cs_size"),
+        pl.col("purityMinR2").round(4).alias("cs_min_r2"),
+    )
+
+
+def convert_pq_to_df(parquet_path: str) -> pl.DataFrame:
+    """Read one credible set parquet file into one row per 95 % credible set variant."""
+    gwas = pl.read_parquet(parquet_path, columns=PARQUET_COLUMNS).filter(
+        (pl.col("studyType") == "gwas") & ~pl.col("studyId").str.contains("FINNGEN", literal=True)
+    )
+    return with_variant_columns(credible_set_variants(gwas)).select(
+        pl.col("studyId").alias("trait_original"),
+        "chr",
+        "pos",
+        "ref",
+        "alt",
+        "mlog10p",
+        "beta",
+        "se",
+        "pip",
+        "cs_id",
+        "cs_size",
+        "cs_min_r2",
+    )
 
 
 def read_trait_labels(data_dir: str, study_ids: pl.Series) -> pl.DataFrame:

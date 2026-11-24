@@ -44,7 +44,7 @@ legacy already-LONG single TSV is still accepted (auto-detected; falls back to t
 
 OUTPUT CONVENTIONS (applied to all three products):
   - chrom NUMERIC: the `chrom` column, `peak_id`, and the `variant` token strip any "chr" prefix and
-    map X->23, Y->24, M/MT->25 (else the numeric contig). peak_id = "<numchrom>-<start>-<end>".
+    map X->23, Y->24, M/MT->26 (else the numeric contig). peak_id = "<numchrom>-<start>-<end>".
   - EMPTY -> "NA": every empty/missing output cell is written as the literal string "NA".
 
 INDEXING CONTRACT (from the epic design — the results-api overlap/point engines depend on it):
@@ -83,11 +83,13 @@ import polars as pl
 
 from peak_utils import (
     INTERVAL_INDEX,
+    OPEN_CHROMATIN_COLUMNS,
     POINT_INDEX,
     append_body,
     external_sort_bgzip_index,
     filter_canonical,
     numeric_chrom_expr,
+    peak_key,
     upload_to_gcs,
     write_bgzip_index,
 )
@@ -97,11 +99,7 @@ VERSION = "2026"
 
 # ---- Product A: open_chromatin -------------------------------------------------------------------
 DATASET_OPEN = "marderstein_open_chromatin"
-OC_COLUMNS = [
-    "chrom", "start", "end", "peak_id", "dataset", "cell_type", "tissue", "life_stage",
-    "condition", "assay", "score", "score_type", "n_cells", "cell_ontology_id",
-    "uberon_id", "target_gene", "target_gene_id", "version",
-]
+OC_COLUMNS = OPEN_CHROMATIN_COLUMNS
 OC_CONDITION = "unknown"                 # atlases default to unknown biological condition
 OC_DEFAULT_ASSAY = "scATAC"              # Synapse contexts; ENCODE adult-heart overridden to snATAC
 
@@ -293,10 +291,6 @@ def _coords_from_variant_id(df: pl.DataFrame, var_col: str) -> pl.DataFrame:
     )
 
 
-def _peak_key() -> pl.Expr:
-    return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
-
-
 def _opt_expr(df: pl.DataFrame, col: str | None, dtype=pl.Utf8) -> pl.Expr:
     """Column expr if the (optional) column exists, else a typed null literal."""
     if col and col in df.columns:
@@ -403,7 +397,7 @@ def build_open_chromatin(long: pl.DataFrame, args: argparse.Namespace) -> pl.Dat
     df = long.with_columns(numeric_chrom_expr().alias("chrom"))
     # drop non-canonical hg38 contigs (alt/random/scaffold/Un) so the INT64 chr load never sees them
     df = filter_canonical(df)
-    df = df.with_columns(_peak_key().alias("peak_id"))
+    df = df.with_columns(peak_key().alias("peak_id"))
     ctx_map = derive_context_map(df["cell_type"].unique().to_list(), args)
     df = df.join(ctx_map, on="cell_type", how="left")
     df = df.with_columns(

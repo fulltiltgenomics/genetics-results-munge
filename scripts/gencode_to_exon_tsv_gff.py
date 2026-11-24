@@ -19,6 +19,8 @@ import gzip
 import io
 import urllib.request
 
+from sumstat_utils import chrom_code
+
 gencode_gff_file = sys.argv[1]
 output_tsv_file = sys.argv[2]
 
@@ -54,11 +56,6 @@ def attributes(field: str) -> dict[str, str]:
         else:
             out[key] = value
     return out
-
-
-def to_chrom(seqid: str) -> str:
-    c = seqid.replace("chr", "")
-    return {"X": "23", "Y": "24", "M": "26"}.get(c, c)
 
 
 def open_gff(path: str):
@@ -126,7 +123,7 @@ for line in f:
             [
                 attrs["gene_id"],
                 tx,
-                to_chrom(s[0]),
+                chrom_code(s[0]),
                 str(exon_start),
                 str(exon_end),
                 s[6],

@@ -359,10 +359,10 @@ CL:0001056	dendritic cell, human	CL:0000451	dendritic cell	ancestor		false
 CL:0001057	myeloid dendritic cell, human	CL:0000990	conventional dendritic cell	ancestor	CL:0000763	false
 CL:0001058	plasmacytoid dendritic cell, human	CL:0000784	plasmacytoid dendritic cell	ancestor		false
 CL:0001060	hematopoietic oligopotent progenitor cell, lineage-negative	CL:0000988	hematopoietic cell	ancestor		false
-CL:0001061	abnormal cell	CL:0001061	abnormal cell	no_target		false
+CL:0001061	abnormal cell	CL:0001061	abnormal cell	no_target		true
 CL:0001062	effector memory CD8-positive, alpha-beta T cell, terminally differentiated	CL:0000084	T cell	ancestor		false
-CL:0001063	neoplastic cell	CL:0001063	neoplastic cell	no_target		false
-CL:0001064	malignant cell	CL:0001064	malignant cell	no_target		false
+CL:0001063	neoplastic cell	CL:0001063	neoplastic cell	no_target		true
+CL:0001064	malignant cell	CL:0001064	malignant cell	no_target		true
 CL:0001065	innate lymphoid cell	CL:0001065	innate lymphoid cell	self		false
 CL:0001066	erythroid progenitor cell, mammalian	CL:0000763	myeloid cell	ancestor		false
 CL:0001067	group 1 innate lymphoid cell	CL:0001065	innate lymphoid cell	ancestor		false

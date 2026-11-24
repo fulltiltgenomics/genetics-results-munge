@@ -25,6 +25,43 @@ Both bgzip + tabix (`-s1 -b2 -e2`), sorted by numeric chromosome, position, ref,
 - `--output`: the served sites file, every input column kept, one row per variant;
 - `--consequence-output`: `#chr pos ref alt most_severe gene_most_severe`.
 
+In both, `most_severe` and `gene_most_severe` are recomputed from the row's `consequences`
+column (next section); the input's own two values survive only on a row with no transcript.
+
+Consequence and gene
+--------------------
+The input's `most_severe` is VEP's top-level term, the worst over every transcript the
+variant touches, so a frameshift in one nonsense-mediated-decay isoform outranks the intron
+the gene's canonical transcript sees (15-90885291-CT-C in v4.0). It is replaced by the
+canonical-transcript consequence, which is what the gnomAD browser leads with, following
+gnomad_methods' `process_consequences` (`worst_csq_for_variant_canonical`) with the
+departures listed below. `consequences` is a JSON array with one object per distinct
+transcript annotation: `gene_symbol gene_id consequences gene_symbol_source canonical
+biotype`.
+
+1. each entry is ranked by the most severe of its terms in `CSQ_ORDER`;
+2. the entries are narrowed to the first of these that is not empty: canonical
+   (`canonical == 1`, VEP's flag) and protein-coding; canonical; protein-coding; all;
+3. the lowest rank in that set gives `most_severe`, and its gene `gene_most_severe`;
+4. several genes at that rank: a symbol that is not `Clone_based_ensembl_gene` first, then
+   an entry that has a symbol, then the lowest `gene_id`;
+5. the gene is written as its symbol, or as its `gene_id` when VEP gives no symbol;
+6. a row whose `consequences` is `NA` or `[]` (intergenic, or regulatory only) keeps the
+   input's `most_severe` and `gene_most_severe`.
+
+Departures from `process_consequences`: protein-coding genes come before severity (it ranks
+a lncRNA's intron above a protein-coding gene's upstream variant); a variant that reaches no
+canonical transcript falls back to the others instead of going without a consequence; ties
+are broken (it leaves them to sort order); and LOFTEE's HC/LC/OS score adjustment is not
+applied, because the export does not carry `lof`. With one canonical transcript per gene
+that adjustment can only change which of two genes is named, and only where both carry a
+loss-of-function term: 61 of 6.18M rows of the v4.1.1 vep115 file over 15:88-93M,
+19:40-45M and 1:150-155M, all with the same term in both genes. OS on a term that is not
+loss-of-function is the case that count cannot see.
+
+A term missing from `CSQ_ORDER`, an entry with no terms and JSON that does not parse each
+stop the run, naming the variant.
+
 Which row survives
 ------------------
 A variant seen in both sources keeps its exome row only when the exome `AN` is strictly
@@ -34,17 +71,19 @@ ruling for it.
 
 Chromosome coding
 -----------------
-The `chr` prefix is stripped case-insensitively, X is written as 23 and Y as 24, which is
-what every reader and writer in the suite agrees on. The suite does not agree on the
-mitochondrion — the peak family and results-api's tabix readers use 25, the exome munges
-26 — so it is `--mito-code`, defaulting to 25 because results-api's tabix reader is what
-serves this file. A contig still non-numeric after the mapping is dropped and counted.
+The `chr` prefix is stripped case-insensitively and the letter chromosomes are written as
+`sumstat_utils.CHROM_CODES` has them — X 23, Y 24, M/MT 26 — which is the one coding every
+writer in this repo uses and the one results-api's tabix reader, which serves this file, is
+being moved to. A contig still non-numeric after the mapping is dropped and counted.
 
 Format assumptions (checked against the delivered v4.0 file)
 -----------------------------------------------------------
 - contigs are spelled 1-22, X, Y, in that order, with no mitochondrion;
 - a variant present in both sources is two rows at one position, in either order and not
-  necessarily adjacent when the position is multi-allelic.
+  necessarily adjacent when the position is multi-allelic;
+- `canonical` is 1 or null, and no gene has two canonical entries on one row (v4.1.1 vep115,
+  the three regions above). The v4.0 file also carries RefSeq entries with their own
+  canonical flag; they share the Ensembl entry's symbol, so they add ties, not genes.
 
 Contig order and the guards
 ---------------------------
@@ -71,6 +110,7 @@ Usage
 import argparse
 import fcntl
 import heapq
+import json
 import os
 import resource
 import shutil
@@ -78,11 +118,40 @@ import subprocess
 import sys
 import time
 
+from sumstat_utils import CHROM_CODES
+
 TAB = b"\t"
 KEY_COLUMNS = [b"#chr", b"pos", b"ref", b"alt"]
 SOURCE_COLUMN = b"genome_or_exome"
 CONSEQUENCE_HEADER = b"#chr\tpos\tref\talt\tmost_severe\tgene_most_severe\n"
 CONSEQUENCE_ROW = b"%b\t%b\t%b\t%b\t%b\t%b\n"
+# severity order, most severe first: gnomad_methods' gnomad.utils.vep.CSQ_ORDER, copied because
+# importing it pulls in hail. A term VEP adds later is absent here and stops the run
+CSQ_ORDER = (
+    "transcript_ablation", "splice_acceptor_variant", "splice_donor_variant", "stop_gained",
+    "frameshift_variant", "stop_lost", "start_lost", "initiator_codon_variant",
+    "transcript_amplification", "inframe_insertion", "inframe_deletion", "missense_variant",
+    "protein_altering_variant", "splice_donor_5th_base_variant", "splice_region_variant",
+    "splice_donor_region_variant", "splice_polypyrimidine_tract_variant",
+    "incomplete_terminal_codon_variant", "start_retained_variant", "stop_retained_variant",
+    "synonymous_variant", "coding_sequence_variant", "coding_transcript_variant",
+    "mature_miRNA_variant", "5_prime_UTR_variant", "3_prime_UTR_variant",
+    "non_coding_transcript_exon_variant", "non_coding_exon_variant", "intron_variant",
+    "NMD_transcript_variant", "non_coding_transcript_variant", "nc_transcript_variant",
+    "upstream_gene_variant", "downstream_gene_variant", "TFBS_ablation", "TFBS_amplification",
+    "TF_binding_site_variant", "regulatory_region_ablation", "regulatory_region_amplification",
+    "feature_elongation", "regulatory_region_variant", "feature_truncation",
+    "intergenic_variant", "sequence_variant",
+)
+CSQ_RANK = {term: rank for rank, term in enumerate(CSQ_ORDER)}
+# which transcripts decided a row, in the order they are preferred
+TIERS = ("canonical_protein_coding", "canonical_other", "noncanonical_protein_coding", "noncanonical_other")
+NO_TRANSCRIPT = len(TIERS)
+# `consequences` of a row with no transcript: hail writes a missing array as NA
+NO_TRANSCRIPT_VALUES = (b"NA", b"[]")
+# neighbouring variants in one gene repeat the same JSON; the cache is emptied at this many
+# distinct values so that it stays far below --max-rss-gb
+CACHE_ENTRIES = 1 << 16
 # every bgzip stream ends with this empty block; all but the last are cut when parts are
 # concatenated, because older BGZF readers stop at the first one they meet
 BGZF_EOF = bytes.fromhex("1f8b08040000000000ff0600424302001b0003000000000000000000")
@@ -116,22 +185,22 @@ class Layout:
         if self.has_source and cols[-1] != SOURCE_COLUMN:
             die(f"{path}: {SOURCE_COLUMN.decode()} must be the last column")
         try:
-            self.an, self.most_severe, self.gene = (
-                cols.index(c) for c in (b"AN", b"most_severe", b"gene_most_severe")
+            self.an, self.most_severe, self.gene, self.consequences = (
+                cols.index(c) for c in (b"AN", b"most_severe", b"gene_most_severe", b"consequences")
             )
         except ValueError as e:
             die(f"{path}: missing column, {e}")
         self.columns = cols if self.has_source else cols + [SOURCE_COLUMN]
-        # a row is split only this far, which keeps the per-transcript JSON out of the split
-        self.nsplit = max(self.an, self.most_severe, self.gene) + 1
+        # a row is split only this far; the source column always follows, so the last piece
+        # of the split is never one of these
+        self.nsplit = max(self.an, self.most_severe, self.gene, self.consequences) + 1
 
 
 class ChromCoder:
     """Contig name -> numeric code as bytes, or None for a contig that has none."""
 
-    def __init__(self, mito_code: int):
-        mito = str(mito_code).encode()
-        self.special = {b"X": b"23", b"Y": b"24", b"M": mito, b"MT": mito}
+    def __init__(self):
+        self.special = {name.encode(): code.encode() for name, code in CHROM_CODES.items()}
         self.cache: dict[bytes, bytes | None] = {}
 
     def __call__(self, name: bytes) -> bytes | None:
@@ -140,6 +209,30 @@ class ChromCoder:
             base = self.special.get(base, base)
             self.cache[name] = base if base.isdigit() else None
         return self.cache[name]
+
+
+def pick_consequence(consequences: bytes):
+    """(most_severe, gene, tier) decided by the transcripts in a row's `consequences`, or
+    None for a row that has none. The rule is the module docstring's; raises KeyError on a
+    term outside CSQ_ORDER and ValueError on an entry without terms or on bad JSON."""
+    if consequences in NO_TRANSCRIPT_VALUES:
+        return None
+    best = best_key = None
+    for entry in json.loads(consequences):
+        tier = 2 * (entry["canonical"] != 1) + (entry["biotype"] != "protein_coding")
+        key = (
+            tier,
+            min(CSQ_RANK[term] for term in entry["consequences"]),
+            entry["gene_symbol_source"] == "Clone_based_ensembl_gene",
+            entry["gene_symbol"] is None,
+            entry["gene_id"] or "",
+        )
+        if best_key is None or key < best_key:
+            best, best_key = entry, key
+    if best is None:
+        raise ValueError("empty consequences array")
+    gene = best["gene_symbol"] or best["gene_id"] or "NA"
+    return CSQ_ORDER[best_key[1]].encode(), gene.encode(), best_key[0]
 
 
 def widen(pipe) -> None:
@@ -242,6 +335,10 @@ class PartWriter:
 def dedup(lines, layout: Layout, coder: ChromCoder, sites: PartWriter, cons: PartWriter, max_rss: int, stats: dict):
     """Stream the rows through, writing one row per variant; -> the key of the last one."""
     nsplit, i_an, i_ms, i_gene = layout.nsplit, layout.an, layout.most_severe, layout.gene
+    i_cons = layout.consequences
+    picked: dict[bytes, tuple | None] = {}
+    tiers = [0] * (len(TIERS) + 1)
+    term_changed = gene_changed = 0
     n_fields = nsplit + 1
     write_sites = write_cons = None
     cur_chr = cur_pos = code = out_code = None
@@ -285,7 +382,7 @@ def dedup(lines, layout: Layout, coder: ChromCoder, sites: PartWriter, cons: Par
         return winners
 
     def flush() -> None:
-        nonlocal n, out_rows, checkpoint, last, first, rest
+        nonlocal n, out_rows, checkpoint, last, first, rest, term_changed, gene_changed
         if rest:
             n += len(rest) + 1
             rows = resolve([(first, first_line), *rest])
@@ -296,6 +393,29 @@ def dedup(lines, layout: Layout, coder: ChromCoder, sites: PartWriter, cons: Par
         for f, line in rows:
             if line[-2] != EXOME and line[-2] != GENOME:
                 die(f"{SOURCE_COLUMN.decode()} is neither g nor e at {where(f)}")
+            consequences = f[i_cons]
+            try:
+                pick = picked[consequences]
+            except KeyError:
+                try:
+                    pick = pick_consequence(consequences)
+                except (KeyError, ValueError, TypeError) as e:
+                    die(f"cannot read consequences at {where(f)}: {e!r}")
+                if len(picked) >= CACHE_ENTRIES:
+                    picked.clear()
+                picked[consequences] = pick
+            if pick is None:
+                tiers[NO_TRANSCRIPT] += 1
+            else:
+                term, gene, tier = pick
+                tiers[tier] += 1
+                if term != f[i_ms] or gene != f[i_gene]:
+                    if term != f[i_ms]:
+                        term_changed += 1
+                    else:
+                        gene_changed += 1
+                    f[i_ms], f[i_gene] = term, gene
+                    line = TAB.join(f)
             write_sites(code + line[rewrite:] if rewrite else line)
             write_cons(CONSEQUENCE_ROW % (code, f[1], f[2], f[3], f[i_ms], f[i_gene]))
         out_rows += len(rows)
@@ -339,7 +459,9 @@ def dedup(lines, layout: Layout, coder: ChromCoder, sites: PartWriter, cons: Par
     if first is not None:
         flush()
     stats.update(rows_in=n + stats["dropped_contig_rows"], rows_out=out_rows, duplicates_removed=n - out_rows,
-                 variants_in_both=pairs, exome_wins=exome_wins, genome_wins=pairs - exome_wins)
+                 variants_in_both=pairs, exome_wins=exome_wins, genome_wins=pairs - exome_wins,
+                 most_severe_changed=term_changed, gene_only_changed=gene_changed,
+                 **{f"decided_by_{name}": count for name, count in zip((*TIERS, "no_transcript"), tiers)})
     return last and (out_code, *last[1:4])
 
 
@@ -359,7 +481,6 @@ def main() -> None:
     p.add_argument("--exomes", help="exomes-only sites TSV (bgzip); give together with --genomes")
     p.add_argument("--output", required=True, help="deduplicated sites file (.bgz); the .tbi is written next to it")
     p.add_argument("--consequence-output", required=True, help="consequence file (.bgz); the .tbi is written next to it")
-    p.add_argument("--mito-code", type=int, choices=(25, 26), default=25, help="numeric code written for M/MT")
     p.add_argument("--threads", type=int, default=os.cpu_count(), help="bgzip threads, for decompression and for the sites output")
     p.add_argument("--compress-level", type=int, default=6, help="bgzip level of both outputs")
     p.add_argument("--max-rss-gb", type=float, default=2.0,
@@ -389,7 +510,7 @@ def main() -> None:
                 os.remove(stale)
 
     stats = {"dropped_contig_rows": 0}
-    coder = ChromCoder(args.mito_code)
+    coder = ChromCoder()
     procs, layout, lines = open_sources(args, coder, stats)
     sites = PartWriter(args.output, args.threads, args.compress_level)
     cons = PartWriter(args.consequence_output, 1, args.compress_level)

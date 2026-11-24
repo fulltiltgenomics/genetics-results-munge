@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scipy.special import log_ndtr
 import numpy as np
 import polars as pl
+from sumstat_utils import chrom_code_expr
 from credible_set_stats import (
     calculate_stats,
     write_stats_json,
@@ -104,7 +105,7 @@ def merge(
                 pl.lit(study).alias("dataset"),
                 pl.lit(data_type).alias("data_type"),
                 pl.lit(cell_type).alias("cell_type"),
-                pl.col("variant").str.split("_").list.get(0).str.replace("chr", "").str.replace("X", "23").cast(pl.Int8).alias("chr"),
+                chrom_code_expr(pl.col("variant").str.split("_").list.get(0)).cast(pl.Int8).alias("chr"),
                 pl.col("variant").str.split("_").list.get(1).cast(pl.Int32).alias("pos"),
                 pl.col("variant").str.split("_").list.get(2).alias("ref"),
                 pl.col("variant").str.split("_").list.get(3).alias("alt"),

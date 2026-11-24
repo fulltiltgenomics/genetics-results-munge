@@ -66,7 +66,7 @@ convention (cf. munge_hpa.py `#dataset`, sumstats `#chr`): it makes the header a
 so `tabix -p bed` skips it while the logical column name stays `chrom`.
 
 Field rules for EpiMap:
-  chrom            NUMERIC, no "chr" prefix (1..22, X->23, Y->24, M/MT->25); REQUIRED by the
+  chrom            NUMERIC, no "chr" prefix (1..22, X->23, Y->24, M/MT->26); REQUIRED by the
                    tabix indexing contract.
   start,end        ChromHMM segment interval, hg38, BED 0-based half-open (verbatim from source).
   peak_id          f"{chrom}-{start}-{end}" with the numeric chrom (e.g. "23-100-200").
@@ -109,10 +109,14 @@ from pathlib import Path
 import polars as pl
 
 from peak_utils import (
+    OPEN_CHROMATIN_COLUMNS,
     append_body,
     external_sort_bgzip_index,
     filter_canonical,
+    load_gene_links,
     numeric_chrom_expr,
+    open_chromatin_gcs_paths,
+    peak_key,
     upload_to_gcs,
     write_open_chromatin,
 )
@@ -125,14 +129,9 @@ CONDITION = "unknown"
 ASSAY = "chromHMM"
 
 # canonical open_chromatin column order; first header token is comment-prefixed for tabix
-OUTPUT_COLUMNS = [
-    "chrom", "start", "end", "peak_id", "dataset", "cell_type", "tissue", "life_stage",
-    "condition", "assay", "score", "score_type", "n_cells", "cell_ontology_id",
-    "uberon_id", "target_gene", "target_gene_id", "version",
-]
+OUTPUT_COLUMNS = OPEN_CHROMATIN_COLUMNS
 
-GCS_FINNGEN = f"gs://finngen-commons/results_api_data/open_chromatin/{RESOURCE}/{DATASET}.tsv.gz"
-GCS_DALY = f"gs://daly-genetics-results/open_chromatin/{RESOURCE}/{DATASET}.tsv.gz"
+GCS_FINNGEN, GCS_DALY = open_chromatin_gcs_paths(RESOURCE, DATASET)
 
 # EpiMap observed_aux_18 canonical state order (index 1..18); used to resolve numeric labels.
 STATE_ORDER = [
@@ -218,8 +217,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-# "chr1:1000-2000", "chr1-1000-2000", "chr1_1000_2000"; "chr" prefix optional and normalized on.
-_ID_RE = re.compile(r"^(?:chr)?([^:_\-]+)[:_\-](\d+)[_\-](\d+)$")
 _BIOSAMPLE_RE = re.compile(r"(BSS\d+)")
 _NUM_PREFIX_RE = re.compile(r"^[Ee]?\d+[_\-]")
 _PURE_NUM_RE = re.compile(r"^[Ee]?(\d+)$")
@@ -303,68 +300,6 @@ def load_calls(path: str, biosample: str, state_col: int) -> pl.DataFrame:
     ))
 
 
-def _coords_from_id(df: pl.DataFrame, id_col: str) -> pl.DataFrame:
-    parsed = df.select(pl.col(id_col).str.extract_groups(_ID_RE.pattern).alias("_g")).unnest("_g")
-    return filter_canonical(df.with_columns(
-        numeric_chrom_expr(parsed["1"]).alias("chrom"),
-        parsed["2"].cast(pl.Int64).alias("start"),
-        parsed["3"].cast(pl.Int64).alias("end"),
-    ))
-
-
-def _normalize_link_coords(df: pl.DataFrame, chrom_col: str, start_col: str, end_col: str) -> pl.DataFrame:
-    df = df.rename({chrom_col: "chrom", start_col: "start", end_col: "end"})
-    return filter_canonical(df.with_columns(
-        numeric_chrom_expr().alias("chrom"),
-        pl.col("start").cast(pl.Int64),
-        pl.col("end").cast(pl.Int64),
-    ))
-
-
-def _peak_key() -> pl.Expr:
-    return pl.format("{}-{}-{}", pl.col("chrom"), pl.col("start"), pl.col("end"))
-
-
-def load_gene_links(args: argparse.Namespace) -> pl.DataFrame:
-    """Read enhancer->gene links and aggregate to one comma-joined gene list per interval key.
-
-    Symbol and id are paired JOINTLY (dedup + sort the (symbol, id) structs together, never
-    independently) so the i-th target_gene token matches the i-th target_gene_id token.
-    """
-    df = pl.read_csv(args.links, separator="\t", infer_schema_length=10_000)
-    if args.links_id_col:
-        df = _coords_from_id(df, args.links_id_col)
-    else:
-        df = _normalize_link_coords(df, args.links_chrom_col, args.links_start_col, args.links_end_col)
-
-    df = df.with_columns(_peak_key().alias("_key"))
-    gene = pl.col(args.links_gene_col).cast(pl.Utf8) if args.links_gene_col in df.columns else pl.lit(None, dtype=pl.Utf8)
-    geneid = pl.col(args.links_geneid_col).cast(pl.Utf8) if args.links_geneid_col in df.columns else pl.lit(None, dtype=pl.Utf8)
-    df = df.with_columns(gene.fill_null("").alias("_gene"), geneid.fill_null("").alias("_geneid"))
-
-    agg = (
-        df.group_by("_key")
-        .agg(pl.struct("_gene", "_geneid").unique().sort().alias("_pairs"))
-        .with_columns(
-            pl.col("_pairs").list.eval(pl.element().struct.field("_gene")).list.join(",").alias("target_gene"),
-            pl.col("_pairs").list.eval(pl.element().struct.field("_geneid")).list.join(",").alias("target_gene_id"),
-        )
-        .drop("_pairs")
-    )
-    # empty-cell -> NA convention: a joined list with no real token (only commas/whitespace, e.g.
-    # when the source provides gene symbols but no Ensembl ids) becomes NA, not "" / "," / ",,".
-    # applied symmetrically; rows that DO have real tokens keep their positional pairing intact.
-    return agg.with_columns(
-        *[
-            pl.when(pl.col(c).str.replace_all(r"[,\s]", "").str.len_chars() == 0)
-            .then(pl.lit(None, dtype=pl.Utf8))
-            .otherwise(pl.col(c))
-            .alias(c)
-            for c in ("target_gene", "target_gene_id")
-        ]
-    )
-
-
 def load_biosample_metadata(args: argparse.Namespace) -> dict[str, tuple[str, str]]:
     """biosample -> (tissue, life_stage). tissue verbatim; life_stage normalized to adult/fetal."""
     if not args.biosample_metadata:
@@ -401,14 +336,14 @@ def build_output_rows(
     uberon = _TISSUE_UBERON.get(tissue.lower())
 
     df = long.with_columns(
-        _peak_key().alias("peak_id"),
+        peak_key().alias("peak_id"),
         pl.lit(tissue).alias("tissue"),
         pl.lit(life).alias("life_stage"),
         pl.lit(uberon, dtype=pl.Utf8).alias("uberon_id"),
     )
 
     if links is not None:
-        df = df.with_columns(_peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
+        df = df.with_columns(peak_key().alias("_key")).join(links, on="_key", how="left").drop("_key")
     else:
         df = df.with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("target_gene"),
@@ -432,7 +367,7 @@ def build_output_rows(
 def build_output(long: pl.DataFrame, args: argparse.Namespace) -> pl.DataFrame:
     """In-memory assembly of the full 18-col table (used by --sample); loops per biosample."""
     biomap = load_biosample_metadata(args)
-    links = load_gene_links(args) if args.links else None
+    links = load_gene_links(args.links, args) if args.links else None
     frames = [
         build_output_rows(long.filter(pl.col("cell_type") == bs), bs, biomap, links, args)
         for bs in long["cell_type"].unique().to_list()
@@ -465,7 +400,7 @@ def run_streaming(files: list[str], args: argparse.Namespace, output_path: str) 
     temp_path = os.path.join(tmpdir, f"{DATASET}.long.tmp.tsv")
 
     biomap = load_biosample_metadata(args)
-    links = load_gene_links(args) if args.links else None
+    links = load_gene_links(args.links, args) if args.links else None
 
     total_rows = 0
     biosamples: set[str] = set()

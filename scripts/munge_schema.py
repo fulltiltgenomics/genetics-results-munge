@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Munge SCHEMA gene burden results into genebass-compatible long format."""
 
-import argparse
 import warnings
-from pathlib import Path
 
 import numpy as np
 import polars as pl
 
-from sumstat_utils import write_exome_output
+from exome_utils import run_gene_burden_munge
 
 
 ANNOTATION_CLASSES = [
@@ -20,37 +18,8 @@ ANNOTATION_CLASSES = [
     {"annotation": "meta",     "p_col": "P meta",            "or_col": None,            "or_lo": None,                        "or_hi": None},
 ]
 
-GENE_COLS = ["gene_id", "gene", "gene_chr", "gene_start_pos", "gene_end_pos"]
-
 N_CASES = 24248
 N_CONTROLS = 97322
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Path to SCHEMA gene results .bgz file")
-    parser.add_argument("--gencode", default="/mnt/disks/data/gencode.v19.annotation.genes.tsv",
-                        help="Path to gencode annotation genes TSV")
-    parser.add_argument("--output-dir", help="Output directory (default: same as input)")
-    parser.add_argument("--per-trait-dir", help="If given, also write one unfiltered <trait>.tsv.gz there (local or gs://)")
-    return parser.parse_args()
-
-
-def read_gencode(path: str) -> pl.DataFrame:
-    """Read gencode annotation, strip version from gene_id, convert chr to numeric."""
-    df = pl.read_csv(path, separator="\t")
-    df = df.with_columns(
-        pl.col("gene_id").str.split(".").list.first().alias("gene_id_base"),
-        pl.col("chrom").cast(pl.Utf8)
-            .str.replace("X", "23").str.replace("Y", "24").str.replace("M", "26")
-            .cast(pl.Int32).alias("gene_chr"),
-        pl.col("gene_start").cast(pl.Int32).alias("gene_start_pos"),
-        pl.col("gene_end").cast(pl.Int32).alias("gene_end_pos"),
-        pl.col("gene_name").alias("gene"),
-    ).select("gene_id_base", "gene", "gene_chr", "gene_start_pos", "gene_end_pos")
-    # deduplicate on gene_id_base, keep first occurrence
-    df = df.unique(subset=["gene_id_base"], keep="first")
-    return df
 
 
 def read_schema(path: str) -> pl.DataFrame:
@@ -137,68 +106,22 @@ def compute_stats(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def build_output(df: pl.DataFrame, gencode: pl.DataFrame) -> pl.DataFrame:
-    """Join with gencode and build final output DataFrame."""
-    df = df.join(gencode, left_on="gene_id", right_on="gene_id_base", how="inner")
-
-    n_unmatched = df.filter(pl.col("gene_chr").is_null()).height
-    if n_unmatched > 0:
-        print(f"  warning: {n_unmatched} genes not found in gencode")
-
-    out = df.select(
-        pl.lit("SCHEMA").alias("#dataset"),
-        pl.lit("Schizophrenia").alias("trait"),
-        "gene",
-        "gene_id",
-        "gene_chr",
-        "gene_start_pos",
-        "gene_end_pos",
-        "annotation",
-        "mlog10p_burden",
-
-        "beta",
-        "se",
-        pl.lit(None, dtype=pl.Utf8).alias("total_variants"),
-        pl.lit(None, dtype=pl.Utf8).alias("total_variants_pheno"),
-        pl.lit(N_CASES).alias("n_cases"),
-        pl.lit(N_CONTROLS).alias("n_controls"),
-        pl.lit("SCZ").alias("trait_original"),
-        pl.lit("NA").alias("flags"),
-    ).sort("gene_chr", "gene_start_pos", "gene_end_pos", "annotation")
-
-    return out
+OUTPUT = dict(
+    dataset="SCHEMA",
+    trait="Schizophrenia",
+    trait_original="SCZ",
+    total_variants=pl.lit(None, dtype=pl.Utf8),
+    n_cases=pl.lit(N_CASES),
+    n_controls=pl.lit(N_CONTROLS),
+    flags=pl.lit("NA"),
+)
 
 
 def main():
-    args = parse_args()
-
-    output_dir = args.output_dir or str(Path(args.input).parent)
-
-    print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
-    print(f"  {gencode.height} genes")
-
-    print(f"Reading SCHEMA from {args.input}...")
-    schema = read_schema(args.input)
-    print(f"  {schema.height} genes")
-
-    print("Melting to long format...")
-    long = melt_to_long(schema)
-    print(f"  {long.height} rows across {len(ANNOTATION_CLASSES)} annotation classes")
-
-    print("Computing stats...")
-    long = compute_stats(long)
-
-    print("Building output...")
-    out = build_output(long, gencode)
-    print(f"  {out.height} total rows")
-
-    print("Writing results...")
-    write_exome_output(out, f"{output_dir}/SCHEMA_gene_results.munged.tsv.gz",
-                       tabix_args=["-s5", "-b6", "-e6"], mlog10p_col="mlog10p_burden",
-                       per_trait_dir=args.per_trait_dir)
-
-    print("Done.")
+    run_gene_burden_munge(
+        __doc__, "SCHEMA", "/mnt/disks/data/gencode.v19.annotation.genes.tsv",
+        read_schema, melt_to_long, len(ANNOTATION_CLASSES), compute_stats, OUTPUT, unit="genes",
+    )
 
 
 if __name__ == "__main__":

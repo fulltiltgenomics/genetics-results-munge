@@ -20,7 +20,8 @@ split, its output columns:
 
 Where the facts live: `README.md` says what exists and how to run it; `docs/` holds the
 long-form derivations; each script's **header docstring** holds its source files, format
-assumptions and flags; each script's final `select()` **is** its column definition.
+assumptions and flags; each script's column definition is in the script itself — its final
+`select()`, or the output columns it hands a shared runner where a family shares one.
 Don't restate any of that here — this file carries only what reading the code can't
 tell you, which is mostly the things that fail *silently*.
 
@@ -52,10 +53,14 @@ Break one of these and nothing errors — the data is just quietly wrong or unfi
 - `beta` and `se` formatted `:.3e`
 
 **Coordinates**
-- GRCh38, `#chr` as an integer, **X is 23** (exome munges also map Y→24, MT→26; the peak
-  family maps Y→24 and M/MT→25). `peak_utils.numeric_chrom_expr()` is where the peak family
-  *applies* that mapping — a script's own docstring may restate it for whoever reads that
-  script, but a second implementation of it is the bug the module exists to prevent
+- GRCh38, `#chr` as an integer, **X is 23, Y is 24, M/MT is 26** — in every family; 25 is not
+  a code. `sumstat_utils.CHROM_CODES` is the one definition, applied through
+  `chrom_code_expr()` (polars; `peak_utils.numeric_chrom_expr()` is the same function) or
+  `chrom_code()` (one string). The helper returns a string: each script keeps its own cast,
+  and with it the choice of what a contig without a code means (an error, or a row to drop).
+  A script's own docstring may restate the coding for whoever reads that script, but a second
+  implementation of it is the bug the helper exists to prevent — the only copies are in code
+  that cannot import it (`genebass/`, python embedded in `wdl/`)
 - the `chr` prefix is stripped **case-insensitively**, matching the BigQuery side, so every
   case variant of it names the same chromosome. A case-sensitive strip silently reclassifies
   an unbounded class of seqnames as scaffolds and drops them
@@ -117,8 +122,12 @@ parts that got copied across the family and then had to be corrected across it. 
   merges externally. The in-memory path bounds disk to the compressed output alone and pays
   for it by holding the whole frame. Every writer's docstring states which side it is on and
   what that costs — read those, not a list here; the list is what went stale first
-- what stays in the script: `load_*`, the transform, and the final `select()`. Those encode
-  one paper's facts and are the reason the nearest script reads as its dataset's spec
+- what stays in the script: `load_*`, the transform, and the column definition — the final
+  `select()`, or the columns passed to a family's shared runner (`exome_utils.py` for the
+  gene-burden and SCHEMA variant munges, `sumstat_utils.py` for the rsID-joined sumstats,
+  `peak_utils.py` for the peak matrices). Those encode one paper's facts and are the reason
+  the nearest script reads as its dataset's spec; a shared runner takes them as arguments
+  and must not grow a per-paper branch
 - gene burden datasets also ship unfiltered per-trait files, so that a gene's *null*
   result in a trait is still retrievable
 - `--output` accepts `gs://`; staging to GCS is opt-in (`--stage`), never the default
@@ -140,7 +149,7 @@ parts that got copied across the family and then had to be corrected across it. 
 | changed | update |
 |---|---|
 | `scripts/munge_*`, `scripts/create_*` | `README.md` — dataset list, run instructions, flags |
-| `scripts/sumstat_utils.py`, `scripts/peak_utils.py` | `CLAUDE.md` — the output contract above |
+| `scripts/sumstat_utils.py`, `scripts/peak_utils.py`, `scripts/exome_utils.py` | `CLAUDE.md` — the output contract above |
 | `scripts/peak_utils.py` | `README.md` — the open-chromatin entry names it as the family's shared writer |
 | `scripts/coloc/*` | `scripts/coloc/R14_UPDATE.md` |
 | `scripts/munge_gene_disease.{py,sh}` | `docs/gene-disease-associations.md` — the source files taken, the version-in-the-filename cutover, and the drop and dedup rules |
@@ -152,7 +161,9 @@ parts that got copied across the family and then had to be corrected across it. 
 | `scripts/r14_meta_phenotypes.py` | `docs/r14-meta-serving.md` — which keys are omitted for quantitative traits, the `contributing_cohorts` naming, header-derived cohort presence and the TSV/header disagreement result |
 | `scripts/protein_structure_contract.py` | `docs/protein-structure.md` — the release layout and pointer, the model file id, the window ownership and pair rules, the PAE encoding and its cutoff argument, what a variant's absence means, the view-spec |
 
-`scripts/check-doc-drift.sh` warns (never blocks) on commits that skip this; it runs
+`scripts/check-doc-drift.sh` warns (never blocks) on commits that skip this — its rules are
+this repo's, its mechanism is `scripts/doc-drift-lib.sh`, a copy written by
+genetics-results-suite's `scripts/vendor.py` and edited only there; it runs
 from `.beads/hooks/pre-commit`, outside the beads-managed fence that beads rewrites.
 
 

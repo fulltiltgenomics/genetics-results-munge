@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 from scipy.special import log_ndtr
 
-from sumstat_utils import write_sumstat_output
+from sumstat_utils import chrom_code_expr, save_gnomad_by_variant_key, write_sumstat_output
 
 
 GNOMAD_PATH = "/mnt/disks/data/gnomad/gnomad.genomes.exomes.v4.0.sites.v2.tsv.bgz"
@@ -60,7 +60,7 @@ def read_sumstats(filepath: str) -> pl.DataFrame:
     )
 
     df = df.with_columns(
-        pl.col("#CHR").str.replace("X", "23").cast(pl.Int32, strict=False).alias("chr"),
+        chrom_code_expr("#CHR").cast(pl.Int32, strict=False).alias("chr"),
     )
     df = df.filter(pl.col("chr").is_not_null())
 
@@ -89,59 +89,6 @@ def _build_variant_keys(df: pl.DataFrame) -> set[str]:
              pl.col("ALT")).alias("key")
         )["key"].to_list()
     )
-
-
-def stream_gnomad(gnomad_path: str, variant_keys: set[str], save_path: str) -> pl.DataFrame:
-    """Stream gnomAD, keeping rows matching variant_keys (chr:pos:ref:alt).
-    Saves filtered rows to save_path for reuse."""
-    proc = subprocess.Popen(
-        f"zcat '{gnomad_path}'",
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=4_000_000,
-    )
-
-    header_line = proc.stdout.readline().strip()
-    header = header_line.split("\t")
-    col_idx = {}
-    for col in GNOMAD_KEEP_COLS:
-        if col in header:
-            col_idx[col] = header.index(col)
-
-    chr_idx = col_idx["#chr"]
-    pos_idx = col_idx["pos"]
-    ref_idx = col_idx["ref"]
-    alt_idx = col_idx["alt"]
-
-    out_header = "\t".join(col_idx.keys())
-    outf = open(save_path, "w")
-    outf.write(out_header + "\n")
-
-    n_lines = 0
-    n_matches = 0
-    for line in proc.stdout:
-        n_lines += 1
-        if n_lines % 10_000_000 == 0:
-            print(f"  gnomAD: {n_lines / 1e6:.0f}M lines scanned, {n_matches} matches", flush=True)
-
-        fields = line.split("\t")
-        if len(fields) <= alt_idx:
-            continue
-
-        key = f"{fields[chr_idx]}:{fields[pos_idx]}:{fields[ref_idx]}:{fields[alt_idx]}"
-        if key in variant_keys:
-            out_fields = [fields[idx].rstrip("\n") for idx in col_idx.values()]
-            outf.write("\t".join(out_fields) + "\n")
-            n_matches += 1
-
-    outf.close()
-    proc.wait()
-    print(f"  gnomAD: done. {n_lines / 1e6:.1f}M lines scanned, {n_matches} matches", flush=True)
-    print(f"  saved filtered gnomAD to {save_path}")
-
-    return _read_gnomad_filtered(save_path)
 
 
 def _read_gnomad_filtered(filepath: str) -> pl.DataFrame:
@@ -236,7 +183,8 @@ def main():
         print(f"  {len(keys)} unique variant keys")
 
         print(f"Streaming gnomAD from {args.gnomad}...")
-        gnomad = stream_gnomad(args.gnomad, keys, gnomad_save_path)
+        save_gnomad_by_variant_key(args.gnomad, keys, gnomad_save_path, GNOMAD_KEEP_COLS)
+        gnomad = _read_gnomad_filtered(gnomad_save_path)
 
     print(f"  {gnomad.height} gnomAD rows loaded")
 

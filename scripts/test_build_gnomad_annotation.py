@@ -3,6 +3,7 @@ genome/exome pair survives, how contigs are coded and ordered, and which malform
 stop the run instead of producing a file."""
 
 import gzip
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -14,9 +15,25 @@ COLUMNS = ["#chr", "pos", "ref", "alt", "rsids", "filters", "AN", "AF", "most_se
            "gene_most_severe", "consequences", "genome_or_exome"]
 
 
-def row(chrom, pos, ref, alt, an, source, most_severe="intron_variant", gene="GENE1"):
+def tc(gene, *terms, canonical=1, biotype="protein_coding", source="HGNC", gene_id=None):
+    return {"gene_symbol": gene, "gene_id": gene_id or f"ENSG_{gene}", "consequences": list(terms),
+            "gene_symbol_source": source, "canonical": canonical, "biotype": biotype}
+
+
+def row(chrom, pos, ref, alt, an, source, most_severe="intron_variant", gene="GENE1", transcripts=None):
+    # by default one canonical protein-coding transcript that agrees with the two columns
+    transcripts = [tc(gene, most_severe)] if transcripts is None else transcripts
+    consequences = transcripts if isinstance(transcripts, str) else json.dumps(transcripts)
     return [str(chrom), str(pos), ref, alt, "NA", "", str(an), "1.0e-03", most_severe, gene,
-            '[{"gene_symbol":"%s"}]' % gene, source]
+            consequences, source]
+
+
+def reannotated(tmp_path, transcripts, most_severe="frameshift_variant", gene="VEP"):
+    """(most_severe, gene_most_severe) written for one row, checked equal in both outputs."""
+    sites, cons = build_ok(tmp_path, [row(1, 100, "A", "C", 10, "g", most_severe, gene, transcripts)])
+    assert sites[1][8:10] == cons[1][4:6]
+    assert sites[1][:8] + sites[1][10:] == row(1, 100, "A", "C", 10, "g", transcripts=transcripts)[:8] + sites[1][10:]
+    return tuple(cons[1][4:6])
 
 
 def write_bgz(path: Path, rows, columns=COLUMNS) -> str:
@@ -113,11 +130,10 @@ def test_output_is_in_numeric_contig_order_whatever_the_input_order(tmp_path):
     assert not list(tmp_path.glob("*.part.*"))
 
 
-def test_mitochondrion_code_is_a_choice_and_scaffolds_are_dropped(tmp_path):
+def test_mitochondrion_is_26_and_scaffolds_are_dropped(tmp_path):
     rows = [row(1, 1, "A", "C", 10, "g"), row("chr1_KI270706v1_random", 5, "A", "C", 10, "g"),
             row("chrM", 9, "A", "C", 10, "g")]
-    assert [r[0] for r in build_ok(tmp_path, rows)[0][1:]] == ["1", "25"]
-    assert [r[0] for r in build_ok(tmp_path, rows, "--mito-code", "26")[0][1:]] == ["1", "26"]
+    assert [r[0] for r in build_ok(tmp_path, rows)[0][1:]] == ["1", "26"]
 
 
 def test_same_source_duplicate_fails(tmp_path):
@@ -185,3 +201,83 @@ def test_two_inputs_give_the_same_output_as_the_merged_input(tmp_path, with_sour
     assert result.returncode == 0, result.stderr
     assert (read(sites), read(cons)) == expected
     assert len(expected[0]) - 1 == len({tuple(r[:4]) for r in MERGED})
+
+
+def test_canonical_transcript_decides_over_a_more_severe_isoform(tmp_path):
+    # 15-90885291-CT-C in v4.0: frameshift in an NMD isoform, intron in the canonical
+    transcripts = [
+        tc("FES", "frameshift_variant", "NMD_transcript_variant", canonical=None, biotype="nonsense_mediated_decay"),
+        tc("FES", "intron_variant"),
+        tc("FURIN", "downstream_gene_variant"),
+    ]
+    assert reannotated(tmp_path, transcripts, "frameshift_variant", "FES") == ("intron_variant", "FES")
+
+
+def test_most_severe_term_of_the_canonical_entry_is_taken(tmp_path):
+    transcripts = [tc("G", "intron_variant", "splice_region_variant")]
+    assert reannotated(tmp_path, transcripts) == ("splice_region_variant", "G")
+
+
+def test_protein_coding_canonical_comes_before_a_more_severe_other_biotype(tmp_path):
+    transcripts = [
+        tc("LNC", "non_coding_transcript_exon_variant", biotype="lncRNA"),
+        tc("PC", "upstream_gene_variant"),
+    ]
+    assert reannotated(tmp_path, transcripts) == ("upstream_gene_variant", "PC")
+
+
+def test_canonical_of_another_biotype_comes_before_a_noncanonical_protein_coding(tmp_path):
+    transcripts = [
+        tc("PC", "missense_variant", canonical=None),
+        tc("LNC", "intron_variant", biotype="lncRNA"),
+    ]
+    assert reannotated(tmp_path, transcripts) == ("intron_variant", "LNC")
+
+
+def test_without_a_canonical_transcript_the_others_decide_protein_coding_first(tmp_path):
+    transcripts = [
+        tc("LNC", "non_coding_transcript_exon_variant", canonical=None, biotype="lncRNA"),
+        tc("PC", "intron_variant", canonical=None),
+        tc("PC", "3_prime_UTR_variant", canonical=None),
+    ]
+    assert reannotated(tmp_path, transcripts) == ("3_prime_UTR_variant", "PC")
+
+
+def test_tie_between_genes_prefers_a_real_symbol_then_the_lowest_gene_id(tmp_path):
+    transcripts = [
+        tc("AC0001.1", "intron_variant", source="Clone_based_ensembl_gene", gene_id="ENSG1"),
+        tc(None, "intron_variant", source=None, gene_id="ENSG2"),
+        tc("B", "intron_variant", gene_id="ENSG4"),
+        tc("A", "intron_variant", gene_id="ENSG3"),
+    ]
+    assert reannotated(tmp_path, transcripts) == ("intron_variant", "A")
+    assert reannotated(tmp_path, transcripts[:2]) == ("intron_variant", "ENSG2")
+
+
+def test_gene_without_a_symbol_is_written_as_its_gene_id(tmp_path):
+    transcripts = [tc(None, "downstream_gene_variant", biotype="lncRNA", source=None, gene_id="ENSG00000299614")]
+    assert reannotated(tmp_path, transcripts, "downstream_gene_variant", "NA") == (
+        "downstream_gene_variant", "ENSG00000299614")
+
+
+@pytest.mark.parametrize("consequences", ["NA", "[]"])
+def test_row_without_transcripts_keeps_its_input_values(tmp_path, consequences):
+    assert reannotated(tmp_path, consequences, "regulatory_region_variant", "NA") == (
+        "regulatory_region_variant", "NA")
+
+
+@pytest.mark.parametrize("consequences", [
+    [tc("G", "brand_new_variant")],
+    [tc("G")],
+    '[{"gene_symbol":',
+])
+def test_unreadable_consequences_fail(tmp_path, consequences):
+    stderr = build_fails(tmp_path, [row(1, 100, "A", "C", 10, "g", transcripts=consequences)])
+    assert "cannot read consequences at 1:100:A:C" in stderr
+
+
+def test_loser_of_a_genome_exome_pair_is_not_read(tmp_path):
+    # only the surviving row's consequences are parsed
+    rows = [row(1, 100, "A", "C", 10, "g"), row(1, 100, "A", "C", 9, "e", transcripts="not json")]
+    sites, _ = build_ok(tmp_path, rows)
+    assert sites[1:] == [rows[0]]

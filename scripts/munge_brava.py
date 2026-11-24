@@ -59,6 +59,7 @@ from pathlib import Path
 import polars as pl
 
 from brava_phenotypes import source_file_code
+from exome_utils import read_gencode
 from sumstat_utils import fetch_gs, upload_to_gcs, write_exome_output
 
 GENE_PREFIX = "gs://daly-genetics-results/raw/brava/gene/"
@@ -100,28 +101,6 @@ def parse_args() -> argparse.Namespace:
                         help="where the source files are downloaded to")
     parser.add_argument("--stage", action="store_true", help=f"upload the served outputs to {STAGE_PREFIX}")
     return parser.parse_args()
-
-
-def read_gencode(path: Path) -> pl.DataFrame:
-    """Gene coordinates keyed by unversioned ENSG.
-
-    The mapping file already numbers chromosomes the way the output does (X 23, Y 24, MT 26);
-    anything that will not cast is a non-canonical contig and is dropped rather than carried into
-    a BigQuery INT64 column.
-    """
-    df = pl.read_csv(path, separator="\t")
-    return (
-        df.with_columns(
-            pl.col("gene_id").str.split(".").list.first().alias("gene_id_base"),
-            pl.col("chrom").cast(pl.Utf8).cast(pl.Int32, strict=False).alias("gene_chr"),
-            pl.col("gene_start").cast(pl.Int32).alias("gene_start_pos"),
-            pl.col("gene_end").cast(pl.Int32).alias("gene_end_pos"),
-            pl.col("gene_name").alias("gene"),
-        )
-        .filter(pl.col("gene_chr").is_not_null())
-        .select("gene_id_base", "gene", "gene_chr", "gene_start_pos", "gene_end_pos")
-        .unique(subset=["gene_id_base"], keep="first")
-    )
 
 
 def resolve_traits(requested: list[str], strata: list[str], by_code: dict[str, dict]) -> list[str]:
@@ -264,7 +243,7 @@ def main() -> None:
     print(f"{len(traits)} traits: {', '.join(traits)}")
 
     print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(fetch_gs(args.gencode, cache))
+    gencode = read_gencode(fetch_gs(args.gencode, cache), chrom_is_numeric=True)
     print(f"  {gencode.height} genes")
 
     frames = []

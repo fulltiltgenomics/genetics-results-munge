@@ -3,19 +3,22 @@
 
 Source: Satterstrom, Auwerx, Fu et al. 2026, "Rare variation illuminates the distinct and
 pleiotropic genetic architecture of autism across neuropsychiatric traits" (medRxiv
-10.64898/2026.08.24.26360398). Two files, obtained pre-publication:
+10.64898/2026.08.24.26360398). Two files, published by the release's browser (which names
+the release AGB; the dataset stays ASC2 here) under
+https://storage.googleapis.com/exome-results-browsers-public/downloads/<date>/AGB/:
 
   ASC2_gene_results.tsv.bgz     one row per gene (20,893, unversioned Ensembl ids), WIDE:
                                 bayes_factor, false_discovery_rate, qc_flagged and 42 count
                                 columns = 7 variant classes (ptv mis2 mis1 mis0 syn del dup)
                                 x {de_novo_<cls>_proband/_sibling, transmitted_/untransmitted_
                                 <cls>_proband, <cls>_case/_control}
-  ASC2_variant_results.tsv.bgz  one row per SNV/indel (7,045,130, unique on locus+alleles):
-                                Hail locus "chrN:POS" and alleles '["REF","ALT"]', gene_id,
-                                transcript_id, VEP consequence, variant_class (PTV, Mis2,
-                                Mis1, Mis0, synonymous - no CNVs), hgvsc (NA on every row),
-                                hgvsp, mpc, alpha_missense, is_other_splice, gnomad_af, and
-                                six allele counts (de_novo_ac_proband/_sibling,
+  ASC2_variant_results.tsv.bgz  one row per SNV/indel x variant_class (7,045,150 rows for
+                                7,045,130 variants): Hail locus "chrN:POS" and alleles
+                                '["REF","ALT"]', gene_id, transcript_id, VEP consequence,
+                                variant_class (PTV, Mis2, Mis1, Mis0, synonymous - no CNVs),
+                                hgvsc, hgvsp, mpc, alpha_missense, is_other_splice, gnomad_af
+                                (not written: the shared count table has no such column),
+                                and six allele counts (de_novo_ac_proband/_sibling,
                                 transmitted_/untransmitted_ac_proband, ac_case, ac_ctrl)
 
 What was established from the bytes, not the paper:
@@ -23,6 +26,10 @@ What was established from the bytes, not the paper:
     is autosomal only (TADA was run on the autosomes); the variant file also carries
     chrX and chrY rows, which are kept as chr 23 and 24
   - `group` is "meta" on every row of both files and is dropped
+  - a variant can have TWO rows: an "other splice" SNV the source counts as PTV when de novo
+    carries its de novo counts on a PTV row and its inherited and case-control counts on a
+    second row classed by the underlying consequence. Both rows are kept as the source has
+    them, so the output is unique on variant + variant_class, not on the variant
   - the release carries NO p-value, effect size or allele frequency; nothing is derived
     here - every statistic and count is passed through as the source spells it. The
     numeric statistics are read and written as strings for that reason, so "1.2272e+73"
@@ -45,7 +52,10 @@ Outputs (dataset ASC2, one binary trait ASD), each bgzipped + tabixed:
                                           case/control); gene point index (-s5 -b6 -e6)
   ASC2_gene_bayes_results.munged.tsv.gz   one row per gene: bayes_factor, fdr, qc_flagged;
                                           same index
-  ASC2_variant_counts.munged.tsv.gz       one row per variant, WIDE counts as in the source;
+  ASC2_variant_counts.munged.tsv.gz       one row per variant, WIDE counts as in the source,
+                                          in the column order of genetics-results-db's
+                                          exome_variant_counts.sql: an_case and an_ctrl,
+                                          which this release does not carry, are NA;
                                           variant index (-s2 -b3 -e3)
 
 No mlog10p-filtered companion is written (there is no mlog10p), which is why the shared
@@ -57,13 +67,11 @@ Usage:
 """
 
 import argparse
-import resource
-from pathlib import Path
 
 import polars as pl
 
-from munge_ibd_exome import read_gencode
-from sumstat_utils import write_exome_output
+from exome_utils import run_gene_and_variant_munge
+from sumstat_utils import chrom_code_expr, write_exome_output
 
 DATASET = "ASC2"
 TRAIT = "ASD"
@@ -189,8 +197,8 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
     print(f"Reading variant results from {variant_path}...")
     df = pl.read_csv(
         variant_path, separator="\t",
-        # every column but the counts stays a string: the annotations and gnomad_af are
-        # passed through as spelled, and the sentinel NA is kept as NA by the writer
+        # every column but the counts stays a string: the annotations are passed through
+        # as spelled, and the sentinel NA is kept as NA by the writer
         schema_overrides={c: pl.Int64 for c in VARIANT_COUNT_COLS},
         infer_schema_length=0,
         null_values=["NA"],
@@ -199,13 +207,9 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
     groups = df["group"].unique().to_list()
     if groups != ["meta"]:
         raise SystemExit(f"variant file has group values {groups}; only 'meta' is expected and the column is dropped")
-    if df["hgvsc"].null_count() != df.height:
-        raise SystemExit("hgvsc is no longer all-NA; stop dropping it")
 
     df = df.with_columns(
-        pl.col("locus").str.split(":").list.first().str.replace(r"(?i)^chr", "")
-            .str.replace(r"^X$", "23").str.replace(r"^Y$", "24").str.replace(r"^MT?$", "26")
-            .cast(pl.Int32, strict=False).alias("chr"),
+        chrom_code_expr(pl.col("locus").str.split(":").list.first()).cast(pl.Int32, strict=False).alias("chr"),
         pl.col("locus").str.split(":").list.last().cast(pl.Int64).alias("pos"),
         pl.col("alleles").str.strip_chars("[]").str.replace_all('"', "").str.split(",").alias("allele_list"),
     ).with_columns(
@@ -218,8 +222,8 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
     df = df.filter(pl.col("chr").is_not_null())
     if df.height != n_before:
         print(f"  warning: {n_before - df.height} rows on non-canonical contigs dropped")
-    if df.select(pl.struct("chr", "pos", "ref", "alt").is_duplicated().any()).item():
-        raise SystemExit("variant rows are not unique on chr:pos:ref:alt")
+    if df.select(pl.struct("chr", "pos", "ref", "alt", "variant_class").is_duplicated().any()).item():
+        raise SystemExit("variant rows are not unique on chr:pos:ref:alt + variant_class")
 
     df = join_gencode(df, gencode.select("gene_id_base", "gene"), "variants")
 
@@ -228,33 +232,20 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
         "chr", "pos", "ref", "alt",
         "gene", "gene_id", "transcript_id",
         "consequence", "variant_class",
-        "hgvsp", "mpc", "alpha_missense", "is_other_splice", "gnomad_af",
-        *VARIANT_COUNT_COLS,
+        "hgvsc", "hgvsp", "mpc", "alpha_missense", "is_other_splice",
+        "de_novo_ac_proband", "de_novo_ac_sibling",
+        "transmitted_ac_proband", "untransmitted_ac_proband",
+        "ac_case", pl.lit(None, dtype=pl.Int64).alias("an_case"),
+        "ac_ctrl", pl.lit(None, dtype=pl.Int64).alias("an_ctrl"),
         pl.lit(TRAIT).alias("trait"),
         pl.lit(TRAIT).alias("trait_original"),
-    ).sort("chr", "pos", "ref", "alt")
+    ).sort("chr", "pos", "ref", "alt", "variant_class")
     write_exome_output(out, f"{output_dir}/{DATASET}_variant_counts.munged.tsv.gz",
                        tabix_args=VARIANT_TABIX, mlog10p_col=None)
 
 
 def main() -> None:
-    args = parse_args()
-    max_bytes = args.max_memory_gb * 1024 ** 3
-    resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
-
-    if not args.gene_input and not args.variant_input:
-        raise SystemExit("at least one of --gene-input or --variant-input is required")
-    output_dir = args.output_dir or str(Path(args.gene_input or args.variant_input).parent)
-
-    print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
-    print(f"  {gencode.height} genes")
-
-    if args.gene_input:
-        process_gene_results(args.gene_input, gencode, output_dir)
-    if args.variant_input:
-        process_variant_results(args.variant_input, gencode, output_dir)
-    print("\nDone.")
+    run_gene_and_variant_munge(parse_args(), process_gene_results, process_variant_results)
 
 
 if __name__ == "__main__":

@@ -74,6 +74,9 @@ MIN_MAPPING_RATE = {"msigdb": 0.99, "reactome": 0.95}
 
 STAGE_BUCKET = "gs://daly-genetics-results/gene_sets"
 BUNDLE_FILES = ("sets.parquet", "members.parquet", "genes.parquet")
+# the columns of hgnc_complete_set.txt that read_hgnc requires and keeps
+HGNC_COLUMNS = ["hgnc_id", "symbol", "locus_group", "locus_type", "status", "entrez_id",
+                "ensembl_gene_id", "prev_symbol", "alias_symbol"]
 
 
 def _clean(value: str | None) -> str | None:
@@ -86,8 +89,7 @@ def _clean(value: str | None) -> str | None:
 def read_hgnc(path: Path) -> pl.DataFrame:
     hgnc = pl.read_csv(path, separator="\t", infer_schema_length=0, null_values=[""],
                        quote_char=None)
-    cols = ["hgnc_id", "symbol", "locus_group", "locus_type", "status", "entrez_id",
-            "ensembl_gene_id", "prev_symbol", "alias_symbol"]
+    cols = HGNC_COLUMNS
     missing = set(cols) - set(hgnc.columns)
     if missing:
         raise SystemExit(f"{path}: missing HGNC columns {sorted(missing)}")

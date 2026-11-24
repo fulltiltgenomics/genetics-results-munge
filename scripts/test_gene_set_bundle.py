@@ -10,8 +10,6 @@ import pytest
 import gene_set_bundle as gsb
 from build_gene_sets import sha256_of, write_manifest
 
-HGNC_COLS = ["hgnc_id", "symbol", "locus_group", "locus_type", "status", "entrez_id",
-             "ensembl_gene_id", "prev_symbol", "alias_symbol"]
 HGNC_ROWS = [
     # hgnc_id, symbol, entrez, ensembl, prev, alias
     ("HGNC:1", "AAA", "1", "ENSG01", "", ""),
@@ -40,7 +38,7 @@ GENCODE = ("gene_id\tchrom\tgene_start\tgene_end\tgene_strand\tgene_name\tgene_t
 
 
 def write_inputs(tmp_path):
-    lines = ["\t".join(HGNC_COLS)]
+    lines = ["\t".join(gsb.HGNC_COLUMNS)]
     for hid, sym, entrez, ens, prev, alias in HGNC_ROWS:
         lines.append("\t".join([hid, sym, "protein-coding gene", "gene with protein product",
                                 "Approved", entrez, ens, prev, alias]))

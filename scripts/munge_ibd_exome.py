@@ -7,14 +7,13 @@ Gene annotations file: gencode v45 (GRCh38).
 """
 
 import argparse
-import resource
 import warnings
-from pathlib import Path
 
 import numpy as np
 import polars as pl
 
-from sumstat_utils import write_exome_output
+from exome_utils import run_gene_and_variant_munge
+from sumstat_utils import chrom_code_expr, write_exome_output
 
 GROUPS = ["IBD", "CD", "UC"]
 
@@ -58,21 +57,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-trait-dir", help="If given, also write one unfiltered <trait>.tsv.gz per gene burden trait there (local or gs://)")
     parser.add_argument("--max-memory-gb", type=int, default=24, help="Max virtual memory in GB (default: 24)")
     return parser.parse_args()
-
-
-def read_gencode(path: str) -> pl.DataFrame:
-    """Read gencode annotation, strip version from gene_id, convert chr to numeric."""
-    df = pl.read_csv(path, separator="\t")
-    df = df.with_columns(
-        pl.col("gene_id").str.split(".").list.first().alias("gene_id_base"),
-        pl.col("chrom").cast(pl.Utf8)
-            .str.replace("X", "23").str.replace("Y", "24").str.replace("M", "26")
-            .cast(pl.Int32).alias("gene_chr"),
-        pl.col("gene_start").cast(pl.Int32).alias("gene_start_pos"),
-        pl.col("gene_end").cast(pl.Int32).alias("gene_end_pos"),
-        pl.col("gene_name").alias("gene"),
-    ).select("gene_id_base", "gene", "gene_chr", "gene_start_pos", "gene_end_pos")
-    return df.unique(subset=["gene_id_base"], keep="first")
 
 
 def read_gene_results(path: str) -> pl.DataFrame:
@@ -203,6 +187,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
     # gencode for gene name lookup only
     gencode_names = gencode.select("gene_id_base", "gene")
 
+    by_group = []
     for group in GROUPS:
         print(f"\nProcessing {group} variant results...")
         print("  scanning file...")
@@ -232,9 +217,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
 
         # parse locus "chrN:POS" -> chr, pos
         df = df.with_columns(
-            pl.col("locus").str.replace("chr", "").str.split(":").list.first()
-                .str.replace("X", "23").str.replace("Y", "24").str.replace("MT", "26")
-                .cast(pl.Int32).alias("chr"),
+            chrom_code_expr(pl.col("locus").str.split(":").list.first()).cast(pl.Int32).alias("chr"),
             pl.col("locus").str.split(":").list.last().cast(pl.Int32).alias("pos"),
         )
 
@@ -272,6 +255,14 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
         ).sort("chr", "pos", "ref", "alt")
 
         write_exome_output(out, f"{output_dir}/IBD_exome_{group}_variant_results.munged.tsv.gz",
+                           tabix_args=["-s2", "-b3", "-e3"])
+        by_group.append(out)
+
+    # every trait in one position-indexed file: the API's by-gene, by-region and by-variant
+    # exome routes read a resource's combined file and have no way into the per-trait ones
+    if by_group:
+        combined = pl.concat(by_group).sort("chr", "pos", "ref", "alt", "trait_original")
+        write_exome_output(combined, f"{output_dir}/IBD_exome_variant_results.munged.tsv.gz",
                            tabix_args=["-s2", "-b3", "-e3"])
 
 
@@ -325,28 +316,12 @@ def compute_variant_stats(df: pl.DataFrame) -> pl.DataFrame:
 
 def main():
     args = parse_args()
-
-    max_bytes = args.max_memory_gb * 1024 ** 3
-    resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
-
-    if not args.gene_input and not args.variant_input:
-        print("Error: at least one of --gene-input or --variant-input is required")
-        return
-
-    input_path = args.gene_input or args.variant_input
-    output_dir = args.output_dir or str(Path(input_path).parent)
-
-    print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
-    print(f"  {gencode.height} genes")
-
-    if args.gene_input:
-        process_gene_results(args.gene_input, gencode, output_dir, args.per_trait_dir)
-
-    if args.variant_input:
-        process_variant_results(args.variant_input, gencode, output_dir)
-
-    print("\nDone.")
+    run_gene_and_variant_munge(
+        args,
+        lambda path, gencode, output_dir: process_gene_results(
+            path, gencode, output_dir, args.per_trait_dir),
+        process_variant_results,
+    )
 
 
 if __name__ == "__main__":

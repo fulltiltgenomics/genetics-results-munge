@@ -20,7 +20,7 @@ from scipy.special import log_ndtr
 
 from sumstat_utils import (
     GNOMAD_AF_COLS, GNOMAD_DEFAULT, GNOMAD_KEEP_COLS,
-    read_gnomad_filtered, upload_to_gcs,
+    chrom_code, read_gnomad_filtered, upload_to_gcs,
 )
 
 
@@ -31,7 +31,6 @@ def _log_memory():
 
 
 CHROMOSOMES = [str(c) for c in range(1, 23)] + ["X"]
-CHR_MAP = {"X": 23}
 FILENAME_SUFFIX_TEMPLATE = "_{phenotype}_meta_eur_eas_sas_tier_2_noGC_PCs_firthse_formatted_A2_effect_and_alternative_with_per_sample_rate_and_avgA2freq_withNeff.txt.gz"
 
 # columns to rename from input to output
@@ -162,7 +161,7 @@ def munge_chromosomes(input_dir: str, output_path: str, phenotype: str, build_cp
     cpra_set = set() if build_cpra else None
 
     for i, chrom in enumerate(CHROMOSOMES):
-        chr_int = CHR_MAP[chrom] if chrom in CHR_MAP else int(chrom)
+        chr_int = int(chrom_code(chrom))
         filename_suffix = FILENAME_SUFFIX_TEMPLATE.format(phenotype=phenotype)
         filepath = f"{input_dir}/{chrom}{filename_suffix}"
         path = Path(filepath)

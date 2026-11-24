@@ -11,7 +11,6 @@ densifies a sparse chunk.
   validate CL_OBO OUTDIR...         marker panel on the pooled normal-tissue summary
   gencode GENCODE_TSV OUTDIR...     CELLxGENE Ensembl ids with no v49 match
 """
-import concurrent.futures as cf
 import json
 import os
 import resource
@@ -20,14 +19,15 @@ import time
 
 import numpy as np
 
+import aggregate
+
 CHUNK_NNZ = 25_000_000
 # dense per-(group, donor) count accumulator only when it is this small;
 # otherwise a first pass over X/data gives library sizes and the donor
 # pseudobulk is accumulated already weighted, at group level
 DENSE_GD_BYTES = 3e9
 
-OBS_KEY = ["tissue_ontology_term_id", "tissue_type", "cell_type_ontology_term_id",
-           "disease_ontology_term_id", "assay_ontology_term_id", "suspension_type"]
+OBS_KEY = aggregate.GROUP_KEYS
 
 # marker -> expected Cell Ontology term; the expected term or any descendant counts
 PANEL = {
@@ -69,33 +69,8 @@ def rss_mb():
 # ---------------------------------------------------------------- download
 
 def download(url, dest, parts=16, piece=64 << 20):
-    import requests
     t0 = time.time()
-    size = int(requests.head(url, allow_redirects=True, timeout=60).headers["Content-Length"])
-    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    os.ftruncate(fd, size)
-
-    def get(start):
-        end = min(start + piece, size) - 1
-        for attempt in range(5):
-            try:
-                with requests.get(url, headers={"Range": f"bytes={start}-{end}"}, stream=True, timeout=120) as r:
-                    r.raise_for_status()
-                    off = start
-                    for buf in r.iter_content(4 << 20):
-                        os.pwrite(fd, buf, off)
-                        off += len(buf)
-                    if off != end + 1:
-                        raise IOError(f"short read {off} != {end + 1}")
-                    return
-            except Exception:
-                if attempt == 4:
-                    raise
-                time.sleep(2 ** attempt)
-
-    with cf.ThreadPoolExecutor(parts) as ex:
-        list(ex.map(get, range(0, size, piece)))
-    os.close(fd)
+    size = aggregate.download(url, dest, parts, piece, pin_etag=False)["bytes"]
     dt = time.time() - t0
     out = {"bytes": size, "download_s": round(dt, 1), "download_MBps": round(size / 1e6 / dt, 1)}
     print(json.dumps(out))
@@ -359,12 +334,9 @@ def load_cl(path):
 
 
 def ancestors(term, parents, memo={}):
-    if term not in memo:
-        out = {term}
-        for p in parents.get(term, ()):
-            out |= ancestors(p, parents, memo)
-        memo[term] = out
-    return memo[term]
+    # imported on use: rollup pulls in polars, which download and process do not need
+    from rollup import ancestors as cached
+    return cached(term, parents, memo)
 
 
 def validate(obo, outdirs):

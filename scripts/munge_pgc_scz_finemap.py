@@ -42,10 +42,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-import numpy as np
 import polars as pl
 
-CHR_MAP = {"X": "23"}
+from sumstat_utils import chrom_code_expr, sci_expr, tabix_header
+
 
 ST11A_COLUMNS = [
     "index_snp",
@@ -95,14 +95,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _sci(col: str) -> pl.Expr:
-    """Format a float column as %.3e in one numpy call rather than per row, keeping nulls null."""
-    formatted = pl.col(col).fill_null(0.0).map_batches(
-        lambda s: pl.Series(np.char.mod("%.3e", s.to_numpy())), return_dtype=pl.String
-    )
-    return pl.when(pl.col(col).is_null()).then(None).otherwise(formatted).alias(col)
-
-
 def read_st11a(path: str) -> pl.DataFrame:
     """Read ST11a, keeping the credible set columns and the GRCh37 chromosome for a sanity check."""
     df = pl.read_csv(
@@ -113,7 +105,7 @@ def read_st11a(path: str) -> pl.DataFrame:
         schema_overrides={"chromosome": pl.Utf8},
     )
     return df.with_columns(
-        pl.col("chromosome").replace(CHR_MAP).cast(pl.Int32, strict=False).alias("chr_b37"),
+        chrom_code_expr("chromosome").cast(pl.Int32, strict=False).alias("chr_b37"),
         pl.col("GWAS_effect_allele").str.to_uppercase().alias("effect_allele"),
         pl.col("other_allele").str.to_uppercase().alias("other_allele"),
     ).drop("chromosome")
@@ -130,12 +122,6 @@ def read_sumstats(path: str, rsids: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def annotation_header(path: str) -> list[str]:
-    return subprocess.run(
-        ["tabix", "-H", path], capture_output=True, text=True, check=True
-    ).stdout.strip().lstrip("#").split("\t")
-
-
 def read_locus_by_rsid(path: str, rsids: pl.DataFrame) -> pl.DataFrame:
     """Look the GRCh38 locus and alleles of the given rsids up in the variant annotation.
 
@@ -147,7 +133,7 @@ def read_locus_by_rsid(path: str, rsids: pl.DataFrame) -> pl.DataFrame:
     keep a null aaf rather than borrowing the Finnish frequency, which is a different quantity
     from the case/control weighted one every other row carries.
     """
-    header = annotation_header(path)
+    header = tabix_header(path)
     rsid_field = header.index("rsid") + 1
 
     with tempfile.NamedTemporaryFile("w", suffix=".rsids") as wanted:
@@ -285,10 +271,10 @@ def main() -> None:
         pl.lit(args.trait).alias("trait"),
         pl.lit(args.trait).alias("trait_original"),
         pl.lit(None, dtype=pl.String).alias("cell_type"),
-        _sci("beta_num").alias("beta"),
-        _sci("se").alias("se"),
+        sci_expr(pl.col("beta_num")).alias("beta"),
+        sci_expr(pl.col("se")).alias("se"),
         # wave 3's own alt allele frequency, the same source the PGC pseudo credible sets use
-        _sci("af").alias("aaf"),
+        sci_expr(pl.col("af")).alias("aaf"),
         pl.lit(None, dtype=pl.Float64).alias("cs_min_r2"),
         # consequence is stamped afterwards by annotate_resource.sh; the columns are written
         # here so the layout is the one that step and the readers expect
