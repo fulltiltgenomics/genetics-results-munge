@@ -158,6 +158,13 @@ RESIDUE_COLUMNS = _GENE_ANCHOR + [
 # is_owner is true on exactly one row per (gene_id, accession, protein_position); the build asserts it
 RESIDUE_SORT = ("chrom", "gene_start", "gene_id", "accession", "model_file_id", "file_position")
 
+# the `residue` letter for a model file's three-letter residue name. A reader that parses the
+# model file itself has to agree with the residues table, so both take the letter from here
+THREE_TO_ONE = {"ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q", "GLU": "E",
+                "GLY": "G", "HIS": "H", "ILE": "I", "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F",
+                "PRO": "P", "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V", "SEC": "U",
+                "PYL": "O"}
+
 FEATURE_SOURCES = ("uniprot", "ted")
 EVIDENCE_TIERS = ("experimental", "curated", "predicted", "unknown")
 

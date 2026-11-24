@@ -23,7 +23,7 @@ from pathlib import Path
 import munge_protein_structure as mps
 import protein_structure_contract as psc
 
-THREE = {v: k for k, v in mps.THREE_TO_ONE.items()}
+THREE = {v: k for k, v in psc.THREE_TO_ONE.items()}
 SEQ = {"Q00001": "MKTAYIAKQR", "Q00002": "MSTNP", "Q00003": "MAAAG", "Q00004": "MCCCC",
        "Q00006": "MSSSG", "Q00007": "MAUAG",
        "Q00010": "".join(np.random.default_rng(7).choice(list("ACDEFGHIKLMNPQRSTVWY"), 230))}

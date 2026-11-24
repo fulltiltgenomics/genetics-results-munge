@@ -385,12 +385,6 @@ def parse_pdb(text: str):
     return pos, res, np.array(xyz), np.array(bf)
 
 
-THREE_TO_ONE = {"ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q", "GLU": "E",
-                "GLY": "G", "HIS": "H", "ILE": "I", "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F",
-                "PRO": "P", "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V", "SEC": "U",
-                "PYL": "O"}
-
-
 def read_model(task):
     src, mid, n_expected = task
     raw = Path(src).read_bytes()
@@ -405,7 +399,7 @@ def read_model(task):
     licence = "CC-BY-4.0" if "CC-BY 4.0" in head else ""
     m = re.search(r"TITLE\s+ALPHAFOLD (\w+) (V[\d.]+) PREDICTION", head)
     engine = f"AlphaFold {m.group(1).title()} {m.group(2).lower()}" if m else ""
-    letters = "".join(THREE_TO_ONE.get(r, "X") for r in res)
+    letters = "".join(psc.THREE_TO_ONE.get(r, "X") for r in res)
     return mid, hashlib.sha256(raw).hexdigest(), len(raw), licence, engine, letters, xyz, bf
 
 
