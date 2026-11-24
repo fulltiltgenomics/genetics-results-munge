@@ -9,13 +9,14 @@ bundle does not have, or states a number or a variant that is not in it.
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import anthropic
+
+from check import TABS, validate
 
 PROMPT_VERSION = 3
 MODEL = "claude-opus-5-5"
@@ -95,8 +96,6 @@ Write for a reader who has not seen the bundle and does not know it exists: full
 no field names, no arrows or shorthand, and never the word "bundle" (say "the data" or name \
 the evidence)."""
 
-TABS = ["gene burden", "variant association", "qtl", "expression", "mendelian", "annotation"]
-
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -120,90 +119,6 @@ SCHEMA = {
     "required": ["headline", "overview", "findings", "gaps"],
     "additionalProperties": False,
 }
-
-# ---------------------------------------------------------------- validation
-
-# a hyphen after a letter is part of a name (COVID-19, IL-12), not a minus sign
-NUMBER = re.compile(
-    r"(?<![\w.:])(?:(?<![\w-])-)?\d+(?:,\d{3})*(?:\.\d+)?(?:e-?\d+)?(?![\w:]|\.\d)", re.I
-)
-# a chromosome read off a variant id: "chromosome 12", "chromosomes 1, 9 and 12"
-CHROMOSOMES = re.compile(r"\bchromosomes?\s+\d{1,2}(?:\s*(?:,|and|or)\s*\d{1,2})*", re.I)
-VARIANT = re.compile(r"\b(?:\d{1,2}|X|Y):\d+:[ACGT]+:[ACGT]+\b")
-# cut-offs the prompt and the bundle notes state in words, and small counts a writer derives
-# by reading ("two masks", "three diseases")
-FREE_NUMBERS = {"5e-8", "1e-6", "1e-4", "0.05", "0.6", "0.8", "1e-323"}
-
-
-def bundle_numbers(node, out: set, ids: dict, variants: set) -> None:
-    if isinstance(node, dict):
-        if isinstance(node.get("id"), str):
-            ids[node["id"]] = node
-        for k, v in node.items():
-            if k != "id":
-                bundle_numbers(v, out, ids, variants)
-    elif isinstance(node, list):
-        for v in node:
-            bundle_numbers(v, out, ids, variants)
-    elif isinstance(node, bool) or node is None:
-        return
-    elif isinstance(node, (int, float)):
-        out.add(canon(repr(node)))
-    elif isinstance(node, str):
-        variants.update(VARIANT.findall(node))
-        for m in NUMBER.findall(VARIANT.sub(" ", node)):
-            out.add(canon(m))
-
-
-def canon(token: str) -> str:
-    t = token.replace(",", "").lower()
-    try:
-        f = float(t)
-    except ValueError:
-        return t
-    if "e" in t:
-        mant, exp = t.split("e")
-        return f"{float(mant):g}e{int(exp)}"
-    return f"{f:g}"
-
-
-def validate(summary: dict, bundle: dict) -> list[str]:
-    numbers, ids, variants = set(), {}, set()
-    bundle_numbers(bundle, numbers, ids, variants)
-    numbers |= {canon(n) for n in FREE_NUMBERS}
-    problems = []
-
-    def check_text(where: str, text: str) -> None:
-        for v in VARIANT.findall(text):
-            if v not in variants:
-                problems.append(f"{where}: variant {v} is not in the bundle")
-        for tok in NUMBER.findall(CHROMOSOMES.sub(" ", VARIANT.sub(" ", text))):
-            c = canon(tok)
-            try:
-                small_count = float(c).is_integer() and 0 <= float(c) <= 10
-            except ValueError:
-                small_count = False
-            if c not in numbers and not small_count:
-                problems.append(f"{where}: number {tok} is not in the bundle")
-
-    check_text("headline", summary["headline"])
-    check_text("overview", summary["overview"])
-    for i, gap in enumerate(summary["gaps"]):
-        check_text(f"gaps[{i}]", gap)
-    if not 3 <= len(summary["findings"]) <= 7:
-        problems.append(f"findings: {len(summary['findings'])} items, expected 3 to 7")
-    for i, f in enumerate(summary["findings"]):
-        if not f["evidence"]:
-            problems.append(f"findings[{i}]: cites no evidence")
-        for e in f["evidence"]:
-            if e not in ids:
-                problems.append(f"findings[{i}]: cites unknown id {e}")
-        check_text(f"findings[{i}]", f["statement"])
-    words = len(summary["overview"].split())
-    if not 40 <= words <= 160:
-        problems.append(f"overview: {words} words")
-    return problems
-
 
 # ---------------------------------------------------------------- generation
 
