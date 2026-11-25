@@ -22,7 +22,7 @@ python3 munge_schema2.py \
 	--per-trait-dir $GCS/schema/gene_burden_per_trait
 
 # --- SCHEMA2 variant counts (no p-values; BigQuery-only, loaded beside the ASC counts) ---
-python3 munge_schema2_variant_counts.py \
+python3 munge_exome_variant_counts.py --dataset SCHEMA2 \
 	--input /mnt/disks/data/SCHEMA/SCHEMA2_variant_results.tsv.bgz \
 	--output-dir $GCS/schema
 
@@ -31,6 +31,11 @@ python3 munge_bipex.py \
 	--input /mnt/disks/data/BibEx/BipEx2_gene_results.tsv.bgz \
 	--output-dir $GCS/bipex \
 	--per-trait-dir $GCS/bipex/gene_burden_per_trait
+
+# --- BipEx2 variant counts (as the SCHEMA2 ones) ---
+python3 munge_exome_variant_counts.py --dataset BipEx2 \
+	--input /mnt/disks/data/BibEx/BipEx2_variant_results.tsv.bgz \
+	--output-dir $GCS/bipex
 
 # --- IBD exome (old dataset) gene + variant ---
 python3 munge_ibd_exome.py \

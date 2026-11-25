@@ -54,8 +54,9 @@ Outputs (dataset ASC2, one binary trait ASD), each bgzipped + tabixed:
                                           same index
   ASC2_variant_counts.munged.tsv.gz       one row per variant, WIDE counts as in the source,
                                           in the column order of genetics-results-db's
-                                          exome_variant_counts.sql: an_case and an_ctrl,
-                                          which this release does not carry, are NA;
+                                          exome_variant_counts.sql: an_case, an_ctrl and
+                                          in_analysis, which this release does not
+                                          carry, are NA;
                                           variant index (-s2 -b3 -e3)
 
 No mlog10p-filtered companion is written (there is no mlog10p), which is why the shared
@@ -233,6 +234,7 @@ def process_variant_results(variant_path: str, gencode: pl.DataFrame, output_dir
         "gene", "gene_id", "transcript_id",
         "consequence", "variant_class",
         "hgvsc", "hgvsp", "mpc", "alpha_missense", "is_other_splice",
+        pl.lit(None, dtype=pl.Utf8).alias("in_analysis"),
         "de_novo_ac_proband", "de_novo_ac_sibling",
         "transmitted_ac_proband", "untransmitted_ac_proband",
         "ac_case", pl.lit(None, dtype=pl.Int64).alias("an_case"),

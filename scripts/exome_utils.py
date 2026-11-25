@@ -7,6 +7,8 @@ its own column meanings. The write itself (`write_exome_output`) is in `sumstat_
 """
 
 import argparse
+import gzip
+import io
 import resource
 import warnings
 from pathlib import Path
@@ -281,3 +283,25 @@ def run_gene_and_variant_munge(args, process_gene_results, process_variant_resul
     if args.variant_input:
         process_variant_results(args.variant_input, gencode, output_dir)
     print("\nDone.")
+
+
+def locus_contig_chunks(path: str):
+    """(header, lines of one contig) per contig, in file order, for a gzipped TSV whose first
+    column is a Hail locus ("chrN:POS"). A contig that comes back after another one would be
+    written as two blocks and break the tabix index, so it stops the run."""
+    with gzip.open(path, "rb") as f:
+        header = f.readline()
+        seen, current, buf = set(), None, io.BytesIO()
+        for line in f:
+            contig = line[:line.index(b":")]
+            if contig != current:
+                if current is not None:
+                    yield header, buf
+                    buf = io.BytesIO()
+                if contig in seen:
+                    raise SystemExit(f"contig {contig.decode()} is not contiguous in the file")
+                seen.add(contig)
+                current = contig
+            buf.write(line)
+        if current is not None:
+            yield header, buf
