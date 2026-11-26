@@ -1,25 +1,42 @@
 #!/usr/bin/env python3
 """Munge a case-control exome variant file into the per-variant allele COUNT layout ASC2 uses.
 
-Sources, both published under
+Sources. SCHEMA2 and BipEx2 are published under
 https://storage.googleapis.com/exome-results-browsers-public/downloads/<date>/:
   SCHEMA2  SCHEMA/SCHEMA_v2_variant_results.tsv.bgz (earlier releases: SCHEMA2/SCHEMA2_...)
   BipEx2   BipEx/BipEx_v2_variant_results.tsv.bgz   (earlier releases: BipEx2/BipEx2_...)
-One row per variant, unique on locus+alleles: Hail locus "chrN:POS" and alleles '["REF","ALT"]',
+SCHEMA1, the 2021 release, is not in that bucket (its SCHEMA/SCHEMA_* files are SCHEMA2):
+  SCHEMA1  https://atgu-exome-browser-data.s3.amazonaws.com/SCHEMA/SCHEMA_variant_results.tsv.bgz
+SCHEMA2 and BipEx2 have one row per variant, unique on locus+alleles: Hail locus "chrN:POS" and alleles '["REF","ALT"]',
 gene_id, VEP consequence, hgvsc, hgvsp, missense scores, `group`, ac_case/an_case,
 ac_ctrl/an_ctrl and in_analysis. SCHEMA2 also has transcript_id and n_de_novo; BipEx2 has
 neither, and has mac, worst_csq_for_variant_canonical and missense_passing instead.
 
-The releases carry NO per-variant p-value or effect size and none is derived here: the counts
-are passed through as the source spells them.
+SCHEMA1 differs in four ways, all handled per dataset (`DATASETS`):
+  - it is GRCh37 (locus "N:POS"). Every variant is lifted to GRCh38 and held to the GRCh38
+    reference (liftover_variants.py, which also says what is dropped and why); the counts by
+    reason are printed
+  - a variant has one row per cohort, per ancestry and source, and for two meta-analyses. Only
+    `group == "meta"` is kept: it is the release's analysis set (its allele numbers are those
+    of the paper's cases and controls) and the only group with in_analysis and de novo counts
+  - it is annotated on GENCODE v19: a gene the gencode table no longer has keeps its v19
+    symbol (`--gencode-backup`) instead of being dropped
+  - 2.5% of its meta rows have no consequence and are dropped. Most are missense variants
+    without an MPC (the source spells missense as missense_variant_mpc_<bin>); the rest have
+    no annotation in the source at all. The count is printed
+  It has no transcript_id or alpha_missense, and calls the de novo count n_denovos.
+
+SCHEMA2 and BipEx2 carry NO per-variant p-value or effect size; SCHEMA1 does (p, est, se) and
+they are not written. None is derived here: the counts are passed through as the source spells
+them.
 
 What is kept, and why:
   - every variant, whatever its in_analysis value. The flag is written as the source has it:
     true for the variants the source's gene-level analysis used, false or NA for the rest
   - rows whose gene_id is NA or absent from the gencode table are dropped with a count: the
-    target table clusters on the gene symbol. Every row without a consequence is one of them,
-    and the script stops if that ever fails to hold
-  - `group` is "meta" on every row and is dropped
+    target table clusters on the gene symbol. In SCHEMA2 and BipEx2 every row without a
+    consequence is one of them, and the script stops if that ever fails to hold
+  - `group` is "meta" on every row kept and is dropped
   - n_de_novo is written as de_novo_ac_proband, NA where the source has no such column. No
     source here has sibling, transmitted or untransmitted counts, a variant class or a LOFTEE
     other-splice flag, so those columns are NA
@@ -49,14 +66,19 @@ from pathlib import Path
 
 import polars as pl
 
-from exome_utils import locus_contig_chunks, read_gencode
+from exome_utils import locus_contig_chunks, read_gencode, read_gencode_with_backup
+from liftover_variants import Fasta, lift_variants
 from sumstat_utils import chrom_code_expr, upload_to_gcs
 
 # columns a source may lack: the script refuses a file that lacks one its dataset should have
-OPTIONAL_COLS = {"transcript_id", "n_de_novo"}
+OPTIONAL_COLS = {"transcript_id", "n_de_novo", "alpha_missense"}
 DATASETS = {
+    "SCHEMA1": {"trait": "Schizophrenia", "trait_original": "SCZ",
+                "lacks": {"transcript_id", "alpha_missense"}, "rename": {"n_denovos": "n_de_novo"},
+                "grch37": True, "meta_rows_only": True, "drop_null_consequence": True},
     "SCHEMA2": {"trait": "Schizophrenia", "trait_original": "SCZ", "lacks": set()},
-    "BipEx2": {"trait": "Bipolar disorder", "trait_original": "BIP", "lacks": OPTIONAL_COLS},
+    "BipEx2": {"trait": "Bipolar disorder", "trait_original": "BIP",
+               "lacks": {"transcript_id", "n_de_novo"}},
 }
 COUNT_COLS = ["ac_case", "an_case", "ac_ctrl", "an_ctrl", "n_de_novo"]
 TABIX_ARGS = ["-s2", "-b3", "-e3"]
@@ -70,12 +92,26 @@ def parse_args() -> argparse.Namespace:
                         help="Gencode annotation genes TSV (default: v39, as the gene burden munges of both datasets)")
     parser.add_argument("--output-dir", help="Output directory, local or gs:// (default: next to the input)")
     parser.add_argument("--max-memory-gb", type=int, default=8, help="Max virtual memory in GB (default: 8)")
-    return parser.parse_args()
+    lift = parser.add_argument_group("SCHEMA1 only (GRCh37, GENCODE v19)")
+    lift.add_argument("--gencode-backup", help="GENCODE v19 genes TSV, for the genes --gencode no longer has")
+    lift.add_argument("--chain", help="hg19ToHg38.over.chain.gz")
+    lift.add_argument("--liftover-bin", default="liftOver", help="UCSC liftOver binary")
+    lift.add_argument("--fasta", help="GRCh38 fasta, uncompressed and .fai-indexed, chr-prefixed names")
+    args = parser.parse_args()
+    if DATASETS[args.dataset].get("grch37"):
+        missing = [f"--{a.replace('_', '-')}" for a in ("gencode_backup", "chain", "fasta") if not getattr(args, a)]
+        if missing:
+            parser.error(f"{args.dataset} needs {', '.join(missing)}")
+    return args
 
 
-def munge_chunk(header: bytes, buf: io.BytesIO, dataset: str, gencode: pl.DataFrame, counts: dict) -> pl.DataFrame:
+def munge_chunk(
+    header: bytes, buf: io.BytesIO, dataset: str, gencode: pl.DataFrame, counts: dict, lift: dict | None,
+) -> pl.DataFrame:
     spec = DATASETS[dataset]
     columns = header.decode().rstrip("\n").split("\t")
+    columns = [spec.get("rename", {}).get(c, c) for c in columns]
+    header = ("\t".join(columns) + "\n").encode()
     absent = OPTIONAL_COLS - set(columns)
     if absent != spec["lacks"]:
         raise SystemExit(f"{dataset}: expected the file to lack {sorted(spec['lacks'])}, it lacks {sorted(absent)}")
@@ -91,7 +127,7 @@ def munge_chunk(header: bytes, buf: io.BytesIO, dataset: str, gencode: pl.DataFr
         raise SystemExit(f"group values {groups}; only 'meta' is expected and the column is dropped")
 
     df = df.with_columns(
-        chrom_code_expr(pl.col("locus").str.split(":").list.first()).cast(pl.Int32, strict=False).alias("chr"),
+        pl.col("locus").str.split(":").list.first().alias("contig"),
         pl.col("locus").str.split(":").list.last().cast(pl.Int64).alias("pos"),
         pl.col("alleles").str.strip_chars("[]").str.replace_all('"', "").str.split(",").alias("allele_list"),
     ).with_columns(
@@ -100,17 +136,23 @@ def munge_chunk(header: bytes, buf: io.BytesIO, dataset: str, gencode: pl.DataFr
     )
     if (df["allele_list"].list.len() != 2).any():
         raise SystemExit("a variant row does not have exactly two alleles")
+    if df.select(pl.struct("contig", "pos", "ref", "alt").is_duplicated().any()).item():
+        raise SystemExit("variant rows are not unique on locus+alleles")
+    if lift:
+        df = lift_variants(df, counts=counts, **lift)
+    df = df.with_columns(chrom_code_expr("contig").cast(pl.Int32, strict=False).alias("chr"))
     n_before = df.height
     df = df.filter(pl.col("chr").is_not_null())
     counts["non_canonical"] += n_before - df.height
-    if df.select(pl.struct("chr", "pos", "ref", "alt").is_duplicated().any()).item():
-        raise SystemExit("variant rows are not unique on chr:pos:ref:alt")
 
     counts["no_gene_id"] += df["gene_id"].null_count()
     df = df.filter(pl.col("gene_id").is_not_null())
     n_before = df.height
     df = df.join(gencode, left_on="gene_id", right_on="gene_id_base", how="inner")
     counts["not_in_gencode"] += n_before - df.height
+    if spec.get("drop_null_consequence"):
+        counts["no_consequence"] = counts.get("no_consequence", 0) + df["consequence"].null_count()
+        df = df.filter(pl.col("consequence").is_not_null())
     if df["consequence"].null_count():
         raise SystemExit("a row with a gene has no consequence; the target column is NOT NULL")
 
@@ -123,7 +165,8 @@ def munge_chunk(header: bytes, buf: io.BytesIO, dataset: str, gencode: pl.DataFr
         pl.col("transcript_id") if "transcript_id" in columns else na_str.alias("transcript_id"),
         "consequence",
         na_str.alias("variant_class"),
-        "hgvsc", "hgvsp", "mpc", "alpha_missense",
+        "hgvsc", "hgvsp", "mpc",
+        pl.col("alpha_missense") if "alpha_missense" in columns else na_str.alias("alpha_missense"),
         na_str.alias("is_other_splice"),
         "in_analysis",
         (pl.col("n_de_novo") if "n_de_novo" in columns else na_int).alias("de_novo_ac_proband"),
@@ -145,15 +188,22 @@ def main() -> None:
     local_path = f"{tempfile.mkdtemp()}/out.tsv.gz" if output_path.startswith("gs://") else output_path
 
     print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode, coordinates=False)
+    spec = DATASETS[args.dataset]
+    if spec.get("grch37"):
+        gencode = read_gencode_with_backup(args.gencode, args.gencode_backup, coordinates=False)
+        lift = {"chain": args.chain, "liftover_bin": args.liftover_bin, "fasta": Fasta(args.fasta)}
+    else:
+        gencode = read_gencode(args.gencode, coordinates=False)
+        lift = None
     print(f"  {gencode.height} genes")
 
     print(f"Reading variant results from {args.input}...")
     counts = {"read": 0, "non_canonical": 0, "no_gene_id": 0, "not_in_gencode": 0}
     n_written = 0
     with open(local_path, "wb") as out, subprocess.Popen(["bgzip", "-c"], stdin=subprocess.PIPE, stdout=out) as proc:
-        for header, buf in locus_contig_chunks(args.input):
-            df = munge_chunk(header, buf, args.dataset, gencode, counts)
+        group = "meta" if spec.get("meta_rows_only") else None
+        for header, buf in locus_contig_chunks(args.input, group=group):
+            df = munge_chunk(header, buf, args.dataset, gencode, counts, lift)
             df.write_csv(proc.stdin, separator="\t", null_value="NA", include_header=n_written == 0)
             n_written += df.height
     if proc.returncode:

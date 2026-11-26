@@ -1,19 +1,25 @@
 GCS=gs://finngen-commons/results_api_data/exome_results5
 
 # --per-trait-dir writes the unfiltered per-trait copy the API serves by trait and
-# BigQuery is loaded from. SCHEMA and SCHEMA2 both call their trait "schizophrenia",
-# so they cannot share one directory — only SCHEMA2 is served, and SCHEMA gets its own.
+# BigQuery is loaded from. SCHEMA1 and SCHEMA2 both call their trait "schizophrenia",
+# so each has its own directory.
 
-# --- SCHEMA gene burden ---
+# --- SCHEMA1 (the 2021 release; GRCh37 and GENCODE v19, lifted to GRCh38) ---
+# source: https://atgu-exome-browser-data.s3.amazonaws.com/SCHEMA/
+# liftOver and the chain: see liftover_variants.py. The v19 genes table has the columns of the
+# v39 one and is built from gencode.v19.annotation.gtf.gz (README, "GENCODE v19 genes table")
+LIFT="--gencode-backup /mnt/disks/data/gencode.v19.annotation.genes.tsv --chain /mnt/disks/data/hg19ToHg38.over.chain.gz"
 python3 munge_schema.py \
-	--input /mnt/disks/data/SCHEMA_gene_results.tsv.bgz \
-	--output-dir $GCS/schema \
-	--per-trait-dir $GCS/schema/SCHEMA_gene_burden_per_trait
+	--input /mnt/disks/data/SCHEMA1/SCHEMA_gene_results.tsv.bgz \
+	$LIFT \
+	--output-dir $GCS/schema1 \
+	--per-trait-dir $GCS/schema1/gene_burden_per_trait
 
-# --- SCHEMA variant results ---
-python3 munge_schema_variants.py \
-	--input /mnt/disks/data/SCHEMA_variant_results.tsv.bgz \
-	--output $GCS/schema/SCHEMA_variant_results.munged.tsv.gz
+# --- SCHEMA1 variant counts (the release's p-values are not written; as the SCHEMA2 ones) ---
+python3 munge_exome_variant_counts.py --dataset SCHEMA1 \
+	--input /mnt/disks/data/SCHEMA1/SCHEMA_variant_results.tsv.bgz \
+	$LIFT --fasta /mnt/disks/data/ref/hg38.fa \
+	--output-dir $GCS/schema1
 
 # --- SCHEMA2 gene burden ---
 python3 munge_schema2.py \

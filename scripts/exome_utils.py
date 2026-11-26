@@ -2,7 +2,7 @@
 
 What lives here is what does not depend on the source paper: the gencode gene table the results
 are joined to, the statistics derived from an odds ratio and a p-value, and the command line and
-output layout of the gene burden and SCHEMA variant munges. Each script keeps its own reader and
+output layout of the gene burden munges. Each script keeps its own reader and
 its own column meanings. The write itself (`write_exome_output`) is in `sumstat_utils.py`.
 """
 
@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
+from liftover_variants import lift_intervals
 from sumstat_utils import chrom_code_expr, write_exome_output
 
 
@@ -55,6 +56,45 @@ def read_gencode(
     if coordinates and chrom_is_numeric:
         df = df.filter(pl.col("gene_chr").is_not_null())
     return df.select(columns).unique(subset=[unique_on], keep="first")
+
+
+def read_gencode_with_backup(
+    primary: str | Path,
+    backup: str | Path,
+    *,
+    coordinates: bool = True,
+    chain: str | None = None,
+    liftover_bin: str | None = None,
+) -> pl.DataFrame:
+    """`read_gencode(primary)` plus the genes only an older GRCh37 release (`backup`) has, for
+    a source annotated on that release: a gene the primary release knows takes its name and
+    coordinates from there, and one it has dropped keeps the backup's name.
+
+    The backup's coordinates are GRCh37, so with `coordinates` they are lifted to GRCh38
+    (`chain`, `liftover_bin`) and a gene whose span does not lift is left out, with a count.
+    """
+    primary_df = read_gencode(primary, coordinates=coordinates)
+    extra = read_gencode(backup, coordinates=coordinates).join(primary_df, on="gene_id_base", how="anti")
+    print(f"  {extra.height} genes only in the backup release")
+    if coordinates:
+        counts: dict = {}
+        lifted = lift_intervals(
+            extra.select(
+                "gene_id_base", "gene",
+                pl.col("gene_chr").cast(pl.Utf8).replace({"23": "X", "24": "Y", "26": "M"}).alias("contig"),
+                pl.col("gene_start_pos").cast(pl.Int64).alias("start"),
+                pl.col("gene_end_pos").cast(pl.Int64).alias("end"),
+            ),
+            chain=chain, liftover_bin=liftover_bin, counts=counts,
+        )
+        print(f"  {lifted.height} of them lift to GRCh38; not lifted: {counts}")
+        extra = lifted.select(
+            "gene_id_base", "gene",
+            chrom_code_expr("contig").cast(pl.Int32).alias("gene_chr"),
+            pl.col("start").cast(pl.Int32).alias("gene_start_pos"),
+            pl.col("end").cast(pl.Int32).alias("gene_end_pos"),
+        )
+    return pl.concat([primary_df, extra.select(primary_df.columns)])
 
 
 def burden_stats_from_or_p(df: pl.DataFrame) -> pl.DataFrame:
@@ -159,11 +199,15 @@ def run_gene_burden_munge(
     compute_stats,
     output: dict,
     unit: str = "rows",
+    add_arguments=None,
+    load_gencode=None,
 ) -> None:
     """The whole command line of a gene burden munge that melts a wide table, one column set per
     annotation class, to long format: `read(path)` gives the wide frame, `melt` the long one,
     `compute_stats` adds beta/se/mlog10p_burden, and `output` holds the keyword arguments of
     `build_gene_burden_output`. `unit` is what a wide row is called in the progress line.
+    `add_arguments(parser)` and `load_gencode(args)` let a script join to something other than
+    the one gencode table `--gencode` names.
     """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--input", required=True, help=f"Path to {source} gene results .bgz file")
@@ -171,12 +215,14 @@ def run_gene_burden_munge(
                         help="Path to gencode annotation genes TSV")
     parser.add_argument("--output-dir", help="Output directory (default: same as input)")
     parser.add_argument("--per-trait-dir", help="If given, also write one unfiltered <trait>.tsv.gz there (local or gs://)")
+    if add_arguments:
+        add_arguments(parser)
     args = parser.parse_args()
 
     output_dir = args.output_dir or str(Path(args.input).parent)
 
     print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode)
+    gencode = load_gencode(args) if load_gencode else read_gencode(args.gencode)
     print(f"  {gencode.height} genes")
 
     print(f"Reading {source} from {args.input}...")
@@ -198,63 +244,6 @@ def run_gene_burden_munge(
     write_exome_output(out, f"{output_dir}/{source}_gene_results.munged.tsv.gz",
                        tabix_args=["-s5", "-b6", "-e6"], mlog10p_col="mlog10p_burden",
                        per_trait_dir=args.per_trait_dir)
-
-    print("Done.")
-
-
-def run_schema_variant_munge(
-    description: str | None, dataset: str, gencode_default: str, read, compute_stats, beta_col: str,
-) -> None:
-    """The whole command line of a SCHEMA-format variant munge: `read(path)` gives one row per
-    coding variant with chr/pos/ref/alt parsed, `compute_stats` adds mlog10p, the allele
-    frequencies and counts, and `beta_col` names the column that holds the effect size by then.
-    """
-    parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--input", required=True, help=f"Path to {dataset} variant results .bgz file")
-    parser.add_argument("--gencode", default=gencode_default,
-                        help="Path to gencode annotation genes TSV")
-    parser.add_argument("--output", help="Output munged TSV path (default: derived from input)")
-    args = parser.parse_args()
-
-    output_path = args.output or str(
-        Path(args.input).parent / f"{dataset}_variant_results.munged.tsv.gz"
-    )
-
-    print(f"Reading gencode from {args.gencode}...")
-    gencode = read_gencode(args.gencode, coordinates=False)
-    print(f"  {gencode.height} genes")
-
-    print(f"Reading {dataset} variants from {args.input}...")
-    df = read(args.input)
-
-    print("Computing stats...")
-    df = compute_stats(df)
-
-    print("Building output...")
-    n_before = df.height
-    df = df.join(gencode, left_on="gene_id", right_on="gene_id_base", how="inner")
-    n_unmatched = n_before - df.height
-    if n_unmatched > 0:
-        print(f"  warning: {n_unmatched} variants not matched to gencode")
-
-    out = df.select(
-        pl.lit(dataset).alias("#dataset"),
-        "chr", "pos", "ref", "alt",
-        "gene",
-        pl.col("consequence").alias("annotation"),
-        "mlog10p",
-        pl.col(beta_col).alias("beta"),
-        "se",
-        "af_overall", "af_cases", "af_controls",
-        "ac", "an",
-        pl.lit(None, dtype=pl.Utf8).alias("n_cases"),
-        pl.lit(None, dtype=pl.Utf8).alias("n_controls"),
-        pl.lit("Schizophrenia").alias("trait"),
-        pl.lit("SCZ").alias("trait_original"),
-    ).sort("chr", "pos", "ref", "alt")
-
-    print("Writing results...")
-    write_exome_output(out, output_path, tabix_args=["-s2", "-b3", "-e3"])
 
     print("Done.")
 
@@ -285,14 +274,19 @@ def run_gene_and_variant_munge(args, process_gene_results, process_variant_resul
     print("\nDone.")
 
 
-def locus_contig_chunks(path: str):
+def locus_contig_chunks(path: str, group: str | None = None):
     """(header, lines of one contig) per contig, in file order, for a gzipped TSV whose first
     column is a Hail locus ("chrN:POS"). A contig that comes back after another one would be
-    written as two blocks and break the tabix index, so it stops the run."""
+    written as two blocks and break the tabix index, so it stops the run. With `group`, only
+    the lines whose `group` column has that value are kept."""
     with gzip.open(path, "rb") as f:
         header = f.readline()
+        group_col = header.rstrip(b"\n").split(b"\t").index(b"group") if group else None
+        wanted = group.encode() if group else None
         seen, current, buf = set(), None, io.BytesIO()
         for line in f:
+            if wanted is not None and line.split(b"\t", group_col + 1)[group_col] != wanted:
+                continue
             contig = line[:line.index(b":")]
             if contig != current:
                 if current is not None:
